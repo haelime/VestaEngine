@@ -1,3 +1,23 @@
 /build
 /bin
+/x64
+/.vs
 /assets/brickadia
+*.vcxproj.user
+
+# CMake build trees
+/out
+/CMakeCache.txt
+/CMakeFiles
+/cmake_install.cmake
+/install_manifest.txt
+/compile_commands.json
+/CTestTestfile.cmake
+/Testing
+
+# Generated Visual Studio solution/project files
+/*.sln
+/*.vcxproj
+/*.vcxproj.filters
+/*.VC.db
+/*.VC.opendb

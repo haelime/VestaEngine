@@ -1,9 +1,9 @@
-﻿// vulkan_guide.h : Include file for standard system include files,
+// vulkan_guide.h : Include file for standard system include files,
 // or project specific include files.
 
 #pragma once
 
-#include <vk_types.h>
+#include <vesta/render/vulkan/vk_types.h>
 
 namespace vkinit {
 //> init_cmd
@@ -31,6 +31,9 @@ VkRenderingInfo rendering_info(VkExtent2D renderExtent, VkRenderingAttachmentInf
     VkRenderingAttachmentInfo* depthAttachment);
 
 VkImageSubresourceRange image_subresource_range(VkImageAspectFlags aspectMask);
+VkImageMemoryBarrier2 image_barrier(VkImage image, VkPipelineStageFlags2 srcStageMask, VkAccessFlags2 srcAccessMask,
+    VkPipelineStageFlags2 dstStageMask, VkAccessFlags2 dstAccessMask, VkImageLayout oldLayout, VkImageLayout newLayout,
+    VkImageAspectFlags aspectMask);
 
 VkSemaphoreSubmitInfo semaphore_submit_info(VkPipelineStageFlags2 stageMask, VkSemaphore semaphore);
 VkDescriptorSetLayoutBinding descriptorset_layout_binding(VkDescriptorType type, VkShaderStageFlags stageFlags,

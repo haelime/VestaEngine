@@ -1,4 +1,4 @@
-﻿#include <vk_initializers.h>
+#include <vesta/render/vulkan/vk_initializers.h>
 
 //> init_cmd
 VkCommandPoolCreateInfo vkinit::command_pool_create_info(uint32_t queueFamilyIndex,
@@ -11,7 +11,6 @@ VkCommandPoolCreateInfo vkinit::command_pool_create_info(uint32_t queueFamilyInd
     info.flags = flags;
     return info;
 }
-
 
 VkCommandBufferAllocateInfo vkinit::command_buffer_allocate_info(
     VkCommandPool pool, uint32_t count /*= 1*/)
@@ -26,7 +25,7 @@ VkCommandBufferAllocateInfo vkinit::command_buffer_allocate_info(
     return info;
 }
 //< init_cmd
-// 
+//
 //> init_cmd_draw
 VkCommandBufferBeginInfo vkinit::command_buffer_begin_info(VkCommandBufferUsageFlags flags /*= 0*/)
 {
@@ -65,26 +64,26 @@ VkSemaphoreCreateInfo vkinit::semaphore_create_info(VkSemaphoreCreateFlags flags
 //> init_submit
 VkSemaphoreSubmitInfo vkinit::semaphore_submit_info(VkPipelineStageFlags2 stageMask, VkSemaphore semaphore)
 {
-	VkSemaphoreSubmitInfo submitInfo{};
-	submitInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-	submitInfo.pNext = nullptr;
-	submitInfo.semaphore = semaphore;
-	submitInfo.stageMask = stageMask;
-	submitInfo.deviceIndex = 0;
-	submitInfo.value = 1;
+    VkSemaphoreSubmitInfo submitInfo{};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+    submitInfo.pNext = nullptr;
+    submitInfo.semaphore = semaphore;
+    submitInfo.stageMask = stageMask;
+    submitInfo.deviceIndex = 0;
+    submitInfo.value = 1;
 
-	return submitInfo;
+    return submitInfo;
 }
 
 VkCommandBufferSubmitInfo vkinit::command_buffer_submit_info(VkCommandBuffer cmd)
 {
-	VkCommandBufferSubmitInfo info{};
-	info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
-	info.pNext = nullptr;
-	info.commandBuffer = cmd;
-	info.deviceMask = 0;
+    VkCommandBufferSubmitInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
+    info.pNext = nullptr;
+    info.commandBuffer = cmd;
+    info.deviceMask = 0;
 
-	return info;
+    return info;
 }
 
 VkSubmitInfo2 vkinit::submit_info(VkCommandBufferSubmitInfo* cmd, VkSemaphoreSubmitInfo* signalSemaphoreInfo,
@@ -110,7 +109,7 @@ VkSubmitInfo2 vkinit::submit_info(VkCommandBufferSubmitInfo* cmd, VkSemaphoreSub
 VkPresentInfoKHR vkinit::present_info()
 {
     VkPresentInfoKHR info = {};
-    info.sType =  VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+    info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     info.pNext = 0;
 
     info.swapchainCount = 0;
@@ -124,7 +123,7 @@ VkPresentInfoKHR vkinit::present_info()
 
 //> color_info
 VkRenderingAttachmentInfo vkinit::attachment_info(
-    VkImageView view, VkClearValue* clear ,VkImageLayout layout /*= VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL*/)
+    VkImageView view, VkClearValue* clear, VkImageLayout layout /*= VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL*/)
 {
     VkRenderingAttachmentInfo colorAttachment {};
     colorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -190,7 +189,24 @@ VkImageSubresourceRange vkinit::image_subresource_range(VkImageAspectFlags aspec
 }
 //< subresource
 
-
+VkImageMemoryBarrier2 vkinit::image_barrier(VkImage image, VkPipelineStageFlags2 srcStageMask,
+    VkAccessFlags2 srcAccessMask, VkPipelineStageFlags2 dstStageMask, VkAccessFlags2 dstAccessMask,
+    VkImageLayout oldLayout, VkImageLayout newLayout, VkImageAspectFlags aspectMask)
+{
+    VkImageMemoryBarrier2 barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2;
+    barrier.srcStageMask = srcStageMask;
+    barrier.srcAccessMask = srcAccessMask;
+    barrier.dstStageMask = dstStageMask;
+    barrier.dstAccessMask = dstAccessMask;
+    barrier.oldLayout = oldLayout;
+    barrier.newLayout = newLayout;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = image;
+    barrier.subresourceRange = image_subresource_range(aspectMask);
+    return barrier;
+}
 
 VkDescriptorSetLayoutBinding vkinit::descriptorset_layout_binding(VkDescriptorType type, VkShaderStageFlags stageFlags,
     uint32_t binding)
@@ -260,7 +276,6 @@ VkDescriptorBufferInfo vkinit::buffer_info(VkBuffer buffer, VkDeviceSize offset,
     return binfo;
 }
 
-//> image_set
 VkImageCreateInfo vkinit::image_create_info(VkFormat format, VkImageUsageFlags usageFlags, VkExtent3D extent)
 {
     VkImageCreateInfo info = {};
@@ -274,11 +289,7 @@ VkImageCreateInfo vkinit::image_create_info(VkFormat format, VkImageUsageFlags u
 
     info.mipLevels = 1;
     info.arrayLayers = 1;
-
-    //for MSAA. we will not be using it by default, so default it to 1 sample per pixel.
     info.samples = VK_SAMPLE_COUNT_1_BIT;
-
-    //optimal tiling, which means the image is stored on the best gpu format
     info.tiling = VK_IMAGE_TILING_OPTIMAL;
     info.usage = usageFlags;
 
@@ -287,7 +298,6 @@ VkImageCreateInfo vkinit::image_create_info(VkFormat format, VkImageUsageFlags u
 
 VkImageViewCreateInfo vkinit::imageview_create_info(VkFormat format, VkImage image, VkImageAspectFlags aspectFlags)
 {
-    // build a image-view for the depth image to use for rendering
     VkImageViewCreateInfo info = {};
     info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     info.pNext = nullptr;
@@ -303,14 +313,13 @@ VkImageViewCreateInfo vkinit::imageview_create_info(VkFormat format, VkImage ima
 
     return info;
 }
-//< image_set
+
 VkPipelineLayoutCreateInfo vkinit::pipeline_layout_create_info()
 {
     VkPipelineLayoutCreateInfo info {};
     info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     info.pNext = nullptr;
 
-    // empty defaults
     info.flags = 0;
     info.setLayoutCount = 0;
     info.pSetLayouts = nullptr;
@@ -321,17 +330,13 @@ VkPipelineLayoutCreateInfo vkinit::pipeline_layout_create_info()
 
 VkPipelineShaderStageCreateInfo vkinit::pipeline_shader_stage_create_info(VkShaderStageFlagBits stage,
     VkShaderModule shaderModule,
-    const char * entry)
+    const char* entry)
 {
     VkPipelineShaderStageCreateInfo info {};
     info.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     info.pNext = nullptr;
-
-    // shader stage
     info.stage = stage;
-    // module containing the code for this shader stage
     info.module = shaderModule;
-    // the entry point of the shader
     info.pName = entry;
     return info;
 }
