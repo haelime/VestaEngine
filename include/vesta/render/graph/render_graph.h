@@ -25,6 +25,7 @@ enum class ResourceUsage {
     DepthAttachmentWrite,
     DepthRead,
     SampledRead,
+    StorageRead,
     StorageWrite,
     TransferSrc,
     TransferDst,
@@ -76,6 +77,7 @@ public:
     [[nodiscard]] RenderDevice& GetDevice() const { return _device; }
     [[nodiscard]] VkCommandBuffer GetCommandBuffer() const { return _commandBuffer; }
     [[nodiscard]] VkImage GetTexture(GraphTextureHandle texture) const;
+    [[nodiscard]] ImageHandle GetTextureHandle(GraphTextureHandle texture) const;
     [[nodiscard]] VkImageView GetTextureView(GraphTextureHandle texture) const;
     [[nodiscard]] VkFormat GetTextureFormat(GraphTextureHandle texture) const;
     [[nodiscard]] VkExtent3D GetTextureExtent(GraphTextureHandle texture) const;

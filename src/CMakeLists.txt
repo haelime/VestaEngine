@@ -4,12 +4,14 @@ add_executable(engine
   render/renderer.cpp
   render/graph/render_graph.cpp
   render/passes/composite_pass.cpp
-  render/passes/deferred_raster_pass.cpp
+  render/passes/deferred_lighting_pass.cpp
   render/passes/gaussian_splat_pass.cpp
   render/passes/path_tracer_pass.cpp
+  render/passes/geometry_raster_pass.cpp
   render/rhi/render_device.cpp
   render/rhi/vma_impl.cpp
   scene/camera.cpp
+  scene/scene.cpp
   render/vulkan/vk_context.cpp
   render/vulkan/vk_descriptors.cpp
   render/vulkan/vk_engine.cpp
@@ -20,13 +22,15 @@ add_executable(engine
   ../include/vesta/render/renderer.h
   ../include/vesta/render/graph/render_graph.h
   ../include/vesta/render/passes/composite_pass.h
-  ../include/vesta/render/passes/deferred_raster_pass.h
+  ../include/vesta/render/passes/deferred_lighting_pass.h
   ../include/vesta/render/passes/gaussian_splat_pass.h
+  ../include/vesta/render/passes/geometry_raster_pass.h
   ../include/vesta/render/passes/irender_pass.h
   ../include/vesta/render/passes/path_tracer_pass.h
   ../include/vesta/render/resources/resource_handles.h
   ../include/vesta/render/rhi/render_device.h
   ../include/vesta/scene/camera.h
+  ../include/vesta/scene/scene.h
   ../include/vesta/render/vulkan/vk_context.h
   ../include/vesta/render/vulkan/vk_descriptors.h
   ../include/vesta/render/vulkan/vk_engine.h
@@ -43,18 +47,7 @@ set_property(TARGET engine PROPERTY CXX_STANDARD 20)
 target_compile_definitions(engine PUBLIC GLM_FORCE_DEPTH_ZERO_TO_ONE)
 target_include_directories(engine PUBLIC "${PROJECT_SOURCE_DIR}/include")
 
-option(VESTA_ENABLE_IMGUI "Build ImGui integration and link it into the engine target." OFF)
-option(VESTA_ENABLE_ASSET_IO "Link asset loading dependencies such as fastgltf and stb_image." OFF)
-
-target_link_libraries(engine PUBLIC vma Vulkan::Vulkan fmt::fmt SDL2::SDL2 vkbootstrap)
-
-if(VESTA_ENABLE_IMGUI)
-  target_link_libraries(engine PUBLIC imgui)
-endif()
-
-if(VESTA_ENABLE_ASSET_IO)
-  target_link_libraries(engine PUBLIC glm stb_image fastgltf::fastgltf)
-endif()
+target_link_libraries(engine PUBLIC vma Vulkan::Vulkan fmt::fmt SDL2::SDL2 vkbootstrap glm fastgltf::fastgltf)
 
 target_precompile_headers(engine PUBLIC <optional> <vector> <memory> <string> <vector> <unordered_map> <vulkan/vulkan.h>)
 

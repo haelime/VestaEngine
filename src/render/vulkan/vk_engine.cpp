@@ -73,8 +73,9 @@ void VestaEngine::cleanup()
     loadedEngine = nullptr;
 }
 
-void VestaEngine::draw()
+void VestaEngine::draw(float deltaSeconds)
 {
+    _renderer.Update(deltaSeconds);
     _renderer.RenderFrame();
     _frameNumber++;
 }
@@ -83,6 +84,7 @@ void VestaEngine::run()
 {
     SDL_Event e;
     bool bQuit = false;
+    auto previousTick = std::chrono::steady_clock::now();
 
     fmt::println("Entering main loop...");
 
@@ -90,6 +92,8 @@ void VestaEngine::run()
     while (!bQuit) {
         // Handle events on queue
         while (SDL_PollEvent(&e) != 0) {
+            _renderer.HandleEvent(e);
+
             // close the window when user alt-f4s or clicks the X button
             if (e.type == SDL_QUIT)
                 bQuit = true;
@@ -108,9 +112,14 @@ void VestaEngine::run()
         if (stop_rendering) {
             // throttle the speed to avoid the endless spinning
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            previousTick = std::chrono::steady_clock::now();
             continue;
         }
 
-        draw();
+        const auto now = std::chrono::steady_clock::now();
+        const float deltaSeconds = std::chrono::duration<float>(now - previousTick).count();
+        previousTick = now;
+
+        draw(deltaSeconds);
     }
 }

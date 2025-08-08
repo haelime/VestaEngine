@@ -10,10 +10,29 @@
 
 #include <vesta/render/graph/render_graph.h>
 #include <vesta/render/rhi/render_device.h>
+#include <vesta/scene/camera.h>
+#include <vesta/scene/scene.h>
 
 struct SDL_Window;
+union SDL_Event;
 
 namespace vesta::render {
+enum class RendererDisplayMode : uint32_t {
+    Composite = 0,
+    DeferredLighting = 1,
+    Gaussian = 2,
+    PathTrace = 3,
+};
+
+struct RendererSettings {
+    RendererDisplayMode displayMode{ RendererDisplayMode::Composite };
+    bool enableGaussian{ true };
+    bool enablePathTracing{ true };
+    float gaussianPointSize{ 8.0f };
+    float gaussianOpacity{ 0.35f };
+    float gaussianMix{ 0.28f };
+};
+
 struct RendererFrameContext {
     VkCommandPool commandPool{ VK_NULL_HANDLE };
     VkCommandBuffer commandBuffer{ VK_NULL_HANDLE };
@@ -86,7 +105,14 @@ public:
 
     bool Initialize(SDL_Window* window, VkExtent2D initialExtent, bool enableValidation);
     void Shutdown();
+    void HandleEvent(const SDL_Event& event);
+    void Update(float deltaSeconds);
     void RenderFrame();
+
+    [[nodiscard]] const vesta::scene::Scene& GetScene() const { return _scene; }
+    [[nodiscard]] const Camera& GetCamera() const { return _camera; }
+    [[nodiscard]] const RendererSettings& GetSettings() const { return _settings; }
+    [[nodiscard]] uint32_t GetPathTraceFrameIndex() const { return _pathTraceFrameIndex; }
 
     bool RegisterPass(RenderPassRegistrationDesc desc);
     bool UnregisterPass(std::string_view id);
@@ -138,5 +164,13 @@ private:
     bool _passExecutionPlanDirty{ true };
     TransientImagePool _transientImagePool;
     SDL_Window* _window{ nullptr };
+    vesta::scene::Scene _scene;
+    Camera _camera;
+    RendererSettings _settings;
+    uint32_t _pathTraceFrameIndex{ 0 };
+    float _frameTimeMs{ 0.0f };
+    float _smoothedFrameTimeMs{ 0.0f };
+
+    void LoadDefaultScene();
 };
 } // namespace vesta::render

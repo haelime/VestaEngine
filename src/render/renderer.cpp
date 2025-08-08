@@ -1,46 +1,69 @@
 #include <vesta/render/renderer.h>
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <limits>
+#include <memory>
 #include <utility>
 
 #include <SDL.h>
 #include <SDL_vulkan.h>
 
 #include <vesta/render/passes/composite_pass.h>
-#include <vesta/render/passes/deferred_raster_pass.h>
+#include <vesta/render/passes/deferred_lighting_pass.h>
 #include <vesta/render/passes/gaussian_splat_pass.h>
+#include <vesta/render/passes/geometry_raster_pass.h>
 #include <vesta/render/passes/path_tracer_pass.h>
+#include <vesta/render/vulkan/vk_images.h>
 #include <vesta/render/vulkan/vk_initializers.h>
+#include <vesta/render/vulkan/vk_loader.h>
 
 namespace vesta::render {
 namespace {
-void ConfigureDeferredRasterPass(IRenderPass& pass, const RendererGraphResources& resources)
+void ConfigureGeometryRasterPass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
 {
-    auto& deferredPass = static_cast<DeferredRasterPass&>(pass);
-    deferredPass.SetGBufferTargets(resources.gbufferAlbedo, resources.gbufferNormal, resources.sceneDepth);
-    deferredPass.SetLightingTarget(resources.deferredLighting);
+    auto& rasterPass = static_cast<GeometryRasterPass&>(pass);
+    rasterPass.SetTargets(resources.gbufferAlbedo, resources.gbufferNormal, resources.sceneDepth);
+    rasterPass.SetScene(&renderer.GetScene());
+    rasterPass.SetCamera(&renderer.GetCamera());
 }
 
-void ConfigurePathTracerPass(IRenderPass& pass, const RendererGraphResources& resources)
+void ConfigureDeferredLightingPass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
 {
-    auto& pathTracerPass = static_cast<PathTracerPass&>(pass);
-    pathTracerPass.SetDepthInput(resources.sceneDepth);
-    pathTracerPass.SetOutput(resources.pathTraceOutput);
+    auto& lightingPass = static_cast<DeferredLightingPass&>(pass);
+    lightingPass.SetInputs(resources.gbufferAlbedo, resources.gbufferNormal);
+    lightingPass.SetOutput(resources.deferredLighting);
 }
 
-void ConfigureGaussianSplatPass(IRenderPass& pass, const RendererGraphResources& resources)
+void ConfigureGaussianPass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
 {
     auto& gaussianPass = static_cast<GaussianSplatPass&>(pass);
     gaussianPass.SetDepthInput(resources.sceneDepth);
     gaussianPass.SetOutput(resources.gaussianOutput);
+    gaussianPass.SetScene(&renderer.GetScene());
+    gaussianPass.SetCamera(&renderer.GetCamera());
+    gaussianPass.SetParams(renderer.GetSettings().gaussianPointSize,
+        renderer.GetSettings().gaussianOpacity,
+        renderer.GetSettings().enableGaussian);
 }
 
-void ConfigureCompositePass(IRenderPass& pass, const RendererGraphResources& resources)
+void ConfigurePathTracerPass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
+{
+    auto& pathTracerPass = static_cast<PathTracerPass&>(pass);
+    pathTracerPass.SetOutput(resources.pathTraceOutput);
+    pathTracerPass.SetScene(&renderer.GetScene());
+    pathTracerPass.SetCamera(&renderer.GetCamera());
+    pathTracerPass.SetFrameIndex(renderer.GetPathTraceFrameIndex());
+    pathTracerPass.SetEnabled(renderer.GetSettings().enablePathTracing);
+}
+
+void ConfigureCompositePass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
 {
     auto& compositePass = static_cast<CompositePass&>(pass);
     compositePass.SetInputs(resources.deferredLighting, resources.pathTraceOutput, resources.gaussianOutput);
     compositePass.SetOutput(resources.swapchainTarget);
+    compositePass.SetMode(static_cast<uint32_t>(renderer.GetSettings().displayMode), renderer.GetSettings().gaussianMix);
 }
 } // namespace
 
@@ -107,6 +130,8 @@ bool Renderer::Initialize(SDL_Window* window, VkExtent2D initialExtent, bool ena
     deviceDesc.enableValidation = enableValidation;
     _device.Initialize(window, deviceDesc);
 
+    _camera.SetViewport(initialExtent.width, initialExtent.height);
+    LoadDefaultScene();
     InitializeCommands();
     InitializeSyncStructures();
     InitializeDefaultPasses();
@@ -116,11 +141,63 @@ bool Renderer::Initialize(SDL_Window* window, VkExtent2D initialExtent, bool ena
 void Renderer::Shutdown()
 {
     _device.WaitIdle();
+    ClearPassRegistry();
     DestroyFrameResources();
     _transientImagePool.Purge(_device);
-    ClearPassRegistry();
+    _scene.DestroyGpu(_device);
     _device.Shutdown();
     _window = nullptr;
+}
+
+void Renderer::HandleEvent(const SDL_Event& event)
+{
+    _camera.HandleEvent(event);
+
+    if (event.type == SDL_WINDOWEVENT && event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED) {
+        _camera.SetViewport(static_cast<uint32_t>(event.window.data1), static_cast<uint32_t>(event.window.data2));
+        _pathTraceFrameIndex = 0;
+        return;
+    }
+
+    if (event.type != SDL_KEYDOWN || event.key.repeat != 0) {
+        return;
+    }
+
+    switch (event.key.keysym.sym) {
+    case SDLK_1:
+        _settings.displayMode = RendererDisplayMode::Composite;
+        break;
+    case SDLK_2:
+        _settings.displayMode = RendererDisplayMode::DeferredLighting;
+        break;
+    case SDLK_3:
+        _settings.displayMode = RendererDisplayMode::Gaussian;
+        break;
+    case SDLK_4:
+        _settings.displayMode = RendererDisplayMode::PathTrace;
+        break;
+    case SDLK_g:
+        _settings.enableGaussian = !_settings.enableGaussian;
+        break;
+    case SDLK_p:
+        _settings.enablePathTracing = !_settings.enablePathTracing;
+        break;
+    default:
+        break;
+    }
+}
+
+void Renderer::Update(float deltaSeconds)
+{
+    _frameTimeMs = deltaSeconds * 1000.0f;
+    _smoothedFrameTimeMs = _smoothedFrameTimeMs <= 0.0f ? _frameTimeMs : (_smoothedFrameTimeMs * 0.9f + _frameTimeMs * 0.1f);
+
+    _camera.Update(deltaSeconds);
+    if (_camera.ConsumeMoved()) {
+        _pathTraceFrameIndex = 0;
+    } else {
+        ++_pathTraceFrameIndex;
+    }
 }
 
 void Renderer::RenderFrame()
@@ -204,6 +281,12 @@ bool Renderer::RegisterPass(RenderPassRegistrationDesc desc)
         .order = desc.order,
         .enabled = desc.enabled,
     });
+
+    RegisteredPassEntry& entry = _passRegistry.back();
+    if (_device.GetDevice() != VK_NULL_HANDLE) {
+        entry.pass->Initialize(_device);
+    }
+
     _passExecutionPlanDirty = true;
     return true;
 }
@@ -215,6 +298,10 @@ bool Renderer::UnregisterPass(std::string_view id)
     });
     if (it == _passRegistry.end()) {
         return false;
+    }
+
+    if (_device.GetDevice() != VK_NULL_HANDLE) {
+        it->pass->Shutdown(_device);
     }
 
     _passRegistry.erase(it);
@@ -293,31 +380,48 @@ void Renderer::InitializeDefaultPasses()
     ClearPassRegistry();
 
     RegisterPass(RenderPassRegistrationDesc{
-        .id = "deferred-raster",
-        .pass = std::make_unique<DeferredRasterPass>(),
-        .configure = ConfigureDeferredRasterPass,
-        .order = 100,
+        .id = "geometry-raster",
+        .pass = std::make_unique<GeometryRasterPass>(),
+        .configure = [this](IRenderPass& pass, const RendererGraphResources& resources) {
+            ConfigureGeometryRasterPass(*this, pass, resources);
+        },
+        .order = 10,
         .enabled = true,
     });
     RegisterPass(RenderPassRegistrationDesc{
-        .id = "path-tracer",
-        .pass = std::make_unique<PathTracerPass>(),
-        .configure = ConfigurePathTracerPass,
-        .order = 200,
+        .id = "deferred-lighting",
+        .pass = std::make_unique<DeferredLightingPass>(),
+        .configure = [this](IRenderPass& pass, const RendererGraphResources& resources) {
+            ConfigureDeferredLightingPass(*this, pass, resources);
+        },
+        .order = 20,
         .enabled = true,
     });
     RegisterPass(RenderPassRegistrationDesc{
         .id = "gaussian-splat",
         .pass = std::make_unique<GaussianSplatPass>(),
-        .configure = ConfigureGaussianSplatPass,
-        .order = 300,
+        .configure = [this](IRenderPass& pass, const RendererGraphResources& resources) {
+            ConfigureGaussianPass(*this, pass, resources);
+        },
+        .order = 30,
+        .enabled = true,
+    });
+    RegisterPass(RenderPassRegistrationDesc{
+        .id = "path-tracer",
+        .pass = std::make_unique<PathTracerPass>(),
+        .configure = [this](IRenderPass& pass, const RendererGraphResources& resources) {
+            ConfigurePathTracerPass(*this, pass, resources);
+        },
+        .order = 40,
         .enabled = true,
     });
     RegisterPass(RenderPassRegistrationDesc{
         .id = "composite",
         .pass = std::make_unique<CompositePass>(),
-        .configure = ConfigureCompositePass,
-        .order = 400,
+        .configure = [this](IRenderPass& pass, const RendererGraphResources& resources) {
+            ConfigureCompositePass(*this, pass, resources);
+        },
+        .order = 50,
         .enabled = true,
     });
 }
@@ -388,6 +492,8 @@ void Renderer::RecreateSwapchain()
     _swapchainImageRenderSemaphores.clear();
 
     _device.RecreateSwapchain(VkExtent2D{ static_cast<uint32_t>(width), static_cast<uint32_t>(height) });
+    _camera.SetViewport(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+    _pathTraceFrameIndex = 0;
 
     VkSemaphoreCreateInfo semaphoreInfo = vkinit::semaphore_create_info();
     _swapchainImageRenderSemaphores.resize(_device.GetSwapchainImageHandles().size(), VK_NULL_HANDLE);
@@ -398,6 +504,12 @@ void Renderer::RecreateSwapchain()
 
 void Renderer::ClearPassRegistry()
 {
+    if (_device.GetDevice() != VK_NULL_HANDLE) {
+        for (RegisteredPassEntry& entry : _passRegistry) {
+            entry.pass->Shutdown(_device);
+        }
+    }
+
     _passExecutionPlan.clear();
     _passRegistry.clear();
     _passExecutionPlanDirty = true;
@@ -447,26 +559,28 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
 
     ImageDesc gbufferDesc{};
     gbufferDesc.extent = renderExtent;
-    gbufferDesc.format = _device.GetSwapchainFormat();
+    gbufferDesc.format = VK_FORMAT_R16G16B16A16_SFLOAT;
     gbufferDesc.aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT;
-    gbufferDesc.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    gbufferDesc.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
+    gbufferDesc.registerBindlessStorage = true;
 
     ImageDesc depthDesc{};
     depthDesc.extent = renderExtent;
     depthDesc.format = VK_FORMAT_D32_SFLOAT;
     depthDesc.aspectFlags = VK_IMAGE_ASPECT_DEPTH_BIT;
-    depthDesc.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    depthDesc.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
 
     ImageDesc storageDesc{};
     storageDesc.extent = renderExtent;
-    storageDesc.format = _device.GetSwapchainFormat();
+    storageDesc.format = VK_FORMAT_R16G16B16A16_SFLOAT;
     storageDesc.aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT;
-    storageDesc.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    storageDesc.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    storageDesc.registerBindlessStorage = true;
 
     resources.gbufferAlbedo = graph.CreateTexture("GBuffer.Albedo", gbufferDesc);
-    resources.gbufferNormal = graph.CreateTexture("GBuffer.Normal", gbufferDesc);
+    resources.gbufferNormal = graph.CreateTexture("GBuffer.NormalDepth", gbufferDesc);
     resources.sceneDepth = graph.CreateTexture("SceneDepth", depthDesc);
-    resources.deferredLighting = graph.CreateTexture("DeferredLighting", gbufferDesc);
+    resources.deferredLighting = graph.CreateTexture("DeferredLighting", storageDesc);
     resources.pathTraceOutput = graph.CreateTexture("PathTraceOutput", storageDesc);
     resources.gaussianOutput = graph.CreateTexture("GaussianOutput", storageDesc);
 
@@ -495,5 +609,25 @@ const Renderer::RegisteredPassEntry* Renderer::FindPassEntry(std::string_view id
         return entry.id == id;
     });
     return it != _passRegistry.end() ? &(*it) : nullptr;
+}
+
+void Renderer::LoadDefaultScene()
+{
+    try {
+        const std::array<std::filesystem::path, 2> candidates{
+            std::filesystem::path("assets/basicmesh.glb"),
+            std::filesystem::path("assets/structure.glb"),
+        };
+
+        for (const std::filesystem::path& candidate : candidates) {
+            const std::filesystem::path resolved = vkutil::resolve_runtime_path(candidate);
+            if (_scene.LoadFromFile(resolved)) {
+                _scene.UploadToGpu(_device);
+                _camera.Focus(_scene.GetBounds().center, _scene.GetBounds().radius);
+                break;
+            }
+        }
+    } catch (...) {
+    }
 }
 } // namespace vesta::render

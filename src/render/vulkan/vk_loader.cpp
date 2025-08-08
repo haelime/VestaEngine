@@ -1,7 +1,10 @@
 #include <vesta/render/vulkan/vk_loader.h>
 
+#include <array>
 #include <fstream>
 #include <stdexcept>
+
+#include <Windows.h>
 
 std::vector<uint32_t> vkutil::load_spirv_file(const std::filesystem::path& path)
 {
@@ -42,6 +45,38 @@ VkShaderModule vkutil::load_shader_module(VkDevice device, const std::filesystem
 {
     const std::vector<uint32_t> spirv = load_spirv_file(path);
     return create_shader_module(device, spirv);
+}
+
+std::filesystem::path vkutil::resolve_runtime_path(const std::filesystem::path& relativePath)
+{
+    std::array<wchar_t, MAX_PATH> modulePath{};
+    const DWORD length = GetModuleFileNameW(nullptr, modulePath.data(), static_cast<DWORD>(modulePath.size()));
+
+    const std::array searchRoots{
+        length > 0 ? std::filesystem::path(modulePath.data()).parent_path() : std::filesystem::path{},
+        std::filesystem::current_path(),
+    };
+
+    for (const std::filesystem::path& root : searchRoots) {
+        if (root.empty()) {
+            continue;
+        }
+
+        for (std::filesystem::path cursor = root; !cursor.empty();) {
+            const std::filesystem::path candidate = cursor / relativePath;
+            if (std::filesystem::exists(candidate)) {
+                return candidate;
+            }
+
+            const std::filesystem::path parent = cursor.parent_path();
+            if (parent == cursor) {
+                break;
+            }
+            cursor = parent;
+        }
+    }
+
+    throw std::runtime_error("Failed to locate runtime path: " + relativePath.string());
 }
 
 void vkutil::destroy_shader_module(VkDevice device, VkShaderModule& shaderModule)

@@ -2,33 +2,22 @@
 
 #include <vesta/render/graph/render_graph.h>
 
-class Camera;
-
-namespace vesta::scene {
-class Scene;
-}
-
 namespace vesta::render {
-class PathTracerPass final : public IRenderPass {
+class DeferredLightingPass final : public IRenderPass {
 public:
+    void SetInputs(GraphTextureHandle albedo, GraphTextureHandle normal);
     void SetOutput(GraphTextureHandle output);
-    void SetScene(const vesta::scene::Scene* scene);
-    void SetCamera(const Camera* camera);
-    void SetFrameIndex(uint32_t frameIndex);
-    void SetEnabled(bool enabled);
 
-    [[nodiscard]] std::string_view Name() const override { return "PathTracerPass"; }
+    [[nodiscard]] std::string_view Name() const override { return "DeferredLightingPass"; }
     void Initialize(RenderDevice& device) override;
     void Setup(RenderGraphBuilder& builder) override;
     void Execute(const RenderGraphContext& context) override;
     void Shutdown(RenderDevice& device) override;
 
 private:
+    GraphTextureHandle _albedo{};
+    GraphTextureHandle _normal{};
     GraphTextureHandle _output{};
-    const vesta::scene::Scene* _scene{ nullptr };
-    const Camera* _camera{ nullptr };
-    uint32_t _frameIndex{ 0 };
-    bool _enabled{ true };
     VkPipelineLayout _pipelineLayout{ VK_NULL_HANDLE };
     VkPipeline _pipeline{ VK_NULL_HANDLE };
     VkShaderModule _computeShader{ VK_NULL_HANDLE };
