@@ -5,6 +5,7 @@
 #include <vector>
 
 #include <glm/glm.hpp>
+#include <vulkan/vulkan.h>
 
 #include <vesta/render/resources/resource_handles.h>
 
@@ -55,6 +56,13 @@ public:
     [[nodiscard]] render::BufferHandle GetVertexBuffer() const { return _vertexBuffer; }
     [[nodiscard]] render::BufferHandle GetIndexBuffer() const { return _indexBuffer; }
     [[nodiscard]] render::BufferHandle GetTriangleBuffer() const { return _triangleBuffer; }
+    [[nodiscard]] bool HasRayTracingScene() const { return _topLevelAccelerationStructure != VK_NULL_HANDLE; }
+    [[nodiscard]] VkAccelerationStructureKHR GetTopLevelAccelerationStructure() const
+    {
+        return _topLevelAccelerationStructure;
+    }
+    [[nodiscard]] float GetBottomLevelBuildMs() const { return _bottomLevelBuildMs; }
+    [[nodiscard]] float GetTopLevelBuildMs() const { return _topLevelBuildMs; }
 
 private:
     std::filesystem::path _sourcePath;
@@ -66,5 +74,11 @@ private:
     render::BufferHandle _vertexBuffer{};
     render::BufferHandle _indexBuffer{};
     render::BufferHandle _triangleBuffer{};
+    render::BufferHandle _bottomLevelBuffer{};
+    render::BufferHandle _topLevelBuffer{};
+    VkAccelerationStructureKHR _bottomLevelAccelerationStructure{ VK_NULL_HANDLE };
+    VkAccelerationStructureKHR _topLevelAccelerationStructure{ VK_NULL_HANDLE };
+    float _bottomLevelBuildMs{ 0.0f };
+    float _topLevelBuildMs{ 0.0f };
 };
 } // namespace vesta::scene

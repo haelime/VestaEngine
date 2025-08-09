@@ -19,9 +19,17 @@ vec3 tonemap(vec3 value) {
 
 void main() {
     ivec2 pixel = ivec2(gl_FragCoord.xy);
-    vec3 deferredColor = imageLoad(storageImages[nonuniformEXT(int(pc.deferredImageIndex))], pixel).rgb;
-    vec3 pathTraceColor = imageLoad(storageImages[nonuniformEXT(int(pc.pathTraceImageIndex))], pixel).rgb;
-    vec4 gaussianColor = imageLoad(storageImages[nonuniformEXT(int(pc.gaussianImageIndex))], pixel);
+    ivec2 deferredSize = imageSize(storageImages[nonuniformEXT(int(pc.deferredImageIndex))]);
+    ivec2 pathTraceSize = imageSize(storageImages[nonuniformEXT(int(pc.pathTraceImageIndex))]);
+    ivec2 gaussianSize = imageSize(storageImages[nonuniformEXT(int(pc.gaussianImageIndex))]);
+    vec2 uv = (vec2(pixel) + 0.5) / vec2(deferredSize);
+
+    ivec2 pathTracePixel = clamp(ivec2(uv * vec2(pathTraceSize)), ivec2(0), pathTraceSize - ivec2(1));
+    ivec2 gaussianPixel = clamp(ivec2(uv * vec2(gaussianSize)), ivec2(0), gaussianSize - ivec2(1));
+
+    vec3 deferredColor = imageLoad(storageImages[nonuniformEXT(int(pc.deferredImageIndex))], clamp(pixel, ivec2(0), deferredSize - ivec2(1))).rgb;
+    vec3 pathTraceColor = imageLoad(storageImages[nonuniformEXT(int(pc.pathTraceImageIndex))], pathTracePixel).rgb;
+    vec4 gaussianColor = imageLoad(storageImages[nonuniformEXT(int(pc.gaussianImageIndex))], gaussianPixel);
 
     vec3 composite = deferredColor;
     if (pc.mode == 1u) {

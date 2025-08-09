@@ -1,0 +1,52 @@
+#version 460
+#extension GL_EXT_ray_tracing : require
+#extension GL_EXT_nonuniform_qualifier : enable
+
+layout(set = 1, binding = 0) uniform accelerationStructureEXT topLevelAS;
+layout(rgba16f, set = 1, binding = 1) uniform image2D outputImage;
+
+layout(location = 0) rayPayloadEXT vec3 payloadColor;
+
+layout(push_constant) uniform PathTracePushConstants {
+    mat4 inverseViewProjection;
+    vec4 cameraPositionAndFrame;
+    uint triangleBufferIndex;
+    uint triangleCount;
+    uint frameIndex;
+    uint reserved;
+} pc;
+
+float rand(vec2 co) {
+    return fract(sin(dot(co, vec2(12.9898, 78.233))) * 43758.5453);
+}
+
+void main() {
+    ivec2 pixel = ivec2(gl_LaunchIDEXT.xy);
+    ivec2 size = ivec2(gl_LaunchSizeEXT.xy);
+    vec2 uv = (vec2(pixel) + 0.5) / vec2(size);
+    vec2 jitter = vec2(rand(vec2(pixel) + pc.cameraPositionAndFrame.w), rand(vec2(pixel.yx) + pc.cameraPositionAndFrame.w)) / vec2(size);
+    vec2 ndc = (uv + jitter) * 2.0 - 1.0;
+
+    vec4 nearPoint = pc.inverseViewProjection * vec4(ndc, 0.0, 1.0);
+    vec4 farPoint = pc.inverseViewProjection * vec4(ndc, 1.0, 1.0);
+    nearPoint /= nearPoint.w;
+    farPoint /= farPoint.w;
+
+    vec3 rayOrigin = pc.cameraPositionAndFrame.xyz;
+    vec3 rayDirection = normalize(farPoint.xyz - nearPoint.xyz);
+    payloadColor = vec3(0.0);
+
+    traceRayEXT(topLevelAS,
+        gl_RayFlagsOpaqueEXT,
+        0xFF,
+        0,
+        0,
+        0,
+        rayOrigin,
+        0.001,
+        rayDirection,
+        10000.0,
+        0);
+
+    imageStore(outputImage, pixel, vec4(payloadColor, 1.0));
+}

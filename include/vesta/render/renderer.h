@@ -8,6 +8,7 @@
 #include <string_view>
 #include <vector>
 
+#include <vesta/render/path_trace_backend.h>
 #include <vesta/render/graph/render_graph.h>
 #include <vesta/render/rhi/render_device.h>
 #include <vesta/scene/camera.h>
@@ -24,6 +25,13 @@ enum class RendererDisplayMode : uint32_t {
     PathTrace = 3,
 };
 
+enum class RendererPreset : uint32_t {
+    Recommended = 0,
+    Performance = 1,
+    Balanced = 2,
+    Quality = 3,
+};
+
 struct RendererSettings {
     RendererDisplayMode displayMode{ RendererDisplayMode::Composite };
     bool enableGaussian{ true };
@@ -31,6 +39,8 @@ struct RendererSettings {
     float gaussianPointSize{ 8.0f };
     float gaussianOpacity{ 0.35f };
     float gaussianMix{ 0.28f };
+    float pathTraceResolutionScale{ 0.5f };
+    PathTraceBackend pathTraceBackend{ PathTraceBackend::Auto };
 };
 
 struct RendererFrameContext {
@@ -53,6 +63,8 @@ struct RendererGraphResources {
 };
 
 using RenderPassConfigureFn = std::function<void(IRenderPass&, const RendererGraphResources&)>;
+using OverlayDrawFn = std::function<void(VkCommandBuffer)>;
+using OverlaySwapchainCallback = std::function<void(uint32_t)>;
 
 struct RenderPassRegistrationDesc {
     std::string id;
@@ -111,8 +123,22 @@ public:
 
     [[nodiscard]] const vesta::scene::Scene& GetScene() const { return _scene; }
     [[nodiscard]] const Camera& GetCamera() const { return _camera; }
+    [[nodiscard]] Camera& GetCamera() { return _camera; }
     [[nodiscard]] const RendererSettings& GetSettings() const { return _settings; }
+    [[nodiscard]] RendererSettings& GetSettings() { return _settings; }
     [[nodiscard]] uint32_t GetPathTraceFrameIndex() const { return _pathTraceFrameIndex; }
+    [[nodiscard]] uint32_t GetFrameSlot() const { return static_cast<uint32_t>(_frameNumber % kFrameOverlap); }
+    [[nodiscard]] float GetFrameTimeMs() const { return _frameTimeMs; }
+    [[nodiscard]] float GetSmoothedFrameTimeMs() const { return _smoothedFrameTimeMs; }
+    [[nodiscard]] RenderDevice& GetRenderDevice() { return _device; }
+    [[nodiscard]] const RenderDevice& GetRenderDevice() const { return _device; }
+    [[nodiscard]] PathTraceBackend GetActivePathTraceBackend() const;
+    [[nodiscard]] RendererPreset GetRecommendedPreset() const;
+
+    void ResetAccumulation() { _pathTraceFrameIndex = 0; }
+    void ApplyPreset(RendererPreset preset);
+    void SetOverlayCallbacks(OverlayDrawFn drawFn, OverlaySwapchainCallback swapchainCallback = {});
+    void ClearOverlayCallbacks();
 
     bool RegisterPass(RenderPassRegistrationDesc desc);
     bool UnregisterPass(std::string_view id);
@@ -147,6 +173,7 @@ private:
     void InitializeDefaultPasses();
     void DestroyFrameResources();
     void ReleaseTransientResources(RendererFrameContext& frameContext);
+    void RecordOverlay(VkCommandBuffer commandBuffer, uint32_t swapchainImageIndex);
     void RecreateSwapchain();
     void ClearPassRegistry();
     void RebuildPassExecutionPlan();
@@ -170,6 +197,8 @@ private:
     uint32_t _pathTraceFrameIndex{ 0 };
     float _frameTimeMs{ 0.0f };
     float _smoothedFrameTimeMs{ 0.0f };
+    OverlayDrawFn _overlayDrawFn;
+    OverlaySwapchainCallback _overlaySwapchainCallback;
 
     void LoadDefaultScene();
 };

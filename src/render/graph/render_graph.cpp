@@ -111,13 +111,14 @@ RenderGraph::TextureState RenderGraph::ResolveUsage(const TextureResource& resou
     case ResourceUsage::StorageRead:
         return TextureState{ true,
             usage,
-            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT
+                | VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
             VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
             VK_IMAGE_LAYOUT_GENERAL };
     case ResourceUsage::StorageWrite:
         return TextureState{ true,
             usage,
-            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
             VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
             VK_IMAGE_LAYOUT_GENERAL };
     case ResourceUsage::TransferSrc:

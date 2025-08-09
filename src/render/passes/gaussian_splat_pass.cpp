@@ -69,7 +69,7 @@ void GaussianSplatPass::Initialize(RenderDevice& device)
     binding.stride = sizeof(vesta::scene::SceneVertex);
     binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-    std::array<VkVertexInputAttributeDescription, 3> attributes{};
+    std::array<VkVertexInputAttributeDescription, 2> attributes{};
     attributes[0] = VkVertexInputAttributeDescription{
         .location = 0,
         .binding = 0,
@@ -77,12 +77,6 @@ void GaussianSplatPass::Initialize(RenderDevice& device)
         .offset = offsetof(vesta::scene::SceneVertex, position),
     };
     attributes[1] = VkVertexInputAttributeDescription{
-        .location = 1,
-        .binding = 0,
-        .format = VK_FORMAT_R32G32B32_SFLOAT,
-        .offset = offsetof(vesta::scene::SceneVertex, normal),
-    };
-    attributes[2] = VkVertexInputAttributeDescription{
         .location = 2,
         .binding = 0,
         .format = VK_FORMAT_R32G32B32A32_SFLOAT,

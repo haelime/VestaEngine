@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cctype>
 #include <limits>
 #include <memory>
 #include <utility>
@@ -21,6 +22,87 @@
 
 namespace vesta::render {
 namespace {
+std::string ToUpper(std::string value)
+{
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+        return static_cast<char>(std::toupper(c));
+    });
+    return value;
+}
+
+bool IsRtx5060Ti(const RenderDevice& device)
+{
+    return ToUpper(device.GetGpuName()).find("RTX 5060 TI") != std::string::npos;
+}
+
+float ClampPathTraceScale(float scale)
+{
+    return std::clamp(scale, 0.25f, 1.0f);
+}
+
+VkExtent3D ScaleExtent(VkExtent3D extent, float scale)
+{
+    const float clampedScale = ClampPathTraceScale(scale);
+    extent.width = std::max(1u, static_cast<uint32_t>(std::lround(static_cast<float>(extent.width) * clampedScale)));
+    extent.height = std::max(1u, static_cast<uint32_t>(std::lround(static_cast<float>(extent.height) * clampedScale)));
+    extent.depth = 1;
+    return extent;
+}
+
+RendererPreset ChooseRecommendedPreset(const RenderDevice& device)
+{
+    const uint32_t dedicatedMemoryMiB = device.GetDedicatedVideoMemoryMiB();
+
+    if (!device.IsRayTracingSupported()) {
+        return dedicatedMemoryMiB >= 12u * 1024u ? RendererPreset::Balanced : RendererPreset::Performance;
+    }
+
+    if (IsRtx5060Ti(device)) {
+        return dedicatedMemoryMiB >= 12u * 1024u ? RendererPreset::Quality : RendererPreset::Balanced;
+    }
+
+    if (dedicatedMemoryMiB >= 14u * 1024u) {
+        return RendererPreset::Quality;
+    }
+    if (dedicatedMemoryMiB >= 8u * 1024u) {
+        return RendererPreset::Balanced;
+    }
+    return RendererPreset::Performance;
+}
+
+void ApplyPresetSettings(RendererSettings& settings, const RenderDevice& device, RendererPreset preset)
+{
+    settings.displayMode = RendererDisplayMode::Composite;
+    settings.enableGaussian = true;
+    settings.enablePathTracing = true;
+    settings.gaussianPointSize = 8.0f;
+    settings.gaussianOpacity = 0.35f;
+
+    const bool hardwareRtPreferred = device.IsRayTracingSupported();
+    settings.pathTraceBackend = hardwareRtPreferred ? PathTraceBackend::Auto : PathTraceBackend::Compute;
+
+    switch (preset) {
+    case RendererPreset::Performance:
+        settings.gaussianMix = 0.18f;
+        settings.pathTraceResolutionScale = hardwareRtPreferred ? 0.50f : 0.33f;
+        break;
+    case RendererPreset::Balanced:
+        settings.gaussianMix = 0.24f;
+        settings.pathTraceResolutionScale = hardwareRtPreferred ? 0.67f : 0.50f;
+        break;
+    case RendererPreset::Quality:
+        settings.gaussianMix = 0.28f;
+        settings.pathTraceResolutionScale = hardwareRtPreferred ? 1.0f : 0.67f;
+        break;
+    case RendererPreset::Recommended:
+    default:
+        ApplyPresetSettings(settings, device, ChooseRecommendedPreset(device));
+        return;
+    }
+
+    settings.pathTraceResolutionScale = ClampPathTraceScale(settings.pathTraceResolutionScale);
+}
+
 void ConfigureGeometryRasterPass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
 {
     auto& rasterPass = static_cast<GeometryRasterPass&>(pass);
@@ -55,7 +137,9 @@ void ConfigurePathTracerPass(Renderer& renderer, IRenderPass& pass, const Render
     pathTracerPass.SetScene(&renderer.GetScene());
     pathTracerPass.SetCamera(&renderer.GetCamera());
     pathTracerPass.SetFrameIndex(renderer.GetPathTraceFrameIndex());
+    pathTracerPass.SetFrameSlot(renderer.GetFrameSlot());
     pathTracerPass.SetEnabled(renderer.GetSettings().enablePathTracing);
+    pathTracerPass.SetBackendPreference(renderer.GetSettings().pathTraceBackend);
 }
 
 void ConfigureCompositePass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
@@ -129,6 +213,7 @@ bool Renderer::Initialize(SDL_Window* window, VkExtent2D initialExtent, bool ena
     deviceDesc.swapchainExtent = initialExtent;
     deviceDesc.enableValidation = enableValidation;
     _device.Initialize(window, deviceDesc);
+    ApplyPreset(RendererPreset::Recommended);
 
     _camera.SetViewport(initialExtent.width, initialExtent.height);
     LoadDefaultScene();
@@ -239,6 +324,7 @@ void Renderer::RenderFrame()
         .commandBuffer = currentFrame.commandBuffer,
     };
     graph.Execute(executionContext);
+    RecordOverlay(currentFrame.commandBuffer, swapchainImageIndex);
 
     VK_CHECK(vkEndCommandBuffer(currentFrame.commandBuffer));
 
@@ -266,6 +352,35 @@ void Renderer::RenderFrame()
     }
 
     ++_frameNumber;
+}
+
+void Renderer::SetOverlayCallbacks(OverlayDrawFn drawFn, OverlaySwapchainCallback swapchainCallback)
+{
+    _overlayDrawFn = std::move(drawFn);
+    _overlaySwapchainCallback = std::move(swapchainCallback);
+}
+
+void Renderer::ClearOverlayCallbacks()
+{
+    _overlayDrawFn = {};
+    _overlaySwapchainCallback = {};
+}
+
+PathTraceBackend Renderer::GetActivePathTraceBackend() const
+{
+    const auto* pathTracerPass = FindPass<PathTracerPass>("path-tracer");
+    return pathTracerPass != nullptr ? pathTracerPass->GetActiveBackend() : PathTraceBackend::Compute;
+}
+
+RendererPreset Renderer::GetRecommendedPreset() const
+{
+    return ChooseRecommendedPreset(_device);
+}
+
+void Renderer::ApplyPreset(RendererPreset preset)
+{
+    ApplyPresetSettings(_settings, _device, preset);
+    ResetAccumulation();
 }
 
 bool Renderer::RegisterPass(RenderPassRegistrationDesc desc)
@@ -468,6 +583,56 @@ void Renderer::ReleaseTransientResources(RendererFrameContext& frameContext)
     frameContext.transientBuffers.clear();
 }
 
+void Renderer::RecordOverlay(VkCommandBuffer commandBuffer, uint32_t swapchainImageIndex)
+{
+    if (!_overlayDrawFn) {
+        return;
+    }
+
+    VkImage swapchainImage = _device.GetImage(_device.GetSwapchainImageHandle(swapchainImageIndex));
+    VkImageView swapchainView = _device.GetImageView(_device.GetSwapchainImageHandle(swapchainImageIndex));
+    const VkExtent2D extent = _device.GetSwapchainExtent();
+    const VkImageSubresourceRange colorRange = vkutil::make_image_subresource_range(VK_IMAGE_ASPECT_COLOR_BIT);
+
+    vkutil::transition_image(commandBuffer,
+        swapchainImage,
+        VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        VK_PIPELINE_STAGE_2_NONE,
+        VK_ACCESS_2_NONE,
+        VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+        VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+        colorRange);
+
+    VkRenderingAttachmentInfo colorAttachment{};
+    colorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    colorAttachment.imageView = swapchainView;
+    colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+
+    VkRenderingInfo renderingInfo{};
+    renderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
+    renderingInfo.renderArea = VkRect2D{ VkOffset2D{ 0, 0 }, extent };
+    renderingInfo.layerCount = 1;
+    renderingInfo.colorAttachmentCount = 1;
+    renderingInfo.pColorAttachments = &colorAttachment;
+
+    vkCmdBeginRendering(commandBuffer, &renderingInfo);
+    _overlayDrawFn(commandBuffer);
+    vkCmdEndRendering(commandBuffer);
+
+    vkutil::transition_image(commandBuffer,
+        swapchainImage,
+        VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+        VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT,
+        VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT,
+        VK_PIPELINE_STAGE_2_NONE,
+        VK_ACCESS_2_NONE,
+        colorRange);
+}
+
 void Renderer::RecreateSwapchain()
 {
     int width = 0;
@@ -494,6 +659,9 @@ void Renderer::RecreateSwapchain()
     _device.RecreateSwapchain(VkExtent2D{ static_cast<uint32_t>(width), static_cast<uint32_t>(height) });
     _camera.SetViewport(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
     _pathTraceFrameIndex = 0;
+    if (_overlaySwapchainCallback) {
+        _overlaySwapchainCallback(static_cast<uint32_t>(_device.GetSwapchainImageHandles().size()));
+    }
 
     VkSemaphoreCreateInfo semaphoreInfo = vkinit::semaphore_create_info();
     _swapchainImageRenderSemaphores.resize(_device.GetSwapchainImageHandles().size(), VK_NULL_HANDLE);
@@ -574,14 +742,17 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
     storageDesc.extent = renderExtent;
     storageDesc.format = VK_FORMAT_R16G16B16A16_SFLOAT;
     storageDesc.aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT;
-    storageDesc.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+    storageDesc.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     storageDesc.registerBindlessStorage = true;
+
+    ImageDesc pathTraceDesc = storageDesc;
+    pathTraceDesc.extent = ScaleExtent(renderExtent, _settings.pathTraceResolutionScale);
 
     resources.gbufferAlbedo = graph.CreateTexture("GBuffer.Albedo", gbufferDesc);
     resources.gbufferNormal = graph.CreateTexture("GBuffer.NormalDepth", gbufferDesc);
     resources.sceneDepth = graph.CreateTexture("SceneDepth", depthDesc);
     resources.deferredLighting = graph.CreateTexture("DeferredLighting", storageDesc);
-    resources.pathTraceOutput = graph.CreateTexture("PathTraceOutput", storageDesc);
+    resources.pathTraceOutput = graph.CreateTexture("PathTraceOutput", pathTraceDesc);
     resources.gaussianOutput = graph.CreateTexture("GaussianOutput", storageDesc);
 
     for (RegisteredPassEntry* entry : _passExecutionPlan) {

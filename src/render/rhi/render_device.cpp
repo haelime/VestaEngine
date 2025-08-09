@@ -1,7 +1,9 @@
 #include <vesta/render/rhi/render_device.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdlib>
+#include <limits>
 
 #include <SDL_vulkan.h>
 
@@ -16,6 +18,22 @@ namespace {
 constexpr uint32_t kRequiredVulkanMajor = 1;
 constexpr uint32_t kRequiredVulkanMinor = 3;
 constexpr uint32_t kRequiredVulkanPatch = 0;
+
+uint32_t CalculateDedicatedVideoMemoryMiB(VkPhysicalDevice physicalDevice)
+{
+    VkPhysicalDeviceMemoryProperties memoryProperties{};
+    vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memoryProperties);
+
+    VkDeviceSize dedicatedBytes = 0;
+    for (uint32_t heapIndex = 0; heapIndex < memoryProperties.memoryHeapCount; ++heapIndex) {
+        const VkMemoryHeap& heap = memoryProperties.memoryHeaps[heapIndex];
+        if ((heap.flags & VK_MEMORY_HEAP_DEVICE_LOCAL_BIT) != 0) {
+            dedicatedBytes = std::max(dedicatedBytes, heap.size);
+        }
+    }
+
+    return static_cast<uint32_t>(dedicatedBytes / (1024ull * 1024ull));
+}
 
 VkDescriptorSetLayoutBinding make_bindless_binding(uint32_t binding, VkDescriptorType type, uint32_t descriptorCount)
 {
@@ -326,6 +344,38 @@ void RenderDevice::DestroyImage(ImageHandle handle)
     }
 }
 
+void RenderDevice::ImmediateSubmit(const std::function<void(VkCommandBuffer)>& recorder) const
+{
+    if (_device == VK_NULL_HANDLE || !recorder) {
+        return;
+    }
+
+    VkCommandPool commandPool = VK_NULL_HANDLE;
+    VkCommandPoolCreateInfo poolInfo = vkinit::command_pool_create_info(_graphicsQueueFamily);
+    VK_CHECK(vkCreateCommandPool(_device, &poolInfo, nullptr, &commandPool));
+
+    VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+    VkCommandBufferAllocateInfo allocInfo = vkinit::command_buffer_allocate_info(commandPool);
+    VK_CHECK(vkAllocateCommandBuffers(_device, &allocInfo, &commandBuffer));
+
+    VkFence fence = VK_NULL_HANDLE;
+    VkFenceCreateInfo fenceInfo = vkinit::fence_create_info();
+    VK_CHECK(vkCreateFence(_device, &fenceInfo, nullptr, &fence));
+
+    VkCommandBufferBeginInfo beginInfo = vkinit::command_buffer_begin_info(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+    VK_CHECK(vkBeginCommandBuffer(commandBuffer, &beginInfo));
+    recorder(commandBuffer);
+    VK_CHECK(vkEndCommandBuffer(commandBuffer));
+
+    VkCommandBufferSubmitInfo commandBufferInfo = vkinit::command_buffer_submit_info(commandBuffer);
+    VkSubmitInfo2 submitInfo = vkinit::submit_info(&commandBufferInfo, nullptr, nullptr);
+    VK_CHECK(vkQueueSubmit2(_graphicsQueue, 1, &submitInfo, fence));
+    VK_CHECK(vkWaitForFences(_device, 1, &fence, VK_TRUE, std::numeric_limits<uint64_t>::max()));
+
+    vkDestroyFence(_device, fence, nullptr);
+    vkDestroyCommandPool(_device, commandPool, nullptr);
+}
+
 VkBuffer RenderDevice::GetBuffer(BufferHandle handle) const { return _buffers[handle.index].buffer; }
 VkImage RenderDevice::GetImage(ImageHandle handle) const { return _images[handle.index].image; }
 VkImageView RenderDevice::GetImageView(ImageHandle handle) const { return _images[handle.index].defaultView; }
@@ -390,15 +440,102 @@ void RenderDevice::CreateInstanceAndDevice(const RenderDeviceDesc& desc)
         .select()
         .value();
 
+    _rayTracingSupport = {};
+
+    const bool hasRequiredRayTracingExtensions = physicalDevice.is_extension_present(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)
+        && physicalDevice.is_extension_present(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME)
+        && physicalDevice.is_extension_present(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
+
+    if (hasRequiredRayTracingExtensions) {
+        VkPhysicalDeviceAccelerationStructureFeaturesKHR accelerationStructureFeatures{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR
+        };
+        accelerationStructureFeatures.accelerationStructure = VK_TRUE;
+
+        VkPhysicalDeviceRayTracingPipelineFeaturesKHR rayTracingPipelineFeatures{
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR
+        };
+        rayTracingPipelineFeatures.rayTracingPipeline = VK_TRUE;
+
+        VkPhysicalDeviceRayQueryFeaturesKHR rayQueryFeatures{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR };
+        rayQueryFeatures.rayQuery = VK_TRUE;
+
+        const bool enabledAccelerationStructure =
+            physicalDevice.enable_extension_features_if_present(accelerationStructureFeatures);
+        const bool enabledRayTracingPipeline =
+            physicalDevice.enable_extension_features_if_present(rayTracingPipelineFeatures);
+        const bool enabledRayQuery = physicalDevice.enable_extension_features_if_present(rayQueryFeatures);
+
+        if (enabledAccelerationStructure && enabledRayTracingPipeline) {
+            physicalDevice.enable_extensions_if_present(std::vector<const char*>{
+                VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
+                VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME,
+                VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
+            });
+            physicalDevice.enable_extension_if_present(VK_KHR_RAY_QUERY_EXTENSION_NAME);
+            physicalDevice.enable_extension_if_present(VK_KHR_PIPELINE_LIBRARY_EXTENSION_NAME);
+
+            _rayTracingSupport.supported = true;
+            _rayTracingSupport.accelerationStructureFeatures = accelerationStructureFeatures;
+            _rayTracingSupport.rayTracingPipelineFeatures = rayTracingPipelineFeatures;
+            if (enabledRayQuery) {
+                _rayTracingSupport.rayQueryFeatures = rayQueryFeatures;
+            }
+        }
+    }
+
     vkb::DeviceBuilder deviceBuilder{ physicalDevice };
     vkb::Device device = deviceBuilder.build().value();
 
     _device = device.device;
     _physicalDevice = physicalDevice.physical_device;
+    _gpuName = physicalDevice.name;
+    _dedicatedVideoMemoryMiB = CalculateDedicatedVideoMemoryMiB(_physicalDevice);
     _graphicsQueue = device.get_queue(vkb::QueueType::graphics).value();
     _graphicsQueueFamily = device.get_queue_index(vkb::QueueType::graphics).value();
     _presentQueue = device.get_queue(vkb::QueueType::present).value();
     _presentQueueFamily = device.get_queue_index(vkb::QueueType::present).value();
+
+    if (_rayTracingSupport.supported) {
+        _rayTracingFunctions.vkCreateAccelerationStructureKHR = reinterpret_cast<PFN_vkCreateAccelerationStructureKHR>(
+            vkGetDeviceProcAddr(_device, "vkCreateAccelerationStructureKHR"));
+        _rayTracingFunctions.vkDestroyAccelerationStructureKHR =
+            reinterpret_cast<PFN_vkDestroyAccelerationStructureKHR>(
+                vkGetDeviceProcAddr(_device, "vkDestroyAccelerationStructureKHR"));
+        _rayTracingFunctions.vkGetAccelerationStructureBuildSizesKHR =
+            reinterpret_cast<PFN_vkGetAccelerationStructureBuildSizesKHR>(
+                vkGetDeviceProcAddr(_device, "vkGetAccelerationStructureBuildSizesKHR"));
+        _rayTracingFunctions.vkCmdBuildAccelerationStructuresKHR =
+            reinterpret_cast<PFN_vkCmdBuildAccelerationStructuresKHR>(
+                vkGetDeviceProcAddr(_device, "vkCmdBuildAccelerationStructuresKHR"));
+        _rayTracingFunctions.vkGetAccelerationStructureDeviceAddressKHR =
+            reinterpret_cast<PFN_vkGetAccelerationStructureDeviceAddressKHR>(
+                vkGetDeviceProcAddr(_device, "vkGetAccelerationStructureDeviceAddressKHR"));
+        _rayTracingFunctions.vkCreateRayTracingPipelinesKHR =
+            reinterpret_cast<PFN_vkCreateRayTracingPipelinesKHR>(
+                vkGetDeviceProcAddr(_device, "vkCreateRayTracingPipelinesKHR"));
+        _rayTracingFunctions.vkGetRayTracingShaderGroupHandlesKHR =
+            reinterpret_cast<PFN_vkGetRayTracingShaderGroupHandlesKHR>(
+                vkGetDeviceProcAddr(_device, "vkGetRayTracingShaderGroupHandlesKHR"));
+        _rayTracingFunctions.vkCmdTraceRaysKHR = reinterpret_cast<PFN_vkCmdTraceRaysKHR>(
+            vkGetDeviceProcAddr(_device, "vkCmdTraceRaysKHR"));
+
+        _rayTracingSupport.supported = _rayTracingFunctions.vkCreateAccelerationStructureKHR != nullptr
+            && _rayTracingFunctions.vkDestroyAccelerationStructureKHR != nullptr
+            && _rayTracingFunctions.vkGetAccelerationStructureBuildSizesKHR != nullptr
+            && _rayTracingFunctions.vkCmdBuildAccelerationStructuresKHR != nullptr
+            && _rayTracingFunctions.vkGetAccelerationStructureDeviceAddressKHR != nullptr
+            && _rayTracingFunctions.vkCreateRayTracingPipelinesKHR != nullptr
+            && _rayTracingFunctions.vkGetRayTracingShaderGroupHandlesKHR != nullptr
+            && _rayTracingFunctions.vkCmdTraceRaysKHR != nullptr;
+
+        VkPhysicalDeviceProperties2 properties2{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 };
+        properties2.pNext = &_rayTracingSupport.accelerationStructureProperties;
+        _rayTracingSupport.accelerationStructureProperties.pNext = &_rayTracingSupport.rayTracingPipelineProperties;
+        vkGetPhysicalDeviceProperties2(_physicalDevice, &properties2);
+        _rayTracingSupport.accelerationStructureProperties.pNext = nullptr;
+    }
+
 }
 
 void RenderDevice::CreateAllocator()

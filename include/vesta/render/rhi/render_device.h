@@ -119,6 +119,34 @@ struct AllocatedImage {
     bool ownedBySwapchain{ false };
 };
 
+struct RayTracingSupport {
+    bool supported{ false };
+    VkPhysicalDeviceAccelerationStructureFeaturesKHR accelerationStructureFeatures{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR
+    };
+    VkPhysicalDeviceRayTracingPipelineFeaturesKHR rayTracingPipelineFeatures{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_FEATURES_KHR
+    };
+    VkPhysicalDeviceRayQueryFeaturesKHR rayQueryFeatures{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR };
+    VkPhysicalDeviceAccelerationStructurePropertiesKHR accelerationStructureProperties{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_PROPERTIES_KHR
+    };
+    VkPhysicalDeviceRayTracingPipelinePropertiesKHR rayTracingPipelineProperties{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_PIPELINE_PROPERTIES_KHR
+    };
+};
+
+struct RayTracingFunctions {
+    PFN_vkCreateAccelerationStructureKHR vkCreateAccelerationStructureKHR{ nullptr };
+    PFN_vkDestroyAccelerationStructureKHR vkDestroyAccelerationStructureKHR{ nullptr };
+    PFN_vkGetAccelerationStructureBuildSizesKHR vkGetAccelerationStructureBuildSizesKHR{ nullptr };
+    PFN_vkCmdBuildAccelerationStructuresKHR vkCmdBuildAccelerationStructuresKHR{ nullptr };
+    PFN_vkGetAccelerationStructureDeviceAddressKHR vkGetAccelerationStructureDeviceAddressKHR{ nullptr };
+    PFN_vkCreateRayTracingPipelinesKHR vkCreateRayTracingPipelinesKHR{ nullptr };
+    PFN_vkGetRayTracingShaderGroupHandlesKHR vkGetRayTracingShaderGroupHandlesKHR{ nullptr };
+    PFN_vkCmdTraceRaysKHR vkCmdTraceRaysKHR{ nullptr };
+};
+
 // Vulkan instance/device/swapchain/VMA/bindless를 한 곳에서 관리하는 RHI 계층이다.
 class RenderDevice {
 public:
@@ -132,6 +160,7 @@ public:
     [[nodiscard]] ImageHandle CreateImage(const ImageDesc& desc);
     void DestroyBuffer(BufferHandle handle);
     void DestroyImage(ImageHandle handle);
+    void ImmediateSubmit(const std::function<void(VkCommandBuffer)>& recorder) const;
 
     [[nodiscard]] VkBuffer GetBuffer(BufferHandle handle) const;
     [[nodiscard]] VkImage GetImage(ImageHandle handle) const;
@@ -143,6 +172,11 @@ public:
 
     [[nodiscard]] const AllocatedImage& GetImageResource(ImageHandle handle) const;
     [[nodiscard]] const AllocatedBuffer& GetBufferResource(BufferHandle handle) const;
+    [[nodiscard]] bool IsRayTracingSupported() const { return _rayTracingSupport.supported; }
+    [[nodiscard]] const RayTracingSupport& GetRayTracingSupport() const { return _rayTracingSupport; }
+    [[nodiscard]] const RayTracingFunctions& GetRayTracingFunctions() const { return _rayTracingFunctions; }
+    [[nodiscard]] const std::string& GetGpuName() const { return _gpuName; }
+    [[nodiscard]] uint32_t GetDedicatedVideoMemoryMiB() const { return _dedicatedVideoMemoryMiB; }
 
     [[nodiscard]] VkInstance GetInstance() const { return _instance; }
     [[nodiscard]] VkPhysicalDevice GetPhysicalDevice() const { return _physicalDevice; }
@@ -205,5 +239,9 @@ private:
     std::vector<uint32_t> _freeImageSlots;
 
     BindlessDescriptorManager _bindless;
+    RayTracingSupport _rayTracingSupport;
+    RayTracingFunctions _rayTracingFunctions;
+    std::string _gpuName;
+    uint32_t _dedicatedVideoMemoryMiB{ 0 };
 };
 } // namespace vesta::render
