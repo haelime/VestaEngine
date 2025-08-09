@@ -49,7 +49,7 @@ target_include_directories(engine PUBLIC "${PROJECT_SOURCE_DIR}/include")
 
 if(MSVC)
   # Parallel compilation can contend on the shared engine PDB under Ninja.
-  target_compile_options(engine PRIVATE /FS)
+  target_compile_options(engine PRIVATE /FS /utf-8)
 endif()
 
 target_link_libraries(engine PUBLIC vma Vulkan::Vulkan fmt::fmt SDL2::SDL2 vkbootstrap glm fastgltf::fastgltf)
