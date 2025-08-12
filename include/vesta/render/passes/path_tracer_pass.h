@@ -10,6 +10,9 @@ class Scene;
 }
 
 namespace vesta::render {
+// Progressive path tracing pass with two backends:
+// - compute shader fallback for portability
+// - hardware ray tracing pipeline when the GPU supports it
 class PathTracerPass final : public IRenderPass {
 public:
     void SetOutput(GraphTextureHandle output);
@@ -31,6 +34,8 @@ private:
     GraphTextureHandle _output{};
     const vesta::scene::Scene* _scene{ nullptr };
     const Camera* _camera{ nullptr };
+    // _frameIndex controls accumulation. When the camera moves, the renderer
+    // resets it so history from the old view is not blended into the new one.
     uint32_t _frameIndex{ 0 };
     uint32_t _frameSlot{ 0 };
     bool _enabled{ true };

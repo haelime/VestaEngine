@@ -5,6 +5,7 @@
 #include <vesta/render/vulkan/vk_types.h>
 
 namespace vkutil {
+// Shader loading is split out so pass code can focus on pipeline setup.
 [[nodiscard]] std::vector<uint32_t> load_spirv_file(const std::filesystem::path& path);
 [[nodiscard]] VkShaderModule create_shader_module(VkDevice device, std::span<const uint32_t> spirvCode);
 [[nodiscard]] VkShaderModule load_shader_module(VkDevice device, const std::filesystem::path& path);

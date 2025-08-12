@@ -6,6 +6,8 @@
 #include <vesta/render/vulkan/vk_types.h>
 
 namespace vkinit {
+// vkinit returns small pre-filled Vulkan structs. The goal is not abstraction,
+// only to remove repetitive zero-initialize-and-fill boilerplate.
 //> init_cmd
 VkCommandPoolCreateInfo command_pool_create_info(uint32_t queueFamilyIndex, VkCommandPoolCreateFlags flags = 0);
 VkCommandBufferAllocateInfo command_buffer_allocate_info(VkCommandPool pool, uint32_t count = 1);

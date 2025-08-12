@@ -3,6 +3,8 @@
 #include <vesta/render/graph/render_graph.h>
 
 namespace vesta::render {
+// Final full-screen pass. It chooses which intermediate image to show, or blends
+// several of them together for the portfolio "composite" presentation mode.
 class CompositePass final : public IRenderPass {
 public:
     void SetInputs(GraphTextureHandle deferredLighting, GraphTextureHandle pathTrace, GraphTextureHandle gaussian);

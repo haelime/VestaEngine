@@ -3,6 +3,8 @@
 #include <vesta/render/vulkan/vk_types.h>
 
 namespace vkutil {
+// Thin wrappers around Vulkan descriptor boilerplate. They keep the sample code
+// readable without hiding the descriptor concepts themselves.
 [[nodiscard]] VkDescriptorSetLayout create_descriptor_set_layout(
     VkDevice device,
     std::span<const VkDescriptorSetLayoutBinding> bindings,

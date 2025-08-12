@@ -11,6 +11,8 @@
 #include <vesta/render/vulkan/vk_types.h>
 
 namespace vesta::render {
+// Central bindless heap used by the sample shaders. Instead of passing one
+// descriptor set per texture/buffer, shaders index into large arrays.
 class BindlessDescriptorManager {
 public:
     static constexpr uint32_t kMaxSampledImages = 1024;
@@ -43,6 +45,8 @@ struct RenderDeviceDesc {
     bool enableValidation{ false };
 };
 
+// BufferDesc and ImageDesc are small "creation recipes" that the renderer and
+// graph use to request GPU resources without touching Vulkan structs directly.
 struct BufferDesc {
     VkDeviceSize size{ 0 };
     VkBufferUsageFlags usage{ 0 };
@@ -72,6 +76,8 @@ struct BindlessResourceIndices {
     uint32_t storageBuffer{ kInvalidResourceIndex };
 };
 
+// AllocatedBuffer / AllocatedImage store both the raw Vulkan object and the VMA
+// allocation that owns its memory.
 struct AllocatedBuffer {
     VkBuffer buffer{ VK_NULL_HANDLE };
     VmaAllocation allocation{ VK_NULL_HANDLE };
@@ -107,6 +113,8 @@ struct RayTracingSupport {
     };
 };
 
+// Function pointers are loaded only when ray tracing is available. Keeping them
+// together makes it obvious which Vulkan entry points are optional extensions.
 struct RayTracingFunctions {
     PFN_vkCreateAccelerationStructureKHR vkCreateAccelerationStructureKHR{ nullptr };
     PFN_vkDestroyAccelerationStructureKHR vkDestroyAccelerationStructureKHR{ nullptr };
@@ -120,6 +128,8 @@ struct RayTracingFunctions {
 
 class RenderDevice {
 public:
+    // RenderDevice owns the long-lived Vulkan objects: instance, device,
+    // allocator, swapchain, and small resource registries for buffers/images.
     bool Initialize(SDL_Window* window, const RenderDeviceDesc& desc);
     void Shutdown();
     void WaitIdle() const;

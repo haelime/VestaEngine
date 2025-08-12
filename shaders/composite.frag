@@ -1,6 +1,9 @@
 #version 460
 #extension GL_EXT_nonuniform_qualifier : enable
 
+// Picks which intermediate image to show, or blends several together for the
+// portfolio view shown in Composite mode.
+
 layout(rgba16f, set = 0, binding = 1) uniform readonly image2D storageImages[];
 
 layout(push_constant) uniform CompositePushConstants {

@@ -22,6 +22,9 @@
 
 namespace vesta::render {
 namespace {
+// Presets are derived from the active GPU because the heaviest pass in this
+// sample is path tracing, and its reasonable resolution scale changes a lot
+// between low-end, non-RT, and modern RT-capable cards.
 std::string ToUpper(std::string value)
 {
     std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
@@ -209,6 +212,8 @@ bool Renderer::Initialize(SDL_Window* window, VkExtent2D initialExtent, bool ena
 {
     _window = window;
 
+    // RenderDevice owns Vulkan lifetime, while Renderer owns frame-level policy
+    // such as presets, passes, transient resources, and camera/scene state.
     RenderDeviceDesc deviceDesc;
     deviceDesc.swapchainExtent = initialExtent;
     deviceDesc.enableValidation = enableValidation;
@@ -278,6 +283,8 @@ void Renderer::Update(float deltaSeconds)
     _smoothedFrameTimeMs = _smoothedFrameTimeMs <= 0.0f ? _frameTimeMs : (_smoothedFrameTimeMs * 0.9f + _frameTimeMs * 0.1f);
 
     _camera.Update(deltaSeconds);
+    // Progressive path tracing only makes sense while the viewpoint is stable.
+    // As soon as the camera moves, old samples become history from the wrong camera.
     if (_camera.ConsumeMoved()) {
         _pathTraceFrameIndex = 0;
     } else {
@@ -289,6 +296,8 @@ void Renderer::RenderFrame()
 {
     RendererFrameContext& currentFrame = GetCurrentFrame();
 
+    // Each overlapping frame owns its own fence. Waiting here guarantees the GPU
+    // has finished using the command buffer and transient resources we are about to recycle.
     VK_CHECK(vkWaitForFences(_device.GetDevice(), 1, &currentFrame.renderFence, VK_TRUE, std::numeric_limits<uint64_t>::max()));
     ReleaseTransientResources(currentFrame);
 
@@ -316,6 +325,8 @@ void Renderer::RenderFrame()
     VkCommandBufferBeginInfo beginInfo = vkinit::command_buffer_begin_info(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
     VK_CHECK(vkBeginCommandBuffer(currentFrame.commandBuffer, &beginInfo));
 
+    // Build the logical frame graph first, then execute it. This keeps pass code
+    // focused on "what it needs" instead of hand-written global barriers.
     RenderGraph graph = BuildFrameGraph(swapchainImageIndex);
     RenderGraphExecutionContext executionContext{
         .device = _device,
@@ -494,6 +505,7 @@ void Renderer::InitializeDefaultPasses()
 {
     ClearPassRegistry();
 
+    // Pass order is explicit so the frame graph wiring stays easy to read.
     RegisterPass(RenderPassRegistrationDesc{
         .id = "geometry-raster",
         .pass = std::make_unique<GeometryRasterPass>(),
@@ -594,6 +606,9 @@ void Renderer::RecordOverlay(VkCommandBuffer commandBuffer, uint32_t swapchainIm
     const VkExtent2D extent = _device.GetSwapchainExtent();
     const VkImageSubresourceRange colorRange = vkutil::make_image_subresource_range(VK_IMAGE_ASPECT_COLOR_BIT);
 
+    // The graph leaves the swapchain image ready for presentation. ImGui needs it
+    // back in a color-attachment layout for one extra overlay draw, then we
+    // transition it back to PRESENT before queue submission finishes.
     vkutil::transition_image(commandBuffer,
         swapchainImage,
         VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
@@ -644,6 +659,8 @@ void Renderer::RecreateSwapchain()
 
     _device.WaitIdle();
 
+    // Swapchain recreation invalidates images tied to the old extent. Purging the
+    // transient pool here avoids reusing resources whose sizes no longer match.
     for (RendererFrameContext& frame : _frames) {
         ReleaseTransientResources(frame);
     }
@@ -721,6 +738,8 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
     const VkExtent2D swapchainExtent = _device.GetSwapchainExtent();
     const VkExtent3D renderExtent{ swapchainExtent.width, swapchainExtent.height, 1 };
 
+    // These logical resources describe the full frame. The graph decides which
+    // concrete VkImage each handle resolves to for this frame execution.
     RendererGraphResources resources;
     resources.swapchainTarget =
         graph.ImportTexture("SwapchainTarget", _device.GetSwapchainImageHandle(swapchainImageIndex), ResourceUsage::Undefined);

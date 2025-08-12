@@ -9,6 +9,8 @@
 
 namespace vesta::render {
 namespace {
+// Bindless slots are pushed instead of descriptors so the compute shader can
+// fetch the right GBuffer images directly from the global bindless set.
 struct DeferredLightingPushConstants {
     uint32_t albedoImageIndex{ 0 };
     uint32_t normalImageIndex{ 0 };
@@ -90,6 +92,7 @@ void DeferredLightingPass::Execute(const RenderGraphContext& context)
         sizeof(DeferredLightingPushConstants),
         &pushConstants);
 
+    // One thread group shades an 8x8 tile.
     const VkExtent3D outputExtent = context.GetTextureExtent(_output);
     vkCmdDispatch(commandBuffer, (outputExtent.width + 7) / 8, (outputExtent.height + 7) / 8, 1);
 }

@@ -1,6 +1,9 @@
 #version 460
 #extension GL_EXT_nonuniform_qualifier : enable
 
+// Readable compute fallback for path tracing. It brute-forces triangle tests,
+// which is slower than HW RT but much easier to study step by step.
+
 layout(local_size_x = 8, local_size_y = 8) in;
 
 struct Triangle {

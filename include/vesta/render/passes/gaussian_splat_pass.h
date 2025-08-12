@@ -9,6 +9,8 @@ class Scene;
 }
 
 namespace vesta::render {
+// Draws points from the loaded scene as soft splats. This is intentionally kept
+// separate from the mesh raster pass so it can be blended or disabled at runtime.
 class GaussianSplatPass final : public IRenderPass {
 public:
     void SetDepthInput(GraphTextureHandle depth);

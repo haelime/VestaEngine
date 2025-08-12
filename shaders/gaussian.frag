@@ -1,5 +1,7 @@
 #version 460
 
+// Shapes the point sprite into a soft radial falloff instead of a hard square.
+
 layout(push_constant) uniform GaussianPushConstants {
     mat4 viewProjection;
     vec4 params;

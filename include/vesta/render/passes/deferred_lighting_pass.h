@@ -3,6 +3,8 @@
 #include <vesta/render/graph/render_graph.h>
 
 namespace vesta::render {
+// Reads the GBuffer and writes lit scene color into a storage image.
+// Because lighting happens after geometry, one mesh pass can feed many lighting models.
 class DeferredLightingPass final : public IRenderPass {
 public:
     void SetInputs(GraphTextureHandle albedo, GraphTextureHandle normal);

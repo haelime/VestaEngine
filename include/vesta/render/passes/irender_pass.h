@@ -7,7 +7,10 @@ class RenderGraphBuilder;
 class RenderGraphContext;
 class RenderDevice;
 
-// Common interface shared by all render passes.
+// Every render pass follows the same lifecycle:
+// 1. Initialize GPU objects that survive across frames.
+// 2. Describe graph reads/writes in Setup().
+// 3. Record commands in Execute() after the graph inserted barriers.
 class IRenderPass {
 public:
     virtual ~IRenderPass() = default;

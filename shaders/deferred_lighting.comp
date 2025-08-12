@@ -1,6 +1,9 @@
 #version 460
 #extension GL_EXT_nonuniform_qualifier : enable
 
+// Simple deferred lighting compute pass. It reads the GBuffer from bindless
+// storage images and writes lit color into another storage image.
+
 layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(rgba16f, set = 0, binding = 1) uniform image2D storageImages[];

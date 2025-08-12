@@ -1,5 +1,8 @@
 #version 460
 
+// Stores material color and a packed normal so later passes can light the scene
+// without re-running vertex processing.
+
 layout(location = 0) in vec3 inNormal;
 layout(location = 1) in vec4 inColor;
 

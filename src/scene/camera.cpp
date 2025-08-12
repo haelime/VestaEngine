@@ -29,6 +29,8 @@ void Camera::Focus(glm::vec3 center, float radius)
 
 void Camera::HandleEvent(const SDL_Event& event)
 {
+    // Right mouse button switches the camera into "mouse look" mode so the same
+    // mouse can still interact with the ImGui overlay when RMB is released.
     if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_RIGHT) {
         _rightMouseDown = true;
         _firstMouseSample = true;
@@ -110,6 +112,8 @@ glm::mat4 Camera::GetViewMatrix() const
 glm::mat4 Camera::GetProjectionMatrix() const
 {
     glm::mat4 projection = glm::perspective(glm::radians(_fovDegrees), _aspectRatio, _nearPlane, _farPlane);
+    // GLM follows OpenGL-style clip space by default. Flipping Y makes the
+    // projection match Vulkan's screen-space convention.
     projection[1][1] *= -1.0f;
     return projection;
 }

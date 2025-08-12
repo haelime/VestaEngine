@@ -6,6 +6,8 @@
 namespace vesta::render {
 inline constexpr uint32_t kInvalidResourceIndex = std::numeric_limits<uint32_t>::max();
 
+// Lightweight handles let higher-level systems refer to GPU resources without
+// exposing raw Vulkan objects everywhere in the codebase.
 struct BufferHandle {
     uint32_t index{ kInvalidResourceIndex };
 
