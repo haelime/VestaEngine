@@ -2,14 +2,17 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cctype>
 #include <limits>
 #include <memory>
+#include <string>
 #include <utility>
 
 #include <SDL.h>
 #include <SDL_vulkan.h>
+#include <glm/glm.hpp>
 
 #include <vesta/render/passes/composite_pass.h>
 #include <vesta/render/passes/deferred_lighting_pass.h>
@@ -36,6 +39,48 @@ std::string ToUpper(std::string value)
 bool IsRtx5060Ti(const RenderDevice& device)
 {
     return ToUpper(device.GetGpuName()).find("RTX 5060 TI") != std::string::npos;
+}
+
+bool NeedsGeometryPass(const RendererSettings& settings)
+{
+    if (!settings.optimizeInactivePasses) {
+        return true;
+    }
+
+    return settings.displayMode != RendererDisplayMode::PathTrace;
+}
+
+bool NeedsDeferredPass(const RendererSettings& settings)
+{
+    if (!settings.optimizeInactivePasses) {
+        return true;
+    }
+
+    return settings.displayMode == RendererDisplayMode::Composite || settings.displayMode == RendererDisplayMode::DeferredLighting;
+}
+
+bool NeedsGaussianPass(const RendererSettings& settings)
+{
+    if (!settings.enableGaussian) {
+        return false;
+    }
+    if (!settings.optimizeInactivePasses) {
+        return true;
+    }
+
+    return settings.displayMode == RendererDisplayMode::Composite || settings.displayMode == RendererDisplayMode::Gaussian;
+}
+
+bool NeedsPathTracePass(const RendererSettings& settings)
+{
+    if (!settings.enablePathTracing) {
+        return false;
+    }
+    if (!settings.optimizeInactivePasses) {
+        return true;
+    }
+
+    return settings.displayMode == RendererDisplayMode::Composite || settings.displayMode == RendererDisplayMode::PathTrace;
 }
 
 float ClampPathTraceScale(float scale)
@@ -106,12 +151,46 @@ void ApplyPresetSettings(RendererSettings& settings, const RenderDevice& device,
     settings.pathTraceResolutionScale = ClampPathTraceScale(settings.pathTraceResolutionScale);
 }
 
+std::array<glm::vec4, 6> ExtractFrustumPlanes(const glm::mat4& viewProjection)
+{
+    const glm::mat4 matrix = glm::transpose(viewProjection);
+    std::array<glm::vec4, 6> planes{
+        matrix[3] + matrix[0],
+        matrix[3] - matrix[0],
+        matrix[3] + matrix[1],
+        matrix[3] - matrix[1],
+        matrix[3] + matrix[2],
+        matrix[3] - matrix[2],
+    };
+
+    for (glm::vec4& plane : planes) {
+        const float length = glm::length(glm::vec3(plane));
+        if (length > 0.0f) {
+            plane /= length;
+        }
+    }
+    return planes;
+}
+
+bool IsSurfaceVisible(const vesta::scene::SceneSurfaceBounds& bounds, const std::array<glm::vec4, 6>& planes)
+{
+    for (const glm::vec4& plane : planes) {
+        const float distance = glm::dot(glm::vec3(plane), bounds.center) + plane.w;
+        if (distance < -bounds.radius) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void ConfigureGeometryRasterPass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
 {
     auto& rasterPass = static_cast<GeometryRasterPass&>(pass);
     rasterPass.SetTargets(resources.gbufferAlbedo, resources.gbufferNormal, resources.sceneDepth);
     rasterPass.SetScene(&renderer.GetScene());
     rasterPass.SetCamera(&renderer.GetCamera());
+    const bool useVisibilitySet = renderer.GetSettings().enableFrustumCulling && renderer.HasValidVisibilitySet();
+    rasterPass.SetVisibleSurfaceIndices(useVisibilitySet ? &renderer.GetVisibleSurfaceIndices() : nullptr);
 }
 
 void ConfigureDeferredLightingPass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
@@ -218,6 +297,7 @@ bool Renderer::Initialize(SDL_Window* window, VkExtent2D initialExtent, bool ena
     deviceDesc.swapchainExtent = initialExtent;
     deviceDesc.enableValidation = enableValidation;
     _device.Initialize(window, deviceDesc);
+    _jobs.Initialize();
     ApplyPreset(RendererPreset::Recommended);
 
     _camera.SetViewport(initialExtent.width, initialExtent.height);
@@ -230,11 +310,28 @@ bool Renderer::Initialize(SDL_Window* window, VkExtent2D initialExtent, bool ena
 
 void Renderer::Shutdown()
 {
+    if (_sceneLoadFuture.valid()) {
+        _sceneLoadFuture.wait();
+        _sceneLoadFuture = {};
+    }
+    if (_visibilityFuture.valid()) {
+        _visibilityFuture.wait();
+        _visibilityFuture = {};
+    }
+    _sceneLoadInProgress = false;
+    _visibilityCullInProgress = false;
+    _sceneLoadStatus = {};
+
     _device.WaitIdle();
     ClearPassRegistry();
     DestroyFrameResources();
     _transientImagePool.Purge(_device);
     _scene.DestroyGpu(_device);
+    for (RetiredSceneEntry& retiredScene : _retiredScenes) {
+        retiredScene.scene.DestroyGpu(_device);
+    }
+    _retiredScenes.clear();
+    _jobs.Shutdown();
     _device.Shutdown();
     _window = nullptr;
 }
@@ -279,17 +376,32 @@ void Renderer::HandleEvent(const SDL_Event& event)
 
 void Renderer::Update(float deltaSeconds)
 {
+    PumpSceneLoadRequests();
+    PumpVisibilityResults();
+
     _frameTimeMs = deltaSeconds * 1000.0f;
     _smoothedFrameTimeMs = _smoothedFrameTimeMs <= 0.0f ? _frameTimeMs : (_smoothedFrameTimeMs * 0.9f + _frameTimeMs * 0.1f);
+    if (_settings.frameTimingCapture || _settings.benchmarkOverlay) {
+        _frameTimeHistoryMs[_frameTimeHistoryHead] = _frameTimeMs;
+        _frameTimeHistoryHead = (_frameTimeHistoryHead + 1) % _frameTimeHistoryMs.size();
+        _frameTimeHistoryCount = std::min(_frameTimeHistoryCount + 1, _frameTimeHistoryMs.size());
+    } else {
+        _frameTimeHistoryHead = 0;
+        _frameTimeHistoryCount = 0;
+        _frameTimeHistoryMs.fill(0.0f);
+    }
 
     _camera.Update(deltaSeconds);
     // Progressive path tracing only makes sense while the viewpoint is stable.
     // As soon as the camera moves, old samples become history from the wrong camera.
     if (_camera.ConsumeMoved()) {
         _pathTraceFrameIndex = 0;
+        _visibilityDirty = true;
     } else {
         ++_pathTraceFrameIndex;
     }
+
+    DispatchVisibilityCullIfNeeded();
 }
 
 void Renderer::RenderFrame()
@@ -299,6 +411,7 @@ void Renderer::RenderFrame()
     // Each overlapping frame owns its own fence. Waiting here guarantees the GPU
     // has finished using the command buffer and transient resources we are about to recycle.
     VK_CHECK(vkWaitForFences(_device.GetDevice(), 1, &currentFrame.renderFence, VK_TRUE, std::numeric_limits<uint64_t>::max()));
+    ReleaseRetiredScenes();
     ReleaseTransientResources(currentFrame);
 
     uint32_t swapchainImageIndex = 0;
@@ -392,6 +505,91 @@ void Renderer::ApplyPreset(RendererPreset preset)
 {
     ApplyPresetSettings(_settings, _device, preset);
     ResetAccumulation();
+}
+
+SceneUploadOptions Renderer::GetSceneUploadOptions() const
+{
+    return SceneUploadOptions{
+        .useDeviceLocalSceneBuffers = _settings.useDeviceLocalSceneBuffers,
+        .buildRayTracingStructuresOnLoad = _settings.buildRayTracingStructuresOnLoad,
+    };
+}
+
+bool Renderer::LoadScene(const std::filesystem::path& path)
+{
+    if (path.empty()) {
+        _sceneLoadStatus.state = SceneLoadState::Failed;
+        _sceneLoadStatus.message = "Scene path is empty.";
+        return false;
+    }
+
+    if (_sceneLoadInProgress) {
+        _sceneLoadStatus.state = SceneLoadState::Failed;
+        _sceneLoadStatus.message = "Scene load already in progress.";
+        return false;
+    }
+
+    const std::filesystem::path resolvedPath = vkutil::resolve_runtime_path(path);
+    return LoadSceneResolved(resolvedPath);
+}
+
+bool Renderer::LoadSceneAsync(const std::filesystem::path& path)
+{
+    if (path.empty()) {
+        _sceneLoadStatus.state = SceneLoadState::Failed;
+        _sceneLoadStatus.message = "Scene path is empty.";
+        return false;
+    }
+
+    PumpSceneLoadRequests();
+    if (_sceneLoadInProgress) {
+        _sceneLoadStatus.state = SceneLoadState::Failed;
+        _sceneLoadStatus.message = "Scene load already in progress.";
+        return false;
+    }
+
+    const std::filesystem::path resolvedPath = vkutil::resolve_runtime_path(path);
+    _sceneLoadStatus = SceneLoadStatus{
+        .state = SceneLoadState::Parsing,
+        .path = resolvedPath,
+        .message = "Parsing " + resolvedPath.filename().string() + "...",
+    };
+    _sceneLoadInProgress = true;
+    _sceneLoadFuture = _jobs.Submit(vesta::core::JobPriority::Background, [resolvedPath]() {
+        AsyncSceneLoadResult result;
+        result.path = resolvedPath;
+        const auto parseStart = std::chrono::steady_clock::now();
+
+        try {
+            vesta::scene::Scene loadedScene;
+            result.success = loadedScene.LoadFromFile(resolvedPath);
+            if (result.success) {
+                result.scene = std::move(loadedScene);
+            } else {
+                result.errorMessage = "Failed to parse scene file.";
+            }
+        } catch (const std::exception& exception) {
+            result.errorMessage = exception.what();
+        } catch (...) {
+            result.errorMessage = "Unknown scene loading error.";
+        }
+
+        result.parseMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - parseStart).count();
+        return result;
+    });
+    return true;
+}
+
+bool Renderer::ReloadSceneAsync()
+{
+    const std::filesystem::path currentPath = _scene.GetSourcePath();
+    if (currentPath.empty()) {
+        _sceneLoadStatus.state = SceneLoadState::Failed;
+        _sceneLoadStatus.message = "No scene to reload.";
+        return false;
+    }
+
+    return LoadSceneAsync(currentPath);
 }
 
 bool Renderer::RegisterPass(RenderPassRegistrationDesc desc)
@@ -724,6 +922,219 @@ void Renderer::RebuildPassExecutionPlan()
     _passExecutionPlanDirty = false;
 }
 
+void Renderer::PumpSceneLoadRequests()
+{
+    if (!_sceneLoadFuture.valid()) {
+        return;
+    }
+
+    using namespace std::chrono_literals;
+    if (_sceneLoadFuture.wait_for(0ms) != std::future_status::ready) {
+        return;
+    }
+
+    AsyncSceneLoadResult result = _sceneLoadFuture.get();
+    _sceneLoadInProgress = false;
+
+    if (!result.success) {
+        const std::string sceneName = result.path.empty() ? std::string("scene") : result.path.filename().string();
+        _sceneLoadStatus.state = SceneLoadState::Failed;
+        _sceneLoadStatus.path = result.path;
+        _sceneLoadStatus.parseMs = result.parseMs;
+        _sceneLoadStatus.uploadMs = 0.0f;
+        _sceneLoadStatus.blasMs = 0.0f;
+        _sceneLoadStatus.tlasMs = 0.0f;
+        _sceneLoadStatus.message = "Failed to load " + sceneName;
+        if (!result.errorMessage.empty()) {
+            _sceneLoadStatus.message += ": " + result.errorMessage;
+        }
+        return;
+    }
+
+    _sceneLoadStatus.state = SceneLoadState::Uploading;
+    _sceneLoadStatus.path = result.path;
+    _sceneLoadStatus.parseMs = result.parseMs;
+    _sceneLoadStatus.message = "Uploading " + result.path.filename().string() + "...";
+    ApplyLoadedScene(std::move(result.scene));
+}
+
+void Renderer::PumpVisibilityResults()
+{
+    if (!_visibilityFuture.valid()) {
+        return;
+    }
+
+    using namespace std::chrono_literals;
+    if (_visibilityFuture.wait_for(0ms) != std::future_status::ready) {
+        return;
+    }
+
+    VisibilityCullResult result = _visibilityFuture.get();
+    _visibilityCullInProgress = false;
+
+    if (_scene.GetPreparedScene() != result.scene) {
+        return;
+    }
+
+    _visibleSceneToken = std::move(result.scene);
+    _visibleSurfaceIndices = std::move(result.visibleSurfaceIndices);
+}
+
+void Renderer::DispatchVisibilityCullIfNeeded()
+{
+    if (!_settings.enableFrustumCulling) {
+        _visibleSurfaceIndices.clear();
+        _visibleSceneToken.reset();
+        _visibilityDirty = false;
+        return;
+    }
+    if (_visibilityCullInProgress || !_visibilityDirty) {
+        return;
+    }
+
+    std::shared_ptr<const vesta::scene::PreparedScene> prepared = _scene.GetPreparedScene();
+    if (!prepared || prepared->surfaces.empty()) {
+        _visibleSurfaceIndices.clear();
+        _visibleSceneToken = std::move(prepared);
+        _visibilityDirty = false;
+        return;
+    }
+
+    _visibilityCullInProgress = true;
+    _visibilityDirty = false;
+    const glm::mat4 viewProjection = _camera.GetViewProjection();
+    _visibilityFuture = _jobs.Submit(vesta::core::JobPriority::Normal, [this, prepared, viewProjection]() {
+        VisibilityCullResult result;
+        result.scene = prepared;
+
+        if (prepared->surfaceBounds.empty()) {
+            result.visibleSurfaceIndices.resize(prepared->surfaces.size());
+            for (uint32_t surfaceIndex = 0; surfaceIndex < static_cast<uint32_t>(prepared->surfaces.size()); ++surfaceIndex) {
+                result.visibleSurfaceIndices[surfaceIndex] = surfaceIndex;
+            }
+            return result;
+        }
+
+        const std::array<glm::vec4, 6> frustumPlanes = ExtractFrustumPlanes(viewProjection);
+        if (_jobs.GetWorkerCount() <= 1 || prepared->surfaceBounds.size() < 64) {
+            for (uint32_t surfaceIndex = 0; surfaceIndex < static_cast<uint32_t>(prepared->surfaceBounds.size()); ++surfaceIndex) {
+                if (IsSurfaceVisible(prepared->surfaceBounds[surfaceIndex], frustumPlanes)) {
+                    result.visibleSurfaceIndices.push_back(surfaceIndex);
+                }
+            }
+            return result;
+        }
+
+        const size_t chunkSize = 64;
+        const size_t chunkCount = (prepared->surfaceBounds.size() + chunkSize - 1) / chunkSize;
+        std::vector<std::vector<uint32_t>> visibleChunks(chunkCount);
+        std::future<void> cullFuture = _jobs.ParallelFor(chunkCount, 1, vesta::core::JobPriority::High, [&](size_t begin, size_t end) {
+            for (size_t chunkIndex = begin; chunkIndex < end; ++chunkIndex) {
+                const size_t surfaceBegin = chunkIndex * chunkSize;
+                const size_t surfaceEnd = std::min(prepared->surfaceBounds.size(), surfaceBegin + chunkSize);
+                std::vector<uint32_t>& chunk = visibleChunks[chunkIndex];
+                chunk.reserve(surfaceEnd - surfaceBegin);
+                for (size_t surfaceIndex = surfaceBegin; surfaceIndex < surfaceEnd; ++surfaceIndex) {
+                    if (IsSurfaceVisible(prepared->surfaceBounds[surfaceIndex], frustumPlanes)) {
+                        chunk.push_back(static_cast<uint32_t>(surfaceIndex));
+                    }
+                }
+            }
+        });
+        cullFuture.get();
+
+        size_t totalVisible = 0;
+        for (const std::vector<uint32_t>& chunk : visibleChunks) {
+            totalVisible += chunk.size();
+        }
+        result.visibleSurfaceIndices.reserve(totalVisible);
+        for (std::vector<uint32_t>& chunk : visibleChunks) {
+            result.visibleSurfaceIndices.insert(result.visibleSurfaceIndices.end(), chunk.begin(), chunk.end());
+        }
+        return result;
+    });
+}
+
+bool Renderer::LoadSceneResolved(const std::filesystem::path& resolvedPath)
+{
+    _sceneLoadStatus = SceneLoadStatus{
+        .state = SceneLoadState::Parsing,
+        .path = resolvedPath,
+        .message = "Parsing " + resolvedPath.filename().string() + "...",
+    };
+
+    try {
+        const auto parseStart = std::chrono::steady_clock::now();
+        vesta::scene::Scene loadedScene;
+        if (!loadedScene.LoadFromFile(resolvedPath)) {
+            _sceneLoadStatus.state = SceneLoadState::Failed;
+            _sceneLoadStatus.parseMs =
+                std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - parseStart).count();
+            _sceneLoadStatus.message = "Failed to load " + resolvedPath.filename().string();
+            return false;
+        }
+
+        _sceneLoadStatus.state = SceneLoadState::Uploading;
+        _sceneLoadStatus.parseMs =
+            std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - parseStart).count();
+        _sceneLoadStatus.message = "Uploading " + resolvedPath.filename().string() + "...";
+        ApplyLoadedScene(std::move(loadedScene));
+        return true;
+    } catch (const std::exception& exception) {
+        _sceneLoadStatus.state = SceneLoadState::Failed;
+        _sceneLoadStatus.message = "Failed to load " + resolvedPath.filename().string() + ": " + exception.what();
+        return false;
+    } catch (...) {
+        _sceneLoadStatus.state = SceneLoadState::Failed;
+        _sceneLoadStatus.message = "Failed to load " + resolvedPath.filename().string();
+        return false;
+    }
+}
+
+void Renderer::ApplyLoadedScene(vesta::scene::Scene&& scene)
+{
+    vesta::scene::Scene previousScene = std::move(_scene);
+    _scene = std::move(scene);
+    const auto uploadStart = std::chrono::steady_clock::now();
+    _scene.UploadToGpu(_device, GetSceneUploadOptions());
+    _sceneLoadStatus.uploadMs =
+        std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - uploadStart).count();
+    _sceneLoadStatus.blasMs = _scene.GetBottomLevelBuildMs();
+    _sceneLoadStatus.tlasMs = _scene.GetTopLevelBuildMs();
+
+    if (_settings.autoFocusSceneOnLoad) {
+        _camera.Focus(_scene.GetBounds().center, _scene.GetBounds().radius);
+    }
+    ResetAccumulation();
+    _visibilityDirty = true;
+    _visibleSurfaceIndices.clear();
+    _visibleSceneToken.reset();
+
+    if (!previousScene.GetSourcePath().empty()) {
+        if (_settings.deferOldSceneDestruction) {
+            _retiredScenes.push_back(RetiredSceneEntry{
+                .scene = std::move(previousScene),
+                .safeFrameNumber = _frameNumber + kFrameOverlap,
+            });
+        } else {
+            _device.WaitIdle();
+            previousScene.DestroyGpu(_device);
+        }
+    }
+
+    _sceneLoadStatus.state = SceneLoadState::Ready;
+    _sceneLoadStatus.path = _scene.GetSourcePath();
+    _sceneLoadStatus.message = "Loaded " + _scene.GetSourcePath().filename().string();
+}
+
+void Renderer::ReleaseRetiredScenes()
+{
+    while (!_retiredScenes.empty() && _retiredScenes.front().safeFrameNumber <= _frameNumber) {
+        _retiredScenes.front().scene.DestroyGpu(_device);
+        _retiredScenes.pop_front();
+    }
+}
+
 RendererFrameContext& Renderer::GetCurrentFrame()
 {
     return _frames[_frameNumber % kFrameOverlap];
@@ -734,6 +1145,10 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
     RebuildPassExecutionPlan();
 
     RenderGraph graph;
+    const bool useGeometryPass = NeedsGeometryPass(_settings);
+    const bool useDeferredPass = NeedsDeferredPass(_settings);
+    const bool useGaussianPass = NeedsGaussianPass(_settings);
+    const bool usePathTracePass = NeedsPathTracePass(_settings);
 
     const VkExtent2D swapchainExtent = _device.GetSwapchainExtent();
     const VkExtent3D renderExtent{ swapchainExtent.width, swapchainExtent.height, 1 };
@@ -767,14 +1182,36 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
     ImageDesc pathTraceDesc = storageDesc;
     pathTraceDesc.extent = ScaleExtent(renderExtent, _settings.pathTraceResolutionScale);
 
-    resources.gbufferAlbedo = graph.CreateTexture("GBuffer.Albedo", gbufferDesc);
-    resources.gbufferNormal = graph.CreateTexture("GBuffer.NormalDepth", gbufferDesc);
-    resources.sceneDepth = graph.CreateTexture("SceneDepth", depthDesc);
-    resources.deferredLighting = graph.CreateTexture("DeferredLighting", storageDesc);
-    resources.pathTraceOutput = graph.CreateTexture("PathTraceOutput", pathTraceDesc);
-    resources.gaussianOutput = graph.CreateTexture("GaussianOutput", storageDesc);
+    if (useGeometryPass) {
+        resources.gbufferAlbedo = graph.CreateTexture("GBuffer.Albedo", gbufferDesc);
+        resources.gbufferNormal = graph.CreateTexture("GBuffer.NormalDepth", gbufferDesc);
+        resources.sceneDepth = graph.CreateTexture("SceneDepth", depthDesc);
+    }
+    if (useDeferredPass) {
+        resources.deferredLighting = graph.CreateTexture("DeferredLighting", storageDesc);
+    }
+    if (usePathTracePass) {
+        resources.pathTraceOutput = graph.CreateTexture("PathTraceOutput", pathTraceDesc);
+    }
+    if (useGaussianPass) {
+        resources.gaussianOutput = graph.CreateTexture("GaussianOutput", storageDesc);
+    }
 
     for (RegisteredPassEntry* entry : _passExecutionPlan) {
+        const std::string_view id = entry->id;
+        if (id == "geometry-raster" && !useGeometryPass) {
+            continue;
+        }
+        if (id == "deferred-lighting" && !useDeferredPass) {
+            continue;
+        }
+        if (id == "gaussian-splat" && !useGaussianPass) {
+            continue;
+        }
+        if (id == "path-tracer" && !usePathTracePass) {
+            continue;
+        }
+
         if (entry->configure) {
             entry->configure(*entry->pass, resources);
         }
@@ -811,9 +1248,7 @@ void Renderer::LoadDefaultScene()
 
         for (const std::filesystem::path& candidate : candidates) {
             const std::filesystem::path resolved = vkutil::resolve_runtime_path(candidate);
-            if (_scene.LoadFromFile(resolved)) {
-                _scene.UploadToGpu(_device);
-                _camera.Focus(_scene.GetBounds().center, _scene.GetBounds().radius);
+            if (LoadSceneResolved(resolved)) {
                 break;
             }
         }

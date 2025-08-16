@@ -16,6 +16,7 @@ public:
     void SetTargets(GraphTextureHandle albedo, GraphTextureHandle normal, GraphTextureHandle depth);
     void SetScene(const vesta::scene::Scene* scene);
     void SetCamera(const Camera* camera);
+    void SetVisibleSurfaceIndices(const std::vector<uint32_t>* visibleSurfaceIndices);
 
     [[nodiscard]] std::string_view Name() const override { return "GeometryRasterPass"; }
     void Initialize(RenderDevice& device) override;
@@ -29,6 +30,7 @@ private:
     GraphTextureHandle _depthTarget{};
     const vesta::scene::Scene* _scene{ nullptr };
     const Camera* _camera{ nullptr };
+    const std::vector<uint32_t>* _visibleSurfaceIndices{ nullptr };
     VkPipelineLayout _pipelineLayout{ VK_NULL_HANDLE };
     VkPipeline _pipeline{ VK_NULL_HANDLE };
     VkShaderModule _vertexShader{ VK_NULL_HANDLE };

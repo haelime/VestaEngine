@@ -4,6 +4,7 @@
 #include <cassert>
 
 #include <SDL.h>
+#include <SDL_syswm.h>
 
 #include <fmt/format.h>
 #include <imgui.h>
@@ -15,11 +16,21 @@
 #include <chrono>
 #include <thread>
 
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <commdlg.h>
+#include <windows.h>
+#pragma comment(lib, "Comdlg32.lib")
+#endif
+
 VestaEngine* loadedEngine = nullptr;
 
 VestaEngine& VestaEngine::Get() { return *loadedEngine; }
 
 namespace {
+constexpr size_t kMaxRecentScenePaths = 5;
+
 #if defined(NDEBUG)
 constexpr bool bUseValidationLayers = false;
 #else
@@ -48,6 +59,28 @@ const char* PresetLabel(vesta::render::RendererPreset preset)
     default:
         return "Recommended";
     }
+}
+
+const char* SceneLoadStateLabel(vesta::render::SceneLoadState state)
+{
+    switch (state) {
+    case vesta::render::SceneLoadState::Parsing:
+        return "Parsing";
+    case vesta::render::SceneLoadState::Uploading:
+        return "Uploading";
+    case vesta::render::SceneLoadState::Ready:
+        return "Ready";
+    case vesta::render::SceneLoadState::Failed:
+        return "Failed";
+    case vesta::render::SceneLoadState::Idle:
+    default:
+        return "Idle";
+    }
+}
+
+bool UseAsyncSceneLoading(const vesta::render::RendererSettings& settings)
+{
+    return settings.preferAsyncSceneLoading && settings.sceneUploadMode != vesta::render::SceneUploadMode::Synchronous;
 }
 }
 
@@ -84,6 +117,7 @@ void VestaEngine::init()
 void VestaEngine::init_renderer()
 {
     _renderer.Initialize(_window, _windowExtent, bUseValidationLayers);
+    remember_recent_scene(_renderer.GetScene().GetSourcePath());
 }
 
 void VestaEngine::cleanup()
@@ -300,8 +334,182 @@ void VestaEngine::begin_imgui_frame(float deltaSeconds)
     ImGui_ImplSDL2_NewFrame();
     ImGui_ImplVulkan_NewFrame();
     ImGui::NewFrame();
+    build_main_menu_bar();
     build_debug_ui();
     ImGui::Render();
+}
+
+void VestaEngine::build_main_menu_bar()
+{
+    if (!_imguiInitialized) {
+        return;
+    }
+
+    ImGui::SetCurrentContext(_imguiContext);
+
+    auto& settings = _renderer.GetSettings();
+    const bool sceneLoadInProgress = _renderer.IsSceneLoadInProgress();
+    settings.preferAsyncSceneLoading = UseAsyncSceneLoading(settings);
+
+    if (ImGui::BeginMainMenuBar()) {
+        if (ImGui::BeginMenu("File")) {
+            if (ImGui::MenuItem("Open Scene...", nullptr, false, !sceneLoadInProgress)) {
+                if (const std::optional<std::filesystem::path> path = open_scene_with_system_dialog()) {
+                    load_scene_path(*path);
+                }
+            }
+            if (ImGui::BeginMenu("Open Recent", !_recentScenePaths.empty())) {
+                for (const std::filesystem::path& recentPath : _recentScenePaths) {
+                    if (ImGui::MenuItem(recentPath.filename().string().c_str(), nullptr, false, !sceneLoadInProgress)) {
+                        load_scene_path(recentPath);
+                    }
+                }
+                ImGui::EndMenu();
+            }
+            if (ImGui::MenuItem("Load basicmesh.glb", nullptr, false, !sceneLoadInProgress)) {
+                load_scene_path("assets/basicmesh.glb");
+            }
+            if (ImGui::MenuItem("Load structure.glb", nullptr, false, !sceneLoadInProgress)) {
+                load_scene_path("assets/structure.glb");
+            }
+            if (ImGui::MenuItem(
+                    "Reload Current", nullptr, false, !sceneLoadInProgress && !_renderer.GetScene().GetSourcePath().empty())) {
+                if (UseAsyncSceneLoading(settings)) {
+                    _renderer.ReloadSceneAsync();
+                } else {
+                    _renderer.LoadScene(_renderer.GetScene().GetSourcePath());
+                }
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem("Exit")) {
+                SDL_Event quitEvent{};
+                quitEvent.type = SDL_QUIT;
+                SDL_PushEvent(&quitEvent);
+            }
+            ImGui::EndMenu();
+        }
+
+        if (ImGui::BeginMenu("View")) {
+            ImGui::MenuItem("Debug Overlay", nullptr, &_showDebugUi);
+            ImGui::Separator();
+
+            bool compositeSelected = settings.displayMode == vesta::render::RendererDisplayMode::Composite;
+            if (ImGui::MenuItem("Composite", nullptr, compositeSelected)) {
+                settings.displayMode = vesta::render::RendererDisplayMode::Composite;
+                _renderer.ResetAccumulation();
+            }
+
+            bool deferredSelected = settings.displayMode == vesta::render::RendererDisplayMode::DeferredLighting;
+            if (ImGui::MenuItem("Deferred", nullptr, deferredSelected)) {
+                settings.displayMode = vesta::render::RendererDisplayMode::DeferredLighting;
+                _renderer.ResetAccumulation();
+            }
+
+            bool gaussianSelected = settings.displayMode == vesta::render::RendererDisplayMode::Gaussian;
+            if (ImGui::MenuItem("Gaussian", nullptr, gaussianSelected)) {
+                settings.displayMode = vesta::render::RendererDisplayMode::Gaussian;
+                _renderer.ResetAccumulation();
+            }
+
+            bool pathTraceSelected = settings.displayMode == vesta::render::RendererDisplayMode::PathTrace;
+            if (ImGui::MenuItem("Path Trace", nullptr, pathTraceSelected)) {
+                settings.displayMode = vesta::render::RendererDisplayMode::PathTrace;
+                _renderer.ResetAccumulation();
+            }
+            ImGui::EndMenu();
+        }
+
+        if (ImGui::BeginMenu("Options")) {
+            if (ImGui::MenuItem("Optimize Inactive Passes", nullptr, settings.optimizeInactivePasses)) {
+                settings.optimizeInactivePasses = !settings.optimizeInactivePasses;
+                _renderer.ResetAccumulation();
+            }
+            if (ImGui::BeginMenu("Scene Upload Mode")) {
+                const bool syncSelected = settings.sceneUploadMode == vesta::render::SceneUploadMode::Synchronous;
+                if (ImGui::MenuItem("Synchronous", nullptr, syncSelected)) {
+                    settings.sceneUploadMode = vesta::render::SceneUploadMode::Synchronous;
+                    settings.preferAsyncSceneLoading = false;
+                }
+
+                const bool asyncSelected = settings.sceneUploadMode == vesta::render::SceneUploadMode::AsyncParseSyncUpload;
+                if (ImGui::MenuItem("Async Parse + Sync Upload", nullptr, asyncSelected)) {
+                    settings.sceneUploadMode = vesta::render::SceneUploadMode::AsyncParseSyncUpload;
+                    settings.preferAsyncSceneLoading = true;
+                }
+
+                ImGui::EndMenu();
+            }
+
+            if (ImGui::BeginMenu("Preset")) {
+                if (ImGui::MenuItem("Recommended")) {
+                    _renderer.ApplyPreset(vesta::render::RendererPreset::Recommended);
+                }
+                if (ImGui::MenuItem("Performance")) {
+                    _renderer.ApplyPreset(vesta::render::RendererPreset::Performance);
+                }
+                if (ImGui::MenuItem("Balanced")) {
+                    _renderer.ApplyPreset(vesta::render::RendererPreset::Balanced);
+                }
+                if (ImGui::MenuItem("Quality")) {
+                    _renderer.ApplyPreset(vesta::render::RendererPreset::Quality);
+                }
+                ImGui::EndMenu();
+            }
+
+            if (ImGui::BeginMenu("Engine Tuning")) {
+                ImGui::MenuItem("Use Device Local Scene Buffers", nullptr, &settings.useDeviceLocalSceneBuffers);
+                ImGui::MenuItem("Build RT Structures On Load", nullptr, &settings.buildRayTracingStructuresOnLoad);
+                ImGui::MenuItem("Defer Old Scene Destruction", nullptr, &settings.deferOldSceneDestruction);
+                ImGui::MenuItem("Auto Focus Scene On Load", nullptr, &settings.autoFocusSceneOnLoad);
+                ImGui::MenuItem("Frustum Culling", nullptr, &settings.enableFrustumCulling);
+                ImGui::MenuItem("Frame Timing Capture", nullptr, &settings.frameTimingCapture);
+                ImGui::MenuItem("Benchmark Overlay", nullptr, &settings.benchmarkOverlay);
+                ImGui::Separator();
+                ImGui::TextDisabled("Validation: %s", bUseValidationLayers ? "Debug default" : "Off");
+                ImGui::EndMenu();
+            }
+
+            if (ImGui::MenuItem("Enable Gaussian", nullptr, settings.enableGaussian)) {
+                settings.enableGaussian = !settings.enableGaussian;
+                _renderer.ResetAccumulation();
+            }
+            if (ImGui::MenuItem("Enable Path Tracing", nullptr, settings.enablePathTracing)) {
+                settings.enablePathTracing = !settings.enablePathTracing;
+                _renderer.ResetAccumulation();
+            }
+
+            if (ImGui::BeginMenu("PT Backend")) {
+                bool autoSelected = settings.pathTraceBackend == vesta::render::PathTraceBackend::Auto;
+                if (ImGui::MenuItem("Auto", nullptr, autoSelected)) {
+                    settings.pathTraceBackend = vesta::render::PathTraceBackend::Auto;
+                    _renderer.ResetAccumulation();
+                }
+
+                bool computeSelected = settings.pathTraceBackend == vesta::render::PathTraceBackend::Compute;
+                if (ImGui::MenuItem("Compute", nullptr, computeSelected)) {
+                    settings.pathTraceBackend = vesta::render::PathTraceBackend::Compute;
+                    _renderer.ResetAccumulation();
+                }
+
+                bool hardwareSelected = settings.pathTraceBackend == vesta::render::PathTraceBackend::HardwareRT;
+                if (ImGui::MenuItem(
+                        "Hardware RT", nullptr, hardwareSelected, _renderer.GetRenderDevice().IsRayTracingSupported())) {
+                    settings.pathTraceBackend = vesta::render::PathTraceBackend::HardwareRT;
+                    _renderer.ResetAccumulation();
+                }
+                ImGui::EndMenu();
+            }
+            ImGui::EndMenu();
+        }
+
+        const std::string& sceneStatus = _renderer.GetSceneLoadStatusMessage();
+        if (!sceneStatus.empty()) {
+            ImGui::Separator();
+            ImGui::TextDisabled("%s", sceneStatus.c_str());
+        }
+
+        ImGui::EndMainMenuBar();
+    }
 }
 
 void VestaEngine::build_debug_ui()
@@ -330,6 +538,13 @@ void VestaEngine::build_debug_ui()
     ImGui::Text("%s", device.GetGpuName().c_str());
     ImGui::Text("VRAM %u MiB", device.GetDedicatedVideoMemoryMiB());
     ImGui::Text("Recommended %s", PresetLabel(_renderer.GetRecommendedPreset()));
+    ImGui::Text("Scene Upload %s", UseAsyncSceneLoading(settings) ? "Async Parse + Sync Upload" : "Synchronous");
+    ImGui::Text("Skip Hidden Passes %s", settings.optimizeInactivePasses ? "On" : "Off");
+    ImGui::Text("Device Local Buffers %s", settings.useDeviceLocalSceneBuffers ? "On" : "Off");
+    ImGui::Text("Deferred Scene Free %s", settings.deferOldSceneDestruction ? "On" : "Off");
+    ImGui::Text("Frustum Culling %s", settings.enableFrustumCulling ? "On" : "Off");
+    ImGui::Text("Workers %u", _renderer.GetWorkerThreadCount());
+    ImGui::Text("Queued Jobs %zu", _renderer.GetPendingJobCount());
     ImGui::Separator();
 
     if (ImGui::Button("Apply Recommended")) {
@@ -386,6 +601,18 @@ void VestaEngine::build_debug_ui()
     ImGui::Text("Vertices %zu", scene.GetVertices().size());
     ImGui::Text("Triangles %zu", scene.GetTriangles().size());
     ImGui::Text("Surfaces %zu", scene.GetSurfaces().size());
+    ImGui::Text("Visible Surfaces %u", _renderer.GetVisibleSurfaceCount());
+    const auto& sceneLoadStatus = _renderer.GetSceneLoadStatus();
+    ImGui::Text("Load State %s", SceneLoadStateLabel(sceneLoadStatus.state));
+    if (!sceneLoadStatus.message.empty()) {
+        ImGui::TextWrapped("%s", sceneLoadStatus.message.c_str());
+    }
+    if (sceneLoadStatus.parseMs > 0.0f) {
+        ImGui::Text("Parse %.2f ms", sceneLoadStatus.parseMs);
+    }
+    if (sceneLoadStatus.uploadMs > 0.0f) {
+        ImGui::Text("Upload %.2f ms", sceneLoadStatus.uploadMs);
+    }
     ImGui::Text("PT Frame %u", _renderer.GetPathTraceFrameIndex());
     ImGui::Text("RT Support %s", _renderer.GetRenderDevice().IsRayTracingSupported() ? "Yes" : "No");
     const char* activeBackend = "Compute";
@@ -405,6 +632,22 @@ void VestaEngine::build_debug_ui()
     if (scene.HasRayTracingScene()) {
         ImGui::Text("BLAS %.2f ms", scene.GetBottomLevelBuildMs());
         ImGui::Text("TLAS %.2f ms", scene.GetTopLevelBuildMs());
+    }
+
+    if (settings.benchmarkOverlay && _renderer.GetFrameTimeHistoryCount() > 0) {
+        ImGui::SeparatorText("Benchmark");
+        const auto& history = _renderer.GetFrameTimeHistoryMs();
+        const int sampleCount = static_cast<int>(_renderer.GetFrameTimeHistoryCount());
+        float averageMs = 0.0f;
+        float peakMs = 0.0f;
+        for (int i = 0; i < sampleCount; ++i) {
+            averageMs += history[static_cast<size_t>(i)];
+            peakMs = std::max(peakMs, history[static_cast<size_t>(i)]);
+        }
+        averageMs /= static_cast<float>(sampleCount);
+        ImGui::Text("Avg %.2f ms", averageMs);
+        ImGui::Text("Peak %.2f ms", peakMs);
+        ImGui::PlotLines("Frame Times", history.data(), sampleCount, 0, nullptr, 0.0f, std::max(33.0f, peakMs * 1.1f), ImVec2(0.0f, 72.0f));
     }
 
     ImGui::SeparatorText("Controls");
@@ -435,5 +678,70 @@ bool VestaEngine::should_forward_event_to_renderer(const SDL_Event& event) const
         return !io.WantCaptureKeyboard;
     default:
         return true;
+    }
+}
+
+std::optional<std::filesystem::path> VestaEngine::open_scene_with_system_dialog() const
+{
+#if defined(_WIN32)
+    SDL_SysWMinfo windowInfo{};
+    SDL_VERSION(&windowInfo.version);
+    if (!SDL_GetWindowWMInfo(_window, &windowInfo)) {
+        return std::nullopt;
+    }
+
+    std::array<wchar_t, 4096> filePath{};
+    std::wstring initialDirectory;
+    const std::filesystem::path currentPath = _renderer.GetScene().GetSourcePath();
+    if (!currentPath.empty()) {
+        initialDirectory = currentPath.parent_path().wstring();
+    }
+
+    OPENFILENAMEW dialogInfo{};
+    dialogInfo.lStructSize = sizeof(dialogInfo);
+    dialogInfo.hwndOwner = windowInfo.info.win.window;
+    dialogInfo.lpstrFile = filePath.data();
+    dialogInfo.nMaxFile = static_cast<DWORD>(filePath.size());
+    dialogInfo.lpstrFilter = L"glTF Scenes (*.glb;*.gltf)\0*.glb;*.gltf\0All Files (*.*)\0*.*\0";
+    dialogInfo.lpstrInitialDir = initialDirectory.empty() ? nullptr : initialDirectory.c_str();
+    dialogInfo.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY;
+    dialogInfo.lpstrDefExt = L"glb";
+
+    if (!GetOpenFileNameW(&dialogInfo)) {
+        return std::nullopt;
+    }
+
+    return std::filesystem::path(filePath.data());
+#else
+    return std::nullopt;
+#endif
+}
+
+void VestaEngine::load_scene_path(const std::filesystem::path& path)
+{
+    if (path.empty()) {
+        return;
+    }
+
+    const bool started = UseAsyncSceneLoading(_renderer.GetSettings()) ? _renderer.LoadSceneAsync(path) : _renderer.LoadScene(path);
+    if (started) {
+        remember_recent_scene(path);
+    }
+}
+
+void VestaEngine::remember_recent_scene(const std::filesystem::path& path)
+{
+    if (path.empty()) {
+        return;
+    }
+
+    const auto existing = std::find(_recentScenePaths.begin(), _recentScenePaths.end(), path);
+    if (existing != _recentScenePaths.end()) {
+        _recentScenePaths.erase(existing);
+    }
+
+    _recentScenePaths.insert(_recentScenePaths.begin(), path);
+    if (_recentScenePaths.size() > kMaxRecentScenePaths) {
+        _recentScenePaths.resize(kMaxRecentScenePaths);
     }
 }

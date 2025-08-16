@@ -2,12 +2,17 @@
 
 #include <array>
 #include <cstdint>
+#include <deque>
+#include <filesystem>
 #include <functional>
+#include <future>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include <vesta/core/job_system.h>
 #include <vesta/render/path_trace_backend.h>
 #include <vesta/render/graph/render_graph.h>
 #include <vesta/render/rhi/render_device.h>
@@ -33,12 +38,50 @@ enum class RendererPreset : uint32_t {
     Quality = 3,
 };
 
+enum class SceneLoadState : uint32_t {
+    Idle = 0,
+    Parsing = 1,
+    Uploading = 2,
+    Ready = 3,
+    Failed = 4,
+};
+
+enum class SceneUploadMode : uint32_t {
+    Synchronous = 0,
+    AsyncParseSyncUpload = 1,
+};
+
+struct SceneLoadStatus {
+    SceneLoadState state{ SceneLoadState::Idle };
+    std::filesystem::path path;
+    std::string message;
+    float parseMs{ 0.0f };
+    float uploadMs{ 0.0f };
+    float blasMs{ 0.0f };
+    float tlasMs{ 0.0f };
+};
+
+struct SceneUploadOptions {
+    bool useDeviceLocalSceneBuffers{ true };
+    bool buildRayTracingStructuresOnLoad{ true };
+};
+
 // RendererSettings collects the knobs that can safely change at runtime.
 // When one of these changes in a way that affects history, accumulation resets.
 struct RendererSettings {
     RendererDisplayMode displayMode{ RendererDisplayMode::Composite };
     bool enableGaussian{ true };
     bool enablePathTracing{ true };
+    bool optimizeInactivePasses{ true };
+    bool preferAsyncSceneLoading{ true };
+    bool useDeviceLocalSceneBuffers{ true };
+    bool buildRayTracingStructuresOnLoad{ true };
+    bool deferOldSceneDestruction{ true };
+    bool autoFocusSceneOnLoad{ true };
+    bool frameTimingCapture{ false };
+    bool benchmarkOverlay{ false };
+    bool enableFrustumCulling{ true };
+    SceneUploadMode sceneUploadMode{ SceneUploadMode::AsyncParseSyncUpload };
     float gaussianPointSize{ 8.0f };
     float gaussianOpacity{ 0.35f };
     float gaussianMix{ 0.28f };
@@ -136,17 +179,31 @@ public:
     [[nodiscard]] Camera& GetCamera() { return _camera; }
     [[nodiscard]] const RendererSettings& GetSettings() const { return _settings; }
     [[nodiscard]] RendererSettings& GetSettings() { return _settings; }
+    [[nodiscard]] const SceneLoadStatus& GetSceneLoadStatus() const { return _sceneLoadStatus; }
     [[nodiscard]] uint32_t GetPathTraceFrameIndex() const { return _pathTraceFrameIndex; }
     [[nodiscard]] uint32_t GetFrameSlot() const { return static_cast<uint32_t>(_frameNumber % kFrameOverlap); }
     [[nodiscard]] float GetFrameTimeMs() const { return _frameTimeMs; }
     [[nodiscard]] float GetSmoothedFrameTimeMs() const { return _smoothedFrameTimeMs; }
+    [[nodiscard]] const std::array<float, 240>& GetFrameTimeHistoryMs() const { return _frameTimeHistoryMs; }
+    [[nodiscard]] size_t GetFrameTimeHistoryCount() const { return _frameTimeHistoryCount; }
+    [[nodiscard]] uint32_t GetVisibleSurfaceCount() const { return static_cast<uint32_t>(_visibleSurfaceIndices.size()); }
+    [[nodiscard]] const std::vector<uint32_t>& GetVisibleSurfaceIndices() const { return _visibleSurfaceIndices; }
+    [[nodiscard]] bool HasValidVisibilitySet() const { return _visibleSceneToken != nullptr && _visibleSceneToken == _scene.GetPreparedScene(); }
+    [[nodiscard]] uint32_t GetWorkerThreadCount() const { return _jobs.GetWorkerCount(); }
+    [[nodiscard]] size_t GetPendingJobCount() const { return _jobs.GetPendingJobCount(); }
     [[nodiscard]] RenderDevice& GetRenderDevice() { return _device; }
     [[nodiscard]] const RenderDevice& GetRenderDevice() const { return _device; }
     [[nodiscard]] PathTraceBackend GetActivePathTraceBackend() const;
     [[nodiscard]] RendererPreset GetRecommendedPreset() const;
+    [[nodiscard]] bool IsSceneLoadInProgress() const { return _sceneLoadInProgress; }
+    [[nodiscard]] const std::filesystem::path& GetPendingScenePath() const { return _sceneLoadStatus.path; }
+    [[nodiscard]] const std::string& GetSceneLoadStatusMessage() const { return _sceneLoadStatus.message; }
 
     void ResetAccumulation() { _pathTraceFrameIndex = 0; }
     void ApplyPreset(RendererPreset preset);
+    bool LoadScene(const std::filesystem::path& path);
+    bool LoadSceneAsync(const std::filesystem::path& path);
+    bool ReloadSceneAsync();
     void SetOverlayCallbacks(OverlayDrawFn drawFn, OverlaySwapchainCallback swapchainCallback = {});
     void ClearOverlayCallbacks();
 
@@ -178,6 +235,24 @@ private:
         bool enabled{ true };
     };
 
+    struct AsyncSceneLoadResult {
+        std::filesystem::path path;
+        vesta::scene::Scene scene;
+        std::string errorMessage;
+        float parseMs{ 0.0f };
+        bool success{ false };
+    };
+
+    struct RetiredSceneEntry {
+        vesta::scene::Scene scene;
+        uint64_t safeFrameNumber{ 0 };
+    };
+
+    struct VisibilityCullResult {
+        std::shared_ptr<const vesta::scene::PreparedScene> scene;
+        std::vector<uint32_t> visibleSurfaceIndices;
+    };
+
     void InitializeCommands();
     void InitializeSyncStructures();
     void InitializeDefaultPasses();
@@ -187,12 +262,20 @@ private:
     void RecreateSwapchain();
     void ClearPassRegistry();
     void RebuildPassExecutionPlan();
+    void PumpSceneLoadRequests();
+    void PumpVisibilityResults();
+    void DispatchVisibilityCullIfNeeded();
+    void ReleaseRetiredScenes();
+    [[nodiscard]] SceneUploadOptions GetSceneUploadOptions() const;
+    bool LoadSceneResolved(const std::filesystem::path& resolvedPath);
+    void ApplyLoadedScene(vesta::scene::Scene&& scene);
     [[nodiscard]] RendererFrameContext& GetCurrentFrame();
     [[nodiscard]] RenderGraph BuildFrameGraph(uint32_t swapchainImageIndex);
     [[nodiscard]] RegisteredPassEntry* FindPassEntry(std::string_view id);
     [[nodiscard]] const RegisteredPassEntry* FindPassEntry(std::string_view id) const;
 
     RenderDevice _device;
+    vesta::core::JobSystem _jobs;
     std::array<RendererFrameContext, kFrameOverlap> _frames{};
     std::vector<VkSemaphore> _swapchainImageRenderSemaphores;
     uint64_t _frameNumber{ 0 };
@@ -207,6 +290,18 @@ private:
     uint32_t _pathTraceFrameIndex{ 0 };
     float _frameTimeMs{ 0.0f };
     float _smoothedFrameTimeMs{ 0.0f };
+    std::array<float, 240> _frameTimeHistoryMs{};
+    size_t _frameTimeHistoryHead{ 0 };
+    size_t _frameTimeHistoryCount{ 0 };
+    std::future<AsyncSceneLoadResult> _sceneLoadFuture;
+    std::future<VisibilityCullResult> _visibilityFuture;
+    SceneLoadStatus _sceneLoadStatus;
+    std::deque<RetiredSceneEntry> _retiredScenes;
+    std::vector<uint32_t> _visibleSurfaceIndices;
+    std::shared_ptr<const vesta::scene::PreparedScene> _visibleSceneToken;
+    bool _sceneLoadInProgress{ false };
+    bool _visibilityCullInProgress{ false };
+    bool _visibilityDirty{ true };
     OverlayDrawFn _overlayDrawFn;
     OverlaySwapchainCallback _overlaySwapchainCallback;
 

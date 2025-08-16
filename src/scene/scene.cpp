@@ -19,12 +19,15 @@
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+#include <vesta/render/renderer.h>
 #include <vesta/render/rhi/render_device.h>
 
 namespace vesta::scene {
 namespace {
 constexpr auto kLoadOptions = fastgltf::Options::DontRequireValidAssetMember | fastgltf::Options::LoadGLBBuffers
     | fastgltf::Options::LoadExternalBuffers | fastgltf::Options::GenerateMeshIndices;
+constexpr VmaAllocationCreateFlags kMappedHostFlags =
+    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
 bool ShouldAutoLayoutDemoScene(const std::filesystem::path& path, const fastgltf::Scene& scene)
 {
@@ -40,8 +43,6 @@ glm::mat4 MakeDemoRootLayoutTransform(size_t rootIndex, size_t rootCount)
 
 glm::mat4 NodeToMatrix(const fastgltf::Node& node)
 {
-    // glTF nodes can be stored either as a baked matrix or as TRS components.
-    // Converting both to one glm::mat4 keeps the traversal path simple.
     if (const auto* matrix = std::get_if<fastgltf::Node::TransformMatrix>(&node.transform)) {
         glm::mat4 result(1.0f);
         std::memcpy(&result[0][0], matrix->data(), sizeof(float) * 16);
@@ -57,8 +58,7 @@ glm::mat4 NodeToMatrix(const fastgltf::Node& node)
     const glm::quat rotation(trs->rotation[3], trs->rotation[0], trs->rotation[1], trs->rotation[2]);
     const glm::vec3 scale(trs->scale[0], trs->scale[1], trs->scale[2]);
 
-    return glm::translate(glm::mat4(1.0f), translation) * glm::mat4_cast(rotation)
-        * glm::scale(glm::mat4(1.0f), scale);
+    return glm::translate(glm::mat4(1.0f), translation) * glm::mat4_cast(rotation) * glm::scale(glm::mat4(1.0f), scale);
 }
 
 std::vector<glm::vec3> ReadVec3Accessor(const fastgltf::Asset& asset, const fastgltf::Accessor& accessor)
@@ -110,6 +110,28 @@ void FinalizeBounds(SceneBounds& bounds, const std::vector<SceneVertex>& vertice
     bounds.radius = std::max(bounds.radius, 1.0f);
 }
 
+SceneSurfaceBounds ComputeSurfaceBounds(const std::vector<SceneVertex>& vertices, uint32_t baseVertex, std::span<const uint32_t> primitiveIndices)
+{
+    if (primitiveIndices.empty()) {
+        return {};
+    }
+
+    glm::vec3 minimum = vertices[baseVertex + primitiveIndices.front()].position;
+    glm::vec3 maximum = minimum;
+    for (uint32_t index : primitiveIndices) {
+        const glm::vec3 position = vertices[baseVertex + index].position;
+        minimum = glm::min(minimum, position);
+        maximum = glm::max(maximum, position);
+    }
+
+    SceneSurfaceBounds bounds{};
+    bounds.center = (minimum + maximum) * 0.5f;
+    for (uint32_t index : primitiveIndices) {
+        bounds.radius = std::max(bounds.radius, glm::distance(bounds.center, vertices[baseVertex + index].position));
+    }
+    return bounds;
+}
+
 template <typename T>
 void CopyToMappedBuffer(vesta::render::RenderDevice& device, vesta::render::BufferHandle handle, std::span<const T> data)
 {
@@ -129,18 +151,52 @@ VkTransformMatrixKHR MakeIdentityTransformMatrix()
     matrix.matrix[2][2] = 1.0f;
     return matrix;
 }
+
+template <typename T>
+vesta::render::BufferHandle CreateHostBufferAndCopy(vesta::render::RenderDevice& device,
+    std::span<const T> data,
+    VkBufferUsageFlags usage,
+    std::string debugName,
+    bool registerBindlessStorage)
+{
+    vesta::render::BufferHandle buffer = device.CreateBuffer(vesta::render::BufferDesc{
+        .size = sizeof(T) * data.size(),
+        .usage = usage,
+        .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+        .allocationFlags = kMappedHostFlags,
+        .registerBindlessStorage = registerBindlessStorage,
+        .debugName = std::move(debugName),
+    });
+    CopyToMappedBuffer(device, buffer, data);
+    return buffer;
+}
 } // namespace
+
+const PreparedScene& Scene::EmptyPreparedScene()
+{
+    static const PreparedScene emptyScene;
+    return emptyScene;
+}
+
+const GpuScene& Scene::EmptyGpuScene()
+{
+    static const GpuScene emptyScene;
+    return emptyScene;
+}
+
+const PreparedScene& Scene::GetPreparedOrEmpty() const
+{
+    return _prepared != nullptr ? *_prepared : EmptyPreparedScene();
+}
+
+const GpuScene& Scene::GetGpuOrEmpty() const
+{
+    return _gpu != nullptr ? *_gpu : EmptyGpuScene();
+}
 
 bool Scene::LoadFromFile(const std::filesystem::path& path)
 {
-    // Rebuild CPU-side scene data from scratch on every load so a failed load
-    // cannot leave mixed data from an older scene behind.
-    _sourcePath.clear();
-    _vertices.clear();
-    _indices.clear();
-    _triangles.clear();
-    _surfaces.clear();
-    _bounds = {};
+    _prepared.reset();
 
     if (!std::filesystem::exists(path)) {
         return false;
@@ -171,11 +227,12 @@ bool Scene::LoadFromFile(const std::filesystem::path& path)
         return false;
     }
 
+    auto prepared = std::make_shared<PreparedScene>();
+    PreparedScene& sceneData = *prepared;
+
     const size_t sceneIndex = gltf.defaultScene.value_or(0);
     const fastgltf::Scene& rootScene = gltf.scenes.at(sceneIndex);
 
-    // The internal scene format is deliberately simple: flatten glTF nodes into
-    // one world-space vertex/index list so raster and PT paths share geometry.
     std::function<void(size_t, const glm::mat4&)> appendNode = [&](size_t nodeIndex, const glm::mat4& parentMatrix) {
         const fastgltf::Node& node = gltf.nodes.at(nodeIndex);
         const glm::mat4 worldMatrix = parentMatrix * NodeToMatrix(node);
@@ -204,25 +261,24 @@ bool Scene::LoadFromFile(const std::filesystem::path& path)
                     primitiveIndices = ReadIndexAccessor(gltf, gltf.accessors.at(primitive.indicesAccessor.value()));
                 } else {
                     primitiveIndices.resize(positions.size());
-                    for (uint32_t i = 0; i < static_cast<uint32_t>(primitiveIndices.size()); ++i) {
-                        primitiveIndices[i] = i;
+                    for (uint32_t index = 0; index < static_cast<uint32_t>(primitiveIndices.size()); ++index) {
+                        primitiveIndices[index] = index;
                     }
                 }
 
                 const glm::vec4 albedo = ReadBaseColor(gltf, primitive);
-                const uint32_t baseVertex = static_cast<uint32_t>(_vertices.size());
-                _vertices.reserve(_vertices.size() + positions.size());
+                const uint32_t baseVertex = static_cast<uint32_t>(sceneData.vertices.size());
+                sceneData.vertices.reserve(sceneData.vertices.size() + positions.size());
 
-                for (size_t i = 0; i < positions.size(); ++i) {
-                    const glm::vec3 worldPosition = glm::vec3(worldMatrix * glm::vec4(positions[i], 1.0f));
-                    glm::vec3 worldNormal = glm::normalize(normalMatrix * normals[i]);
-                    const bool normalFinite = std::isfinite(worldNormal.x) && std::isfinite(worldNormal.y)
-                        && std::isfinite(worldNormal.z);
+                for (size_t vertexIndex = 0; vertexIndex < positions.size(); ++vertexIndex) {
+                    const glm::vec3 worldPosition = glm::vec3(worldMatrix * glm::vec4(positions[vertexIndex], 1.0f));
+                    glm::vec3 worldNormal = glm::normalize(normalMatrix * normals[vertexIndex]);
+                    const bool normalFinite = std::isfinite(worldNormal.x) && std::isfinite(worldNormal.y) && std::isfinite(worldNormal.z);
                     if (!normalFinite || glm::length(worldNormal) < 0.001f) {
                         worldNormal = glm::vec3(0.0f, 1.0f, 0.0f);
                     }
 
-                    _vertices.push_back(SceneVertex{
+                    sceneData.vertices.push_back(SceneVertex{
                         .position = worldPosition,
                         .normal = worldNormal,
                         .color = albedo,
@@ -230,35 +286,36 @@ bool Scene::LoadFromFile(const std::filesystem::path& path)
                 }
 
                 if (!hasNormals) {
-                    // If the asset has no normals, generate flat face normals so
-                    // both raster shading and path tracing still have something usable.
                     for (size_t triangle = 0; triangle + 2 < primitiveIndices.size(); triangle += 3) {
                         const uint32_t i0 = baseVertex + primitiveIndices[triangle + 0];
                         const uint32_t i1 = baseVertex + primitiveIndices[triangle + 1];
                         const uint32_t i2 = baseVertex + primitiveIndices[triangle + 2];
                         const glm::vec3 faceNormal = glm::normalize(
-                            glm::cross(_vertices[i1].position - _vertices[i0].position, _vertices[i2].position - _vertices[i0].position));
-                        _vertices[i0].normal = faceNormal;
-                        _vertices[i1].normal = faceNormal;
-                        _vertices[i2].normal = faceNormal;
+                            glm::cross(sceneData.vertices[i1].position - sceneData.vertices[i0].position,
+                                sceneData.vertices[i2].position - sceneData.vertices[i0].position));
+                        sceneData.vertices[i0].normal = faceNormal;
+                        sceneData.vertices[i1].normal = faceNormal;
+                        sceneData.vertices[i2].normal = faceNormal;
                     }
                 }
 
-                const uint32_t firstIndex = static_cast<uint32_t>(_indices.size());
-                _indices.reserve(_indices.size() + primitiveIndices.size());
+                const uint32_t firstIndex = static_cast<uint32_t>(sceneData.indices.size());
+                sceneData.indices.reserve(sceneData.indices.size() + primitiveIndices.size());
                 for (uint32_t index : primitiveIndices) {
-                    _indices.push_back(baseVertex + index);
+                    sceneData.indices.push_back(baseVertex + index);
                 }
-                _surfaces.push_back(SceneSurface{
+
+                sceneData.surfaces.push_back(SceneSurface{
                     .firstIndex = firstIndex,
                     .indexCount = static_cast<uint32_t>(primitiveIndices.size()),
                 });
+                sceneData.surfaceBounds.push_back(ComputeSurfaceBounds(sceneData.vertices, baseVertex, primitiveIndices));
 
                 for (size_t triangle = 0; triangle + 2 < primitiveIndices.size(); triangle += 3) {
-                    const SceneVertex& v0 = _vertices[baseVertex + primitiveIndices[triangle + 0]];
-                    const SceneVertex& v1 = _vertices[baseVertex + primitiveIndices[triangle + 1]];
-                    const SceneVertex& v2 = _vertices[baseVertex + primitiveIndices[triangle + 2]];
-                    _triangles.push_back(SceneTriangle{
+                    const SceneVertex& v0 = sceneData.vertices[baseVertex + primitiveIndices[triangle + 0]];
+                    const SceneVertex& v1 = sceneData.vertices[baseVertex + primitiveIndices[triangle + 1]];
+                    const SceneVertex& v2 = sceneData.vertices[baseVertex + primitiveIndices[triangle + 2]];
+                    sceneData.triangles.push_back(SceneTriangle{
                         .p0 = glm::vec4(v0.position, 1.0f),
                         .p1 = glm::vec4(v1.position, 1.0f),
                         .p2 = glm::vec4(v2.position, 1.0f),
@@ -283,78 +340,107 @@ bool Scene::LoadFromFile(const std::filesystem::path& path)
         appendNode(rootScene.nodeIndices[rootIndex], rootTransform);
     }
 
-    FinalizeBounds(_bounds, _vertices);
-    _sourcePath = path;
+    FinalizeBounds(sceneData.bounds, sceneData.vertices);
+    sceneData.sourcePath = path;
+    _prepared = std::move(prepared);
     return IsLoaded();
 }
 
-void Scene::UploadToGpu(vesta::render::RenderDevice& device)
+void Scene::UploadToGpu(vesta::render::RenderDevice& device, const vesta::render::SceneUploadOptions& options)
 {
     DestroyGpu(device);
-    if (!IsLoaded()) {
+    const PreparedScene& prepared = GetPreparedOrEmpty();
+    if (!prepared.IsLoaded()) {
         return;
     }
 
-    // The sample keeps geometry in host-visible buffers for simplicity. A more
-    // optimized renderer would stage into device-local memory.
-    constexpr VmaAllocationCreateFlags kMappedHostFlags =
-        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+    _gpu = std::make_unique<GpuScene>();
+    GpuScene& gpu = *_gpu;
 
-    _vertexBuffer = device.CreateBuffer(vesta::render::BufferDesc{
-        .size = sizeof(SceneVertex) * _vertices.size(),
-        .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
-            | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
-            | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-        .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
-        .allocationFlags = kMappedHostFlags,
-        .registerBindlessStorage = false,
-        .debugName = "SceneVertices",
-    });
+    const VkBufferUsageFlags vertexUsage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
+        | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
+    const VkBufferUsageFlags indexUsage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
+        | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
+    const VkBufferUsageFlags triangleUsage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 
-    _indexBuffer = device.CreateBuffer(vesta::render::BufferDesc{
-        .size = sizeof(uint32_t) * _indices.size(),
-        .usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
-            | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
-            | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-        .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
-        .allocationFlags = kMappedHostFlags,
-        .registerBindlessStorage = false,
-        .debugName = "SceneIndices",
-    });
+    if (options.useDeviceLocalSceneBuffers) {
+        const auto vertexData = std::span<const SceneVertex>(prepared.vertices);
+        const auto indexData = std::span<const uint32_t>(prepared.indices);
+        const auto triangleData = std::span<const SceneTriangle>(prepared.triangles);
 
-    _triangleBuffer = device.CreateBuffer(vesta::render::BufferDesc{
-        .size = sizeof(SceneTriangle) * _triangles.size(),
-        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-        .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
-        .allocationFlags = kMappedHostFlags,
-        .registerBindlessStorage = true,
-        .debugName = "SceneTriangles",
-    });
+        const vesta::render::BufferHandle vertexStaging =
+            CreateHostBufferAndCopy(device, vertexData, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, "SceneVerticesStaging", false);
+        const vesta::render::BufferHandle indexStaging =
+            CreateHostBufferAndCopy(device, indexData, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, "SceneIndicesStaging", false);
+        const vesta::render::BufferHandle triangleStaging =
+            CreateHostBufferAndCopy(device, triangleData, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, "SceneTrianglesStaging", false);
 
-    CopyToMappedBuffer(device, _vertexBuffer, std::span<const SceneVertex>(_vertices));
-    CopyToMappedBuffer(device, _indexBuffer, std::span<const uint32_t>(_indices));
-    CopyToMappedBuffer(device, _triangleBuffer, std::span<const SceneTriangle>(_triangles));
+        gpu.vertexBuffer = device.CreateBuffer(vesta::render::BufferDesc{
+            .size = sizeof(SceneVertex) * prepared.vertices.size(),
+            .usage = vertexUsage | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+            .registerBindlessStorage = false,
+            .debugName = "SceneVertices",
+        });
+        gpu.indexBuffer = device.CreateBuffer(vesta::render::BufferDesc{
+            .size = sizeof(uint32_t) * prepared.indices.size(),
+            .usage = indexUsage | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+            .registerBindlessStorage = false,
+            .debugName = "SceneIndices",
+        });
+        gpu.triangleBuffer = device.CreateBuffer(vesta::render::BufferDesc{
+            .size = sizeof(SceneTriangle) * prepared.triangles.size(),
+            .usage = triangleUsage,
+            .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+            .registerBindlessStorage = true,
+            .debugName = "SceneTriangles",
+        });
 
-    _bottomLevelBuildMs = 0.0f;
-    _topLevelBuildMs = 0.0f;
+        device.ImmediateSubmit([&](VkCommandBuffer commandBuffer) {
+            const std::array<VkBufferCopy, 1> vertexCopy{
+                VkBufferCopy{ .srcOffset = 0, .dstOffset = 0, .size = sizeof(SceneVertex) * prepared.vertices.size() }
+            };
+            vkCmdCopyBuffer(commandBuffer, device.GetBuffer(vertexStaging), device.GetBuffer(gpu.vertexBuffer), 1, vertexCopy.data());
 
-    if (!device.IsRayTracingSupported() || _indices.empty()) {
+            const std::array<VkBufferCopy, 1> indexCopy{
+                VkBufferCopy{ .srcOffset = 0, .dstOffset = 0, .size = sizeof(uint32_t) * prepared.indices.size() }
+            };
+            vkCmdCopyBuffer(commandBuffer, device.GetBuffer(indexStaging), device.GetBuffer(gpu.indexBuffer), 1, indexCopy.data());
+
+            const std::array<VkBufferCopy, 1> triangleCopy{
+                VkBufferCopy{ .srcOffset = 0, .dstOffset = 0, .size = sizeof(SceneTriangle) * prepared.triangles.size() }
+            };
+            vkCmdCopyBuffer(commandBuffer, device.GetBuffer(triangleStaging), device.GetBuffer(gpu.triangleBuffer), 1, triangleCopy.data());
+        });
+
+        device.DestroyBuffer(vertexStaging);
+        device.DestroyBuffer(indexStaging);
+        device.DestroyBuffer(triangleStaging);
+    } else {
+        gpu.vertexBuffer =
+            CreateHostBufferAndCopy(device, std::span<const SceneVertex>(prepared.vertices), vertexUsage, "SceneVertices", false);
+        gpu.indexBuffer =
+            CreateHostBufferAndCopy(device, std::span<const uint32_t>(prepared.indices), indexUsage, "SceneIndices", false);
+        gpu.triangleBuffer = CreateHostBufferAndCopy(
+            device, std::span<const SceneTriangle>(prepared.triangles), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "SceneTriangles", true);
+    }
+
+    if (!options.buildRayTracingStructuresOnLoad || !device.IsRayTracingSupported() || prepared.indices.empty()) {
         return;
     }
 
     const auto& rt = device.GetRayTracingFunctions();
 
     auto buildBottomLevel = [&]() {
-        // BLAS describes the raw triangle geometry.
         VkAccelerationStructureGeometryTrianglesDataKHR triangles{};
         triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
         triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
-        triangles.vertexData.deviceAddress =
-            device.GetBufferDeviceAddress(_vertexBuffer) + offsetof(SceneVertex, position);
+        triangles.vertexData.deviceAddress = device.GetBufferDeviceAddress(gpu.vertexBuffer) + offsetof(SceneVertex, position);
         triangles.vertexStride = sizeof(SceneVertex);
-        triangles.maxVertex = static_cast<uint32_t>(_vertices.size());
+        triangles.maxVertex = static_cast<uint32_t>(prepared.vertices.size());
         triangles.indexType = VK_INDEX_TYPE_UINT32;
-        triangles.indexData.deviceAddress = device.GetBufferDeviceAddress(_indexBuffer);
+        triangles.indexData.deviceAddress = device.GetBufferDeviceAddress(gpu.indexBuffer);
 
         VkAccelerationStructureGeometryKHR geometry{};
         geometry.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
@@ -362,7 +448,7 @@ void Scene::UploadToGpu(vesta::render::RenderDevice& device)
         geometry.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
         geometry.geometry.triangles = triangles;
 
-        const uint32_t primitiveCount = static_cast<uint32_t>(_indices.size() / 3);
+        const uint32_t primitiveCount = static_cast<uint32_t>(prepared.indices.size() / 3);
 
         VkAccelerationStructureBuildGeometryInfoKHR buildInfo{};
         buildInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
@@ -378,7 +464,7 @@ void Scene::UploadToGpu(vesta::render::RenderDevice& device)
             &primitiveCount,
             &buildSizes);
 
-        _bottomLevelBuffer = device.CreateBuffer(vesta::render::BufferDesc{
+        gpu.bottomLevelBuffer = device.CreateBuffer(vesta::render::BufferDesc{
             .size = buildSizes.accelerationStructureSize,
             .usage = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
             .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
@@ -388,9 +474,8 @@ void Scene::UploadToGpu(vesta::render::RenderDevice& device)
         VkAccelerationStructureCreateInfoKHR createInfo{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR };
         createInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
         createInfo.size = buildSizes.accelerationStructureSize;
-        createInfo.buffer = device.GetBuffer(_bottomLevelBuffer);
-        VK_CHECK(rt.vkCreateAccelerationStructureKHR(
-            device.GetDevice(), &createInfo, nullptr, &_bottomLevelAccelerationStructure));
+        createInfo.buffer = device.GetBuffer(gpu.bottomLevelBuffer);
+        VK_CHECK(rt.vkCreateAccelerationStructureKHR(device.GetDevice(), &createInfo, nullptr, &gpu.bottomLevelAccelerationStructure));
 
         const vesta::render::BufferHandle scratchBuffer = device.CreateBuffer(vesta::render::BufferDesc{
             .size = buildSizes.buildScratchSize,
@@ -400,7 +485,7 @@ void Scene::UploadToGpu(vesta::render::RenderDevice& device)
         });
 
         buildInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
-        buildInfo.dstAccelerationStructure = _bottomLevelAccelerationStructure;
+        buildInfo.dstAccelerationStructure = gpu.bottomLevelAccelerationStructure;
         buildInfo.scratchData.deviceAddress = device.GetBufferDeviceAddress(scratchBuffer);
 
         VkAccelerationStructureBuildRangeInfoKHR rangeInfo{};
@@ -415,14 +500,11 @@ void Scene::UploadToGpu(vesta::render::RenderDevice& device)
     };
 
     auto buildTopLevel = [&]() {
-        // TLAS describes scene instances. This sample uses a single instance
-        // that points at the one BLAS built from the flattened scene.
         VkAccelerationStructureDeviceAddressInfoKHR blasAddressInfo{
             VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR
         };
-        blasAddressInfo.accelerationStructure = _bottomLevelAccelerationStructure;
-        const VkDeviceAddress blasAddress =
-            rt.vkGetAccelerationStructureDeviceAddressKHR(device.GetDevice(), &blasAddressInfo);
+        blasAddressInfo.accelerationStructure = gpu.bottomLevelAccelerationStructure;
+        const VkDeviceAddress blasAddress = rt.vkGetAccelerationStructureDeviceAddressKHR(device.GetDevice(), &blasAddressInfo);
 
         VkAccelerationStructureInstanceKHR instance{};
         instance.transform = MakeIdentityTransformMatrix();
@@ -434,8 +516,7 @@ void Scene::UploadToGpu(vesta::render::RenderDevice& device)
 
         const render::BufferHandle instanceBuffer = device.CreateBuffer(vesta::render::BufferDesc{
             .size = sizeof(VkAccelerationStructureInstanceKHR),
-            .usage = VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT
-                | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+            .usage = VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
             .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
             .allocationFlags = kMappedHostFlags,
             .debugName = "SceneTLASInstances",
@@ -468,7 +549,7 @@ void Scene::UploadToGpu(vesta::render::RenderDevice& device)
             &primitiveCount,
             &buildSizes);
 
-        _topLevelBuffer = device.CreateBuffer(vesta::render::BufferDesc{
+        gpu.topLevelBuffer = device.CreateBuffer(vesta::render::BufferDesc{
             .size = buildSizes.accelerationStructureSize,
             .usage = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
             .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
@@ -478,9 +559,8 @@ void Scene::UploadToGpu(vesta::render::RenderDevice& device)
         VkAccelerationStructureCreateInfoKHR createInfo{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR };
         createInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
         createInfo.size = buildSizes.accelerationStructureSize;
-        createInfo.buffer = device.GetBuffer(_topLevelBuffer);
-        VK_CHECK(rt.vkCreateAccelerationStructureKHR(
-            device.GetDevice(), &createInfo, nullptr, &_topLevelAccelerationStructure));
+        createInfo.buffer = device.GetBuffer(gpu.topLevelBuffer);
+        VK_CHECK(rt.vkCreateAccelerationStructureKHR(device.GetDevice(), &createInfo, nullptr, &gpu.topLevelAccelerationStructure));
 
         const vesta::render::BufferHandle scratchBuffer = device.CreateBuffer(vesta::render::BufferDesc{
             .size = buildSizes.buildScratchSize,
@@ -490,7 +570,7 @@ void Scene::UploadToGpu(vesta::render::RenderDevice& device)
         });
 
         buildInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
-        buildInfo.dstAccelerationStructure = _topLevelAccelerationStructure;
+        buildInfo.dstAccelerationStructure = gpu.topLevelAccelerationStructure;
         buildInfo.scratchData.deviceAddress = device.GetBufferDeviceAddress(scratchBuffer);
 
         VkAccelerationStructureBuildRangeInfoKHR rangeInfo{};
@@ -507,48 +587,51 @@ void Scene::UploadToGpu(vesta::render::RenderDevice& device)
 
     const auto bottomLevelStart = std::chrono::steady_clock::now();
     buildBottomLevel();
-    _bottomLevelBuildMs =
+    gpu.bottomLevelBuildMs =
         std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - bottomLevelStart).count();
 
     const auto topLevelStart = std::chrono::steady_clock::now();
     buildTopLevel();
-    _topLevelBuildMs =
+    gpu.topLevelBuildMs =
         std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - topLevelStart).count();
 }
 
 void Scene::DestroyGpu(vesta::render::RenderDevice& device)
 {
-    if (_topLevelAccelerationStructure != VK_NULL_HANDLE) {
+    if (_gpu == nullptr) {
+        return;
+    }
+
+    if (_gpu->topLevelAccelerationStructure != VK_NULL_HANDLE) {
         device.GetRayTracingFunctions().vkDestroyAccelerationStructureKHR(
-            device.GetDevice(), _topLevelAccelerationStructure, nullptr);
-        _topLevelAccelerationStructure = VK_NULL_HANDLE;
+            device.GetDevice(), _gpu->topLevelAccelerationStructure, nullptr);
+        _gpu->topLevelAccelerationStructure = VK_NULL_HANDLE;
     }
-    if (_bottomLevelAccelerationStructure != VK_NULL_HANDLE) {
+    if (_gpu->bottomLevelAccelerationStructure != VK_NULL_HANDLE) {
         device.GetRayTracingFunctions().vkDestroyAccelerationStructureKHR(
-            device.GetDevice(), _bottomLevelAccelerationStructure, nullptr);
-        _bottomLevelAccelerationStructure = VK_NULL_HANDLE;
+            device.GetDevice(), _gpu->bottomLevelAccelerationStructure, nullptr);
+        _gpu->bottomLevelAccelerationStructure = VK_NULL_HANDLE;
     }
-    if (_topLevelBuffer) {
-        device.DestroyBuffer(_topLevelBuffer);
-        _topLevelBuffer = {};
+    if (_gpu->topLevelBuffer) {
+        device.DestroyBuffer(_gpu->topLevelBuffer);
+        _gpu->topLevelBuffer = {};
     }
-    if (_bottomLevelBuffer) {
-        device.DestroyBuffer(_bottomLevelBuffer);
-        _bottomLevelBuffer = {};
+    if (_gpu->bottomLevelBuffer) {
+        device.DestroyBuffer(_gpu->bottomLevelBuffer);
+        _gpu->bottomLevelBuffer = {};
     }
-    if (_triangleBuffer) {
-        device.DestroyBuffer(_triangleBuffer);
-        _triangleBuffer = {};
+    if (_gpu->triangleBuffer) {
+        device.DestroyBuffer(_gpu->triangleBuffer);
+        _gpu->triangleBuffer = {};
     }
-    if (_indexBuffer) {
-        device.DestroyBuffer(_indexBuffer);
-        _indexBuffer = {};
+    if (_gpu->indexBuffer) {
+        device.DestroyBuffer(_gpu->indexBuffer);
+        _gpu->indexBuffer = {};
     }
-    if (_vertexBuffer) {
-        device.DestroyBuffer(_vertexBuffer);
-        _vertexBuffer = {};
+    if (_gpu->vertexBuffer) {
+        device.DestroyBuffer(_gpu->vertexBuffer);
+        _gpu->vertexBuffer = {};
     }
-    _bottomLevelBuildMs = 0.0f;
-    _topLevelBuildMs = 0.0f;
+    _gpu.reset();
 }
 } // namespace vesta::scene

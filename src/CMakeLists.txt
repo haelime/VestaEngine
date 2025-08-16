@@ -1,6 +1,7 @@
 # Add source to this project's executable.
 add_executable(engine
   app/main.cpp
+  core/job_system.cpp
   render/renderer.cpp
   render/graph/render_graph.cpp
   render/passes/composite_pass.cpp
@@ -20,6 +21,7 @@ add_executable(engine
   render/vulkan/vk_loader.cpp
   render/vulkan/vk_pipelines.cpp
   ../include/vesta/render/renderer.h
+  ../include/vesta/core/job_system.h
   ../include/vesta/render/graph/render_graph.h
   ../include/vesta/render/passes/composite_pass.h
   ../include/vesta/render/passes/deferred_lighting_pass.h
