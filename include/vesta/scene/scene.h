@@ -47,6 +47,12 @@ struct SceneBounds {
     float radius{ 1.0f };
 };
 
+enum class SceneUploadResource : uint32_t {
+    Vertex = 0,
+    Index = 1,
+    Triangle = 2,
+};
+
 // PreparedScene contains CPU-side data that worker threads can safely read
 // without touching Vulkan state.
 struct PreparedScene {
@@ -86,6 +92,10 @@ public:
     // LoadFromFile() builds a simple prepared scene representation that both
     // raster and path tracing passes can consume.
     bool LoadFromFile(const std::filesystem::path& path);
+    void AllocateGpuResources(render::RenderDevice& device, const render::SceneUploadOptions& options);
+    void UploadGpuResourceChunk(render::RenderDevice& device, SceneUploadResource resource, size_t offsetBytes, size_t sizeBytes);
+    void BuildBottomLevelAccelerationStructure(render::RenderDevice& device);
+    void BuildTopLevelAccelerationStructure(render::RenderDevice& device);
     void UploadToGpu(render::RenderDevice& device, const render::SceneUploadOptions& options);
     void DestroyGpu(render::RenderDevice& device);
 

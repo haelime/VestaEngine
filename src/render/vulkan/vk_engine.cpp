@@ -82,6 +82,19 @@ bool UseAsyncSceneLoading(const vesta::render::RendererSettings& settings)
 {
     return settings.preferAsyncSceneLoading && settings.sceneUploadMode != vesta::render::SceneUploadMode::Synchronous;
 }
+
+const char* SceneUploadModeLabel(vesta::render::SceneUploadMode mode)
+{
+    switch (mode) {
+    case vesta::render::SceneUploadMode::Streaming:
+        return "Streaming";
+    case vesta::render::SceneUploadMode::AsyncParseSyncUpload:
+        return "Async Parse + Sync Upload";
+    case vesta::render::SceneUploadMode::Synchronous:
+    default:
+        return "Synchronous";
+    }
+}
 }
 
 void VestaEngine::init()
@@ -437,6 +450,12 @@ void VestaEngine::build_main_menu_bar()
                     settings.preferAsyncSceneLoading = true;
                 }
 
+                const bool streamingSelected = settings.sceneUploadMode == vesta::render::SceneUploadMode::Streaming;
+                if (ImGui::MenuItem("Streaming", nullptr, streamingSelected, settings.useDeviceLocalSceneBuffers)) {
+                    settings.sceneUploadMode = vesta::render::SceneUploadMode::Streaming;
+                    settings.preferAsyncSceneLoading = true;
+                }
+
                 ImGui::EndMenu();
             }
 
@@ -464,6 +483,10 @@ void VestaEngine::build_main_menu_bar()
                 ImGui::MenuItem("Frustum Culling", nullptr, &settings.enableFrustumCulling);
                 ImGui::MenuItem("Frame Timing Capture", nullptr, &settings.frameTimingCapture);
                 ImGui::MenuItem("Benchmark Overlay", nullptr, &settings.benchmarkOverlay);
+                int uploadBudgetMiB = static_cast<int>(settings.maxUploadBytesPerFrame / (1024u * 1024u));
+                if (ImGui::SliderInt("Upload Budget (MiB)", &uploadBudgetMiB, 1, 32)) {
+                    settings.maxUploadBytesPerFrame = static_cast<uint32_t>(uploadBudgetMiB) * 1024u * 1024u;
+                }
                 ImGui::Separator();
                 ImGui::TextDisabled("Validation: %s", bUseValidationLayers ? "Debug default" : "Off");
                 ImGui::EndMenu();
@@ -538,11 +561,12 @@ void VestaEngine::build_debug_ui()
     ImGui::Text("%s", device.GetGpuName().c_str());
     ImGui::Text("VRAM %u MiB", device.GetDedicatedVideoMemoryMiB());
     ImGui::Text("Recommended %s", PresetLabel(_renderer.GetRecommendedPreset()));
-    ImGui::Text("Scene Upload %s", UseAsyncSceneLoading(settings) ? "Async Parse + Sync Upload" : "Synchronous");
+    ImGui::Text("Scene Upload %s", SceneUploadModeLabel(settings.sceneUploadMode));
     ImGui::Text("Skip Hidden Passes %s", settings.optimizeInactivePasses ? "On" : "Off");
     ImGui::Text("Device Local Buffers %s", settings.useDeviceLocalSceneBuffers ? "On" : "Off");
     ImGui::Text("Deferred Scene Free %s", settings.deferOldSceneDestruction ? "On" : "Off");
     ImGui::Text("Frustum Culling %s", settings.enableFrustumCulling ? "On" : "Off");
+    ImGui::Text("Upload Budget %u MiB", settings.maxUploadBytesPerFrame / (1024u * 1024u));
     ImGui::Text("Workers %u", _renderer.GetWorkerThreadCount());
     ImGui::Text("Queued Jobs %zu", _renderer.GetPendingJobCount());
     ImGui::Separator();

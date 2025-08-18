@@ -49,6 +49,7 @@ enum class SceneLoadState : uint32_t {
 enum class SceneUploadMode : uint32_t {
     Synchronous = 0,
     AsyncParseSyncUpload = 1,
+    Streaming = 2,
 };
 
 struct SceneLoadStatus {
@@ -82,6 +83,7 @@ struct RendererSettings {
     bool benchmarkOverlay{ false };
     bool enableFrustumCulling{ true };
     SceneUploadMode sceneUploadMode{ SceneUploadMode::AsyncParseSyncUpload };
+    uint32_t maxUploadBytesPerFrame{ 4u * 1024u * 1024u };
     float gaussianPointSize{ 8.0f };
     float gaussianOpacity{ 0.35f };
     float gaussianMix{ 0.28f };
@@ -253,6 +255,29 @@ private:
         std::vector<uint32_t> visibleSurfaceIndices;
     };
 
+    enum class PendingSceneUploadStage : uint32_t {
+        Idle = 0,
+        AllocateBuffers = 1,
+        UploadVertices = 2,
+        UploadIndices = 3,
+        UploadTriangles = 4,
+        BuildBLAS = 5,
+        BuildTLAS = 6,
+        SwapScene = 7,
+    };
+
+    struct PendingSceneUpload {
+        vesta::scene::Scene scene;
+        std::filesystem::path path;
+        float parseMs{ 0.0f };
+        float uploadMs{ 0.0f };
+        PendingSceneUploadStage stage{ PendingSceneUploadStage::Idle };
+        size_t vertexOffsetBytes{ 0 };
+        size_t indexOffsetBytes{ 0 };
+        size_t triangleOffsetBytes{ 0 };
+        bool active{ false };
+    };
+
     void InitializeCommands();
     void InitializeSyncStructures();
     void InitializeDefaultPasses();
@@ -263,11 +288,13 @@ private:
     void ClearPassRegistry();
     void RebuildPassExecutionPlan();
     void PumpSceneLoadRequests();
+    void PumpPendingSceneUpload();
     void PumpVisibilityResults();
     void DispatchVisibilityCullIfNeeded();
     void ReleaseRetiredScenes();
     [[nodiscard]] SceneUploadOptions GetSceneUploadOptions() const;
     bool LoadSceneResolved(const std::filesystem::path& resolvedPath);
+    void StartPendingSceneUpload(vesta::scene::Scene&& scene, float parseMs);
     void ApplyLoadedScene(vesta::scene::Scene&& scene);
     [[nodiscard]] RendererFrameContext& GetCurrentFrame();
     [[nodiscard]] RenderGraph BuildFrameGraph(uint32_t swapchainImageIndex);
@@ -296,6 +323,7 @@ private:
     std::future<AsyncSceneLoadResult> _sceneLoadFuture;
     std::future<VisibilityCullResult> _visibilityFuture;
     SceneLoadStatus _sceneLoadStatus;
+    PendingSceneUpload _pendingSceneUpload;
     std::deque<RetiredSceneEntry> _retiredScenes;
     std::vector<uint32_t> _visibleSurfaceIndices;
     std::shared_ptr<const vesta::scene::PreparedScene> _visibleSceneToken;

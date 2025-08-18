@@ -170,6 +170,12 @@ vesta::render::BufferHandle CreateHostBufferAndCopy(vesta::render::RenderDevice&
     CopyToMappedBuffer(device, buffer, data);
     return buffer;
 }
+
+template <typename T>
+std::span<const std::byte> AsBytes(std::span<const T> data)
+{
+    return std::as_bytes(data);
+}
 } // namespace
 
 const PreparedScene& Scene::EmptyPreparedScene()
@@ -348,12 +354,39 @@ bool Scene::LoadFromFile(const std::filesystem::path& path)
 
 void Scene::UploadToGpu(vesta::render::RenderDevice& device, const vesta::render::SceneUploadOptions& options)
 {
-    DestroyGpu(device);
+    AllocateGpuResources(device, options);
+    const PreparedScene& prepared = GetPreparedOrEmpty();
+    if (_gpu == nullptr || !prepared.IsLoaded()) {
+        return;
+    }
+
+    if (options.useDeviceLocalSceneBuffers) {
+        UploadGpuResourceChunk(device, SceneUploadResource::Vertex, 0, sizeof(SceneVertex) * prepared.vertices.size());
+        UploadGpuResourceChunk(device, SceneUploadResource::Index, 0, sizeof(uint32_t) * prepared.indices.size());
+        UploadGpuResourceChunk(device, SceneUploadResource::Triangle, 0, sizeof(SceneTriangle) * prepared.triangles.size());
+    }
+
+    if (options.buildRayTracingStructuresOnLoad && device.IsRayTracingSupported() && !prepared.indices.empty()) {
+        const auto bottomLevelStart = std::chrono::steady_clock::now();
+        BuildBottomLevelAccelerationStructure(device);
+        _gpu->bottomLevelBuildMs =
+            std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - bottomLevelStart).count();
+
+        const auto topLevelStart = std::chrono::steady_clock::now();
+        BuildTopLevelAccelerationStructure(device);
+        _gpu->topLevelBuildMs =
+            std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - topLevelStart).count();
+    }
+}
+
+void Scene::AllocateGpuResources(vesta::render::RenderDevice& device, const vesta::render::SceneUploadOptions& options)
+{
     const PreparedScene& prepared = GetPreparedOrEmpty();
     if (!prepared.IsLoaded()) {
         return;
     }
 
+    DestroyGpu(device);
     _gpu = std::make_unique<GpuScene>();
     GpuScene& gpu = *_gpu;
 
@@ -364,17 +397,6 @@ void Scene::UploadToGpu(vesta::render::RenderDevice& device, const vesta::render
     const VkBufferUsageFlags triangleUsage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 
     if (options.useDeviceLocalSceneBuffers) {
-        const auto vertexData = std::span<const SceneVertex>(prepared.vertices);
-        const auto indexData = std::span<const uint32_t>(prepared.indices);
-        const auto triangleData = std::span<const SceneTriangle>(prepared.triangles);
-
-        const vesta::render::BufferHandle vertexStaging =
-            CreateHostBufferAndCopy(device, vertexData, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, "SceneVerticesStaging", false);
-        const vesta::render::BufferHandle indexStaging =
-            CreateHostBufferAndCopy(device, indexData, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, "SceneIndicesStaging", false);
-        const vesta::render::BufferHandle triangleStaging =
-            CreateHostBufferAndCopy(device, triangleData, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, "SceneTrianglesStaging", false);
-
         gpu.vertexBuffer = device.CreateBuffer(vesta::render::BufferDesc{
             .size = sizeof(SceneVertex) * prepared.vertices.size(),
             .usage = vertexUsage | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
@@ -396,27 +418,6 @@ void Scene::UploadToGpu(vesta::render::RenderDevice& device, const vesta::render
             .registerBindlessStorage = true,
             .debugName = "SceneTriangles",
         });
-
-        device.ImmediateSubmit([&](VkCommandBuffer commandBuffer) {
-            const std::array<VkBufferCopy, 1> vertexCopy{
-                VkBufferCopy{ .srcOffset = 0, .dstOffset = 0, .size = sizeof(SceneVertex) * prepared.vertices.size() }
-            };
-            vkCmdCopyBuffer(commandBuffer, device.GetBuffer(vertexStaging), device.GetBuffer(gpu.vertexBuffer), 1, vertexCopy.data());
-
-            const std::array<VkBufferCopy, 1> indexCopy{
-                VkBufferCopy{ .srcOffset = 0, .dstOffset = 0, .size = sizeof(uint32_t) * prepared.indices.size() }
-            };
-            vkCmdCopyBuffer(commandBuffer, device.GetBuffer(indexStaging), device.GetBuffer(gpu.indexBuffer), 1, indexCopy.data());
-
-            const std::array<VkBufferCopy, 1> triangleCopy{
-                VkBufferCopy{ .srcOffset = 0, .dstOffset = 0, .size = sizeof(SceneTriangle) * prepared.triangles.size() }
-            };
-            vkCmdCopyBuffer(commandBuffer, device.GetBuffer(triangleStaging), device.GetBuffer(gpu.triangleBuffer), 1, triangleCopy.data());
-        });
-
-        device.DestroyBuffer(vertexStaging);
-        device.DestroyBuffer(indexStaging);
-        device.DestroyBuffer(triangleStaging);
     } else {
         gpu.vertexBuffer =
             CreateHostBufferAndCopy(device, std::span<const SceneVertex>(prepared.vertices), vertexUsage, "SceneVertices", false);
@@ -425,175 +426,239 @@ void Scene::UploadToGpu(vesta::render::RenderDevice& device, const vesta::render
         gpu.triangleBuffer = CreateHostBufferAndCopy(
             device, std::span<const SceneTriangle>(prepared.triangles), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "SceneTriangles", true);
     }
+}
 
-    if (!options.buildRayTracingStructuresOnLoad || !device.IsRayTracingSupported() || prepared.indices.empty()) {
+void Scene::UploadGpuResourceChunk(
+    vesta::render::RenderDevice& device, SceneUploadResource resource, size_t offsetBytes, size_t sizeBytes)
+{
+    if (_gpu == nullptr || sizeBytes == 0) {
         return;
     }
 
+    const PreparedScene& prepared = GetPreparedOrEmpty();
+    std::span<const std::byte> sourceBytes;
+    vesta::render::BufferHandle destinationBuffer;
+    const char* debugName = nullptr;
+
+    switch (resource) {
+    case SceneUploadResource::Vertex:
+        sourceBytes = AsBytes(std::span<const SceneVertex>(prepared.vertices));
+        destinationBuffer = _gpu->vertexBuffer;
+        debugName = "SceneVerticesStagingChunk";
+        break;
+    case SceneUploadResource::Index:
+        sourceBytes = AsBytes(std::span<const uint32_t>(prepared.indices));
+        destinationBuffer = _gpu->indexBuffer;
+        debugName = "SceneIndicesStagingChunk";
+        break;
+    case SceneUploadResource::Triangle:
+    default:
+        sourceBytes = AsBytes(std::span<const SceneTriangle>(prepared.triangles));
+        destinationBuffer = _gpu->triangleBuffer;
+        debugName = "SceneTrianglesStagingChunk";
+        break;
+    }
+
+    if (!destinationBuffer || offsetBytes >= sourceBytes.size()) {
+        return;
+    }
+
+    const size_t clampedSize = std::min(sizeBytes, sourceBytes.size() - offsetBytes);
+    const std::span<const std::byte> chunkBytes = sourceBytes.subspan(offsetBytes, clampedSize);
+    const vesta::render::BufferHandle stagingBuffer = device.CreateBuffer(vesta::render::BufferDesc{
+        .size = clampedSize,
+        .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+        .allocationFlags = kMappedHostFlags,
+        .debugName = debugName,
+    });
+
+    const vesta::render::AllocatedBuffer& stagingResource = device.GetBufferResource(stagingBuffer);
+    std::memcpy(stagingResource.allocationInfo.pMappedData, chunkBytes.data(), clampedSize);
+
+    device.ImmediateSubmit([&](VkCommandBuffer commandBuffer) {
+        const VkBufferCopy copyRegion{
+            .srcOffset = 0,
+            .dstOffset = static_cast<VkDeviceSize>(offsetBytes),
+            .size = static_cast<VkDeviceSize>(clampedSize),
+        };
+        vkCmdCopyBuffer(commandBuffer, device.GetBuffer(stagingBuffer), device.GetBuffer(destinationBuffer), 1, &copyRegion);
+    });
+
+    device.DestroyBuffer(stagingBuffer);
+}
+
+void Scene::BuildBottomLevelAccelerationStructure(vesta::render::RenderDevice& device)
+{
+    if (_gpu == nullptr) {
+        return;
+    }
+
+    const PreparedScene& prepared = GetPreparedOrEmpty();
+    if (prepared.indices.empty() || !device.IsRayTracingSupported()) {
+        return;
+    }
+
+    GpuScene& gpu = *_gpu;
     const auto& rt = device.GetRayTracingFunctions();
 
-    auto buildBottomLevel = [&]() {
-        VkAccelerationStructureGeometryTrianglesDataKHR triangles{};
-        triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
-        triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
-        triangles.vertexData.deviceAddress = device.GetBufferDeviceAddress(gpu.vertexBuffer) + offsetof(SceneVertex, position);
-        triangles.vertexStride = sizeof(SceneVertex);
-        triangles.maxVertex = static_cast<uint32_t>(prepared.vertices.size());
-        triangles.indexType = VK_INDEX_TYPE_UINT32;
-        triangles.indexData.deviceAddress = device.GetBufferDeviceAddress(gpu.indexBuffer);
+    VkAccelerationStructureGeometryTrianglesDataKHR triangles{};
+    triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
+    triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
+    triangles.vertexData.deviceAddress = device.GetBufferDeviceAddress(gpu.vertexBuffer) + offsetof(SceneVertex, position);
+    triangles.vertexStride = sizeof(SceneVertex);
+    triangles.maxVertex = static_cast<uint32_t>(prepared.vertices.size());
+    triangles.indexType = VK_INDEX_TYPE_UINT32;
+    triangles.indexData.deviceAddress = device.GetBufferDeviceAddress(gpu.indexBuffer);
 
-        VkAccelerationStructureGeometryKHR geometry{};
-        geometry.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
-        geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-        geometry.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
-        geometry.geometry.triangles = triangles;
+    VkAccelerationStructureGeometryKHR geometry{};
+    geometry.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+    geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
+    geometry.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+    geometry.geometry.triangles = triangles;
 
-        const uint32_t primitiveCount = static_cast<uint32_t>(prepared.indices.size() / 3);
+    const uint32_t primitiveCount = static_cast<uint32_t>(prepared.indices.size() / 3);
+    VkAccelerationStructureBuildGeometryInfoKHR buildInfo{};
+    buildInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+    buildInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+    buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+    buildInfo.geometryCount = 1;
+    buildInfo.pGeometries = &geometry;
 
-        VkAccelerationStructureBuildGeometryInfoKHR buildInfo{};
-        buildInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
-        buildInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-        buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
-        buildInfo.geometryCount = 1;
-        buildInfo.pGeometries = &geometry;
+    VkAccelerationStructureBuildSizesInfoKHR buildSizes{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR };
+    rt.vkGetAccelerationStructureBuildSizesKHR(device.GetDevice(),
+        VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+        &buildInfo,
+        &primitiveCount,
+        &buildSizes);
 
-        VkAccelerationStructureBuildSizesInfoKHR buildSizes{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR };
-        rt.vkGetAccelerationStructureBuildSizesKHR(device.GetDevice(),
-            VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-            &buildInfo,
-            &primitiveCount,
-            &buildSizes);
+    gpu.bottomLevelBuffer = device.CreateBuffer(vesta::render::BufferDesc{
+        .size = buildSizes.accelerationStructureSize,
+        .usage = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+        .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+        .debugName = "SceneBLASBuffer",
+    });
 
-        gpu.bottomLevelBuffer = device.CreateBuffer(vesta::render::BufferDesc{
-            .size = buildSizes.accelerationStructureSize,
-            .usage = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-            .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-            .debugName = "SceneBLASBuffer",
-        });
+    VkAccelerationStructureCreateInfoKHR createInfo{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR };
+    createInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
+    createInfo.size = buildSizes.accelerationStructureSize;
+    createInfo.buffer = device.GetBuffer(gpu.bottomLevelBuffer);
+    VK_CHECK(rt.vkCreateAccelerationStructureKHR(device.GetDevice(), &createInfo, nullptr, &gpu.bottomLevelAccelerationStructure));
 
-        VkAccelerationStructureCreateInfoKHR createInfo{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR };
-        createInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR;
-        createInfo.size = buildSizes.accelerationStructureSize;
-        createInfo.buffer = device.GetBuffer(gpu.bottomLevelBuffer);
-        VK_CHECK(rt.vkCreateAccelerationStructureKHR(device.GetDevice(), &createInfo, nullptr, &gpu.bottomLevelAccelerationStructure));
+    const vesta::render::BufferHandle scratchBuffer = device.CreateBuffer(vesta::render::BufferDesc{
+        .size = buildSizes.buildScratchSize,
+        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+        .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+        .debugName = "SceneBLASScratch",
+    });
 
-        const vesta::render::BufferHandle scratchBuffer = device.CreateBuffer(vesta::render::BufferDesc{
-            .size = buildSizes.buildScratchSize,
-            .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-            .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-            .debugName = "SceneBLASScratch",
-        });
+    buildInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+    buildInfo.dstAccelerationStructure = gpu.bottomLevelAccelerationStructure;
+    buildInfo.scratchData.deviceAddress = device.GetBufferDeviceAddress(scratchBuffer);
 
-        buildInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
-        buildInfo.dstAccelerationStructure = gpu.bottomLevelAccelerationStructure;
-        buildInfo.scratchData.deviceAddress = device.GetBufferDeviceAddress(scratchBuffer);
+    VkAccelerationStructureBuildRangeInfoKHR rangeInfo{};
+    rangeInfo.primitiveCount = primitiveCount;
+    const VkAccelerationStructureBuildRangeInfoKHR* rangeInfos[] = { &rangeInfo };
 
-        VkAccelerationStructureBuildRangeInfoKHR rangeInfo{};
-        rangeInfo.primitiveCount = primitiveCount;
-        const VkAccelerationStructureBuildRangeInfoKHR* rangeInfos[] = { &rangeInfo };
+    device.ImmediateSubmit([&](VkCommandBuffer commandBuffer) {
+        rt.vkCmdBuildAccelerationStructuresKHR(commandBuffer, 1, &buildInfo, rangeInfos);
+    });
 
-        device.ImmediateSubmit([&](VkCommandBuffer commandBuffer) {
-            rt.vkCmdBuildAccelerationStructuresKHR(commandBuffer, 1, &buildInfo, rangeInfos);
-        });
+    device.DestroyBuffer(scratchBuffer);
+}
 
-        device.DestroyBuffer(scratchBuffer);
+void Scene::BuildTopLevelAccelerationStructure(vesta::render::RenderDevice& device)
+{
+    if (_gpu == nullptr || _gpu->bottomLevelAccelerationStructure == VK_NULL_HANDLE || !device.IsRayTracingSupported()) {
+        return;
+    }
+
+    GpuScene& gpu = *_gpu;
+    const auto& rt = device.GetRayTracingFunctions();
+
+    VkAccelerationStructureDeviceAddressInfoKHR blasAddressInfo{
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR
     };
+    blasAddressInfo.accelerationStructure = gpu.bottomLevelAccelerationStructure;
+    const VkDeviceAddress blasAddress = rt.vkGetAccelerationStructureDeviceAddressKHR(device.GetDevice(), &blasAddressInfo);
 
-    auto buildTopLevel = [&]() {
-        VkAccelerationStructureDeviceAddressInfoKHR blasAddressInfo{
-            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR
-        };
-        blasAddressInfo.accelerationStructure = gpu.bottomLevelAccelerationStructure;
-        const VkDeviceAddress blasAddress = rt.vkGetAccelerationStructureDeviceAddressKHR(device.GetDevice(), &blasAddressInfo);
+    VkAccelerationStructureInstanceKHR instance{};
+    instance.transform = MakeIdentityTransformMatrix();
+    instance.instanceCustomIndex = 0;
+    instance.mask = 0xFF;
+    instance.instanceShaderBindingTableRecordOffset = 0;
+    instance.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
+    instance.accelerationStructureReference = blasAddress;
 
-        VkAccelerationStructureInstanceKHR instance{};
-        instance.transform = MakeIdentityTransformMatrix();
-        instance.instanceCustomIndex = 0;
-        instance.mask = 0xFF;
-        instance.instanceShaderBindingTableRecordOffset = 0;
-        instance.flags = VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR;
-        instance.accelerationStructureReference = blasAddress;
+    const render::BufferHandle instanceBuffer = device.CreateBuffer(vesta::render::BufferDesc{
+        .size = sizeof(VkAccelerationStructureInstanceKHR),
+        .usage = VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
+        .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+        .allocationFlags = kMappedHostFlags,
+        .debugName = "SceneTLASInstances",
+    });
+    CopyToMappedBuffer(device, instanceBuffer, std::span<const VkAccelerationStructureInstanceKHR>(&instance, 1));
 
-        const render::BufferHandle instanceBuffer = device.CreateBuffer(vesta::render::BufferDesc{
-            .size = sizeof(VkAccelerationStructureInstanceKHR),
-            .usage = VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR,
-            .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
-            .allocationFlags = kMappedHostFlags,
-            .debugName = "SceneTLASInstances",
-        });
-        CopyToMappedBuffer(device, instanceBuffer, std::span<const VkAccelerationStructureInstanceKHR>(&instance, 1));
-
-        VkAccelerationStructureGeometryInstancesDataKHR instancesData{
-            VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR
-        };
-        instancesData.arrayOfPointers = VK_FALSE;
-        instancesData.data.deviceAddress = device.GetBufferDeviceAddress(instanceBuffer);
-
-        VkAccelerationStructureGeometryKHR geometry{};
-        geometry.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
-        geometry.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
-        geometry.geometry.instances = instancesData;
-
-        const uint32_t primitiveCount = 1;
-        VkAccelerationStructureBuildGeometryInfoKHR buildInfo{};
-        buildInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
-        buildInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
-        buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
-        buildInfo.geometryCount = 1;
-        buildInfo.pGeometries = &geometry;
-
-        VkAccelerationStructureBuildSizesInfoKHR buildSizes{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR };
-        rt.vkGetAccelerationStructureBuildSizesKHR(device.GetDevice(),
-            VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
-            &buildInfo,
-            &primitiveCount,
-            &buildSizes);
-
-        gpu.topLevelBuffer = device.CreateBuffer(vesta::render::BufferDesc{
-            .size = buildSizes.accelerationStructureSize,
-            .usage = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-            .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-            .debugName = "SceneTLASBuffer",
-        });
-
-        VkAccelerationStructureCreateInfoKHR createInfo{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR };
-        createInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
-        createInfo.size = buildSizes.accelerationStructureSize;
-        createInfo.buffer = device.GetBuffer(gpu.topLevelBuffer);
-        VK_CHECK(rt.vkCreateAccelerationStructureKHR(device.GetDevice(), &createInfo, nullptr, &gpu.topLevelAccelerationStructure));
-
-        const vesta::render::BufferHandle scratchBuffer = device.CreateBuffer(vesta::render::BufferDesc{
-            .size = buildSizes.buildScratchSize,
-            .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-            .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-            .debugName = "SceneTLASScratch",
-        });
-
-        buildInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
-        buildInfo.dstAccelerationStructure = gpu.topLevelAccelerationStructure;
-        buildInfo.scratchData.deviceAddress = device.GetBufferDeviceAddress(scratchBuffer);
-
-        VkAccelerationStructureBuildRangeInfoKHR rangeInfo{};
-        rangeInfo.primitiveCount = primitiveCount;
-        const VkAccelerationStructureBuildRangeInfoKHR* rangeInfos[] = { &rangeInfo };
-
-        device.ImmediateSubmit([&](VkCommandBuffer commandBuffer) {
-            rt.vkCmdBuildAccelerationStructuresKHR(commandBuffer, 1, &buildInfo, rangeInfos);
-        });
-
-        device.DestroyBuffer(scratchBuffer);
-        device.DestroyBuffer(instanceBuffer);
+    VkAccelerationStructureGeometryInstancesDataKHR instancesData{
+        VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_INSTANCES_DATA_KHR
     };
+    instancesData.arrayOfPointers = VK_FALSE;
+    instancesData.data.deviceAddress = device.GetBufferDeviceAddress(instanceBuffer);
 
-    const auto bottomLevelStart = std::chrono::steady_clock::now();
-    buildBottomLevel();
-    gpu.bottomLevelBuildMs =
-        std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - bottomLevelStart).count();
+    VkAccelerationStructureGeometryKHR geometry{};
+    geometry.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
+    geometry.geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR;
+    geometry.geometry.instances = instancesData;
 
-    const auto topLevelStart = std::chrono::steady_clock::now();
-    buildTopLevel();
-    gpu.topLevelBuildMs =
-        std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - topLevelStart).count();
+    const uint32_t primitiveCount = 1;
+    VkAccelerationStructureBuildGeometryInfoKHR buildInfo{};
+    buildInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR;
+    buildInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+    buildInfo.flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR;
+    buildInfo.geometryCount = 1;
+    buildInfo.pGeometries = &geometry;
+
+    VkAccelerationStructureBuildSizesInfoKHR buildSizes{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR };
+    rt.vkGetAccelerationStructureBuildSizesKHR(device.GetDevice(),
+        VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR,
+        &buildInfo,
+        &primitiveCount,
+        &buildSizes);
+
+    gpu.topLevelBuffer = device.CreateBuffer(vesta::render::BufferDesc{
+        .size = buildSizes.accelerationStructureSize,
+        .usage = VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+        .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+        .debugName = "SceneTLASBuffer",
+    });
+
+    VkAccelerationStructureCreateInfoKHR createInfo{ VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR };
+    createInfo.type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR;
+    createInfo.size = buildSizes.accelerationStructureSize;
+    createInfo.buffer = device.GetBuffer(gpu.topLevelBuffer);
+    VK_CHECK(rt.vkCreateAccelerationStructureKHR(device.GetDevice(), &createInfo, nullptr, &gpu.topLevelAccelerationStructure));
+
+    const vesta::render::BufferHandle scratchBuffer = device.CreateBuffer(vesta::render::BufferDesc{
+        .size = buildSizes.buildScratchSize,
+        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+        .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+        .debugName = "SceneTLASScratch",
+    });
+
+    buildInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR;
+    buildInfo.dstAccelerationStructure = gpu.topLevelAccelerationStructure;
+    buildInfo.scratchData.deviceAddress = device.GetBufferDeviceAddress(scratchBuffer);
+
+    VkAccelerationStructureBuildRangeInfoKHR rangeInfo{};
+    rangeInfo.primitiveCount = primitiveCount;
+    const VkAccelerationStructureBuildRangeInfoKHR* rangeInfos[] = { &rangeInfo };
+
+    device.ImmediateSubmit([&](VkCommandBuffer commandBuffer) {
+        rt.vkCmdBuildAccelerationStructuresKHR(commandBuffer, 1, &buildInfo, rangeInfos);
+    });
+
+    device.DestroyBuffer(scratchBuffer);
+    device.DestroyBuffer(instanceBuffer);
 }
 
 void Scene::DestroyGpu(vesta::render::RenderDevice& device)
