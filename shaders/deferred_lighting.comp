@@ -1,20 +1,69 @@
 #version 460
 #extension GL_EXT_nonuniform_qualifier : enable
 
-// Simple deferred lighting compute pass. It reads the GBuffer from bindless
-// storage images and writes lit color into another storage image.
+// Deferred lighting compute pass with a small glTF metallic-roughness BRDF.
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
+layout(set = 0, binding = 0) uniform sampler2D sampledImages[];
 layout(rgba16f, set = 0, binding = 1) uniform image2D storageImages[];
 
 layout(push_constant) uniform DeferredLightingPushConstants {
     uint albedoImageIndex;
     uint normalImageIndex;
+    uint materialImageIndex;
+    uint depthImageIndex;
     uint outputImageIndex;
-    uint padding;
+    uint padding0;
+    uint padding1;
+    uint padding2;
+    mat4 inverseViewProjection;
+    vec4 cameraPosition;
     vec4 lightDirectionAndIntensity;
 } pc;
+
+const float PI = 3.14159265359;
+
+float DistributionGGX(vec3 N, vec3 H, float roughness)
+{
+    float a = roughness * roughness;
+    float a2 = a * a;
+    float NdotH = max(dot(N, H), 0.0);
+    float NdotH2 = NdotH * NdotH;
+    float denominator = (NdotH2 * (a2 - 1.0) + 1.0);
+    return a2 / max(PI * denominator * denominator, 1.0e-4);
+}
+
+float GeometrySchlickGGX(float NdotV, float roughness)
+{
+    float r = roughness + 1.0;
+    float k = (r * r) / 8.0;
+    return NdotV / max(NdotV * (1.0 - k) + k, 1.0e-4);
+}
+
+float GeometrySmith(vec3 N, vec3 V, vec3 L, float roughness)
+{
+    return GeometrySchlickGGX(max(dot(N, V), 0.0), roughness) * GeometrySchlickGGX(max(dot(N, L), 0.0), roughness);
+}
+
+vec3 FresnelSchlick(float cosTheta, vec3 F0)
+{
+    return F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
+}
+
+vec3 sampleSky(vec3 direction)
+{
+    float skyT = 0.5 * (direction.y + 1.0);
+    return mix(vec3(0.08, 0.11, 0.16), vec3(0.40, 0.55, 0.82), skyT);
+}
+
+vec3 reconstructWorldPosition(ivec2 pixel, ivec2 size, float depth)
+{
+    vec2 uv = (vec2(pixel) + 0.5) / vec2(size);
+    vec2 ndc = uv * 2.0 - 1.0;
+    vec4 world = pc.inverseViewProjection * vec4(ndc, depth, 1.0);
+    return world.xyz / max(world.w, 1.0e-4);
+}
 
 void main() {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
@@ -23,16 +72,44 @@ void main() {
         return;
     }
 
-    vec4 albedo = imageLoad(storageImages[nonuniformEXT(int(pc.albedoImageIndex))], pixel);
-    vec4 normalDepth = imageLoad(storageImages[nonuniformEXT(int(pc.normalImageIndex))], pixel);
+    vec2 uv = (vec2(pixel) + 0.5) / vec2(size);
+    vec4 albedoAo = imageLoad(storageImages[nonuniformEXT(int(pc.albedoImageIndex))], pixel);
+    vec4 normalRoughness = imageLoad(storageImages[nonuniformEXT(int(pc.normalImageIndex))], pixel);
+    vec4 emissiveMetallic = imageLoad(storageImages[nonuniformEXT(int(pc.materialImageIndex))], pixel);
+    float depth = texture(sampledImages[nonuniformEXT(int(pc.depthImageIndex))], uv).r;
 
-    vec3 normal = normalize(normalDepth.xyz * 2.0 - 1.0);
-    vec3 lightDir = normalize(-pc.lightDirectionAndIntensity.xyz);
-    float intensity = max(dot(normal, lightDir), 0.0) * pc.lightDirectionAndIntensity.w;
-    float depthFog = smoothstep(0.2, 1.0, normalDepth.w);
-    vec3 ambient = vec3(0.08, 0.09, 0.12);
-    vec3 lit = albedo.rgb * (ambient + intensity);
-    lit = mix(lit, vec3(0.12, 0.16, 0.22), depthFog * 0.35);
+    vec3 N = normalize(normalRoughness.xyz * 2.0 - 1.0);
+    float roughness = clamp(normalRoughness.w, 0.045, 1.0);
+    float metallic = clamp(emissiveMetallic.a, 0.0, 1.0);
+    float ao = clamp(albedoAo.a, 0.0, 1.0);
+    vec3 baseColor = max(albedoAo.rgb, vec3(0.0));
+    vec3 emissive = max(emissiveMetallic.rgb, vec3(0.0));
+
+    vec3 worldPosition = reconstructWorldPosition(pixel, size, depth);
+    vec3 V = normalize(pc.cameraPosition.xyz - worldPosition);
+    vec3 L = normalize(-pc.lightDirectionAndIntensity.xyz);
+    vec3 H = normalize(V + L);
+    vec3 R = reflect(-V, N);
+
+    float NdotL = max(dot(N, L), 0.0);
+    float NdotV = max(dot(N, V), 0.0);
+    vec3 F0 = mix(vec3(0.04), baseColor, metallic);
+    vec3 F = FresnelSchlick(max(dot(H, V), 0.0), F0);
+    float D = DistributionGGX(N, H, roughness);
+    float G = GeometrySmith(N, V, L, roughness);
+
+    vec3 numerator = D * G * F;
+    float denominator = max(4.0 * NdotV * NdotL, 1.0e-4);
+    vec3 specular = numerator / denominator;
+
+    vec3 kS = F;
+    vec3 kD = (vec3(1.0) - kS) * (1.0 - metallic);
+    vec3 diffuse = kD * baseColor / PI;
+    vec3 direct = (diffuse + specular) * NdotL * pc.lightDirectionAndIntensity.w;
+
+    vec3 ambientDiffuse = sampleSky(N) * baseColor * (1.0 - metallic) * 0.22 * ao;
+    vec3 ambientSpecular = sampleSky(R) * FresnelSchlick(max(dot(N, V), 0.0), F0) * mix(0.08, 0.45, metallic) * (1.0 - roughness * 0.65);
+    vec3 lit = ambientDiffuse + ambientSpecular + direct + emissive;
 
     imageStore(storageImages[nonuniformEXT(int(pc.outputImageIndex))], pixel, vec4(lit, 1.0));
 }

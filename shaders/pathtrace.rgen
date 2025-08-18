@@ -13,6 +13,7 @@ layout(location = 0) rayPayloadEXT vec3 payloadColor;
 layout(push_constant) uniform PathTracePushConstants {
     mat4 inverseViewProjection;
     vec4 cameraPositionAndFrame;
+    vec4 lightDirectionAndIntensity;
     uint triangleBufferIndex;
     uint triangleCount;
     uint frameIndex;

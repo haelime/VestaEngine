@@ -19,7 +19,12 @@ layout(location = 0) out vec4 outColor;
 const uint INVALID_IMAGE_INDEX = 0xffffffffu;
 
 vec3 tonemap(vec3 value) {
-    return value / (value + vec3(1.0));
+    const vec3 a = vec3(2.51);
+    const vec3 b = vec3(0.03);
+    const vec3 c = vec3(2.43);
+    const vec3 d = vec3(0.59);
+    const vec3 e = vec3(0.14);
+    return clamp((value * (a * value + b)) / (value * (c * value + d) + e), 0.0, 1.0);
 }
 
 bool hasImage(uint index) {

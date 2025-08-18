@@ -13,10 +13,11 @@ namespace vesta::render {
 // later passes can light or debug the scene without re-drawing geometry.
 class GeometryRasterPass final : public IRenderPass {
 public:
-    void SetTargets(GraphTextureHandle albedo, GraphTextureHandle normal, GraphTextureHandle depth);
+    void SetTargets(GraphTextureHandle albedo, GraphTextureHandle normal, GraphTextureHandle material, GraphTextureHandle depth);
     void SetScene(const vesta::scene::Scene* scene);
     void SetCamera(const Camera* camera);
     void SetVisibleSurfaceIndices(const std::vector<uint32_t>* visibleSurfaceIndices);
+    void SetUseIndirectDraw(bool useIndirectDraw);
 
     [[nodiscard]] std::string_view Name() const override { return "GeometryRasterPass"; }
     void Initialize(RenderDevice& device) override;
@@ -27,10 +28,14 @@ public:
 private:
     GraphTextureHandle _albedoTarget{};
     GraphTextureHandle _normalTarget{};
+    GraphTextureHandle _materialTarget{};
     GraphTextureHandle _depthTarget{};
     const vesta::scene::Scene* _scene{ nullptr };
     const Camera* _camera{ nullptr };
     const std::vector<uint32_t>* _visibleSurfaceIndices{ nullptr };
+    bool _useIndirectDraw{ false };
+    BufferHandle _indirectBuffer{};
+    size_t _indirectBufferCapacity{ 0 };
     VkPipelineLayout _pipelineLayout{ VK_NULL_HANDLE };
     VkPipeline _pipeline{ VK_NULL_HANDLE };
     VkShaderModule _vertexShader{ VK_NULL_HANDLE };

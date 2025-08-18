@@ -5,29 +5,41 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <fstream>
 #include <functional>
+#include <limits>
 #include <optional>
 #include <span>
 #include <stdexcept>
+#include <sstream>
+#include <unordered_map>
+#include <string_view>
 
 #include <fastgltf/glm_element_traits.hpp>
 #include <fastgltf/parser.hpp>
 #include <fastgltf/tools.hpp>
 #include <fastgltf/types.hpp>
+#include <fmt/format.h>
 
 #include <glm/common.hpp>
 #include <glm/ext/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
+
+#include <vesta/core/debug.h>
 #include <vesta/render/renderer.h>
 #include <vesta/render/rhi/render_device.h>
+#include <vesta/render/vulkan/vk_images.h>
 
 namespace vesta::scene {
 namespace {
 constexpr auto kLoadOptions = fastgltf::Options::DontRequireValidAssetMember | fastgltf::Options::LoadGLBBuffers
-    | fastgltf::Options::LoadExternalBuffers | fastgltf::Options::GenerateMeshIndices;
+    | fastgltf::Options::LoadExternalBuffers | fastgltf::Options::LoadExternalImages | fastgltf::Options::GenerateMeshIndices;
 constexpr VmaAllocationCreateFlags kMappedHostFlags =
     VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+constexpr float kShC0 = 0.28209479177387814f;
 
 bool ShouldAutoLayoutDemoScene(const std::filesystem::path& path, const fastgltf::Scene& scene)
 {
@@ -68,6 +80,20 @@ std::vector<glm::vec3> ReadVec3Accessor(const fastgltf::Asset& asset, const fast
     return data;
 }
 
+std::vector<glm::vec2> ReadVec2Accessor(const fastgltf::Asset& asset, const fastgltf::Accessor& accessor)
+{
+    std::vector<glm::vec2> data(accessor.count);
+    fastgltf::copyFromAccessor<glm::vec2>(asset, accessor, data.data());
+    return data;
+}
+
+std::vector<glm::vec4> ReadVec4Accessor(const fastgltf::Asset& asset, const fastgltf::Accessor& accessor)
+{
+    std::vector<glm::vec4> data(accessor.count);
+    fastgltf::copyFromAccessor<glm::vec4>(asset, accessor, data.data());
+    return data;
+}
+
 std::vector<uint32_t> ReadIndexAccessor(const fastgltf::Asset& asset, const fastgltf::Accessor& accessor)
 {
     std::vector<uint32_t> data(accessor.count);
@@ -75,17 +101,169 @@ std::vector<uint32_t> ReadIndexAccessor(const fastgltf::Asset& asset, const fast
     return data;
 }
 
-glm::vec4 ReadBaseColor(const fastgltf::Asset& asset, const fastgltf::Primitive& primitive)
+std::span<const std::byte> GetBufferSourceBytes(const fastgltf::DataSource& dataSource)
 {
-    if (!primitive.materialIndex.has_value()) {
-        return glm::vec4(0.8f, 0.8f, 0.85f, 1.0f);
+    return std::visit(
+        [](const auto& source) -> std::span<const std::byte> {
+            using T = std::decay_t<decltype(source)>;
+            if constexpr (std::is_same_v<T, fastgltf::sources::Vector>) {
+                return {
+                    reinterpret_cast<const std::byte*>(source.bytes.data()),
+                    source.bytes.size(),
+                };
+            } else if constexpr (std::is_same_v<T, fastgltf::sources::ByteView>) {
+                return source.bytes;
+            } else {
+                return {};
+            }
+        },
+        dataSource);
+}
+
+std::span<const std::byte> GetImageSourceBytes(const fastgltf::Asset& asset, const fastgltf::Image& image)
+{
+    return std::visit(
+        [&](const auto& source) -> std::span<const std::byte> {
+            using T = std::decay_t<decltype(source)>;
+            if constexpr (std::is_same_v<T, fastgltf::sources::Vector>) {
+                return {
+                    reinterpret_cast<const std::byte*>(source.bytes.data()),
+                    source.bytes.size(),
+                };
+            } else if constexpr (std::is_same_v<T, fastgltf::sources::ByteView>) {
+                return source.bytes;
+            } else if constexpr (std::is_same_v<T, fastgltf::sources::BufferView>) {
+                const fastgltf::BufferView& bufferView = asset.bufferViews.at(source.bufferViewIndex);
+                const fastgltf::Buffer& buffer = asset.buffers.at(bufferView.bufferIndex);
+                const std::span<const std::byte> bufferBytes = GetBufferSourceBytes(buffer.data);
+                if (bufferBytes.empty()) {
+                    return {};
+                }
+                const size_t byteOffset = bufferView.byteOffset;
+                const size_t byteLength = bufferView.byteLength;
+                if (byteOffset >= bufferBytes.size()) {
+                    return {};
+                }
+                return bufferBytes.subspan(byteOffset, std::min(byteLength, bufferBytes.size() - byteOffset));
+            } else {
+                return {};
+            }
+        },
+        image.data);
+}
+
+std::optional<SceneTextureAsset> DecodeTextureAsset(
+    const fastgltf::Asset& asset, const fastgltf::Image& image, const std::filesystem::path& sourcePath, bool srgb)
+{
+    SceneTextureAsset textureAsset;
+    textureAsset.name = image.name;
+    textureAsset.srgb = srgb;
+
+    int width = 0;
+    int height = 0;
+    int channelCount = 0;
+    stbi_uc* decodedPixels = nullptr;
+
+    if (const auto* uriSource = std::get_if<fastgltf::sources::URI>(&image.data); uriSource != nullptr) {
+        const std::filesystem::path imagePath = sourcePath.parent_path() / uriSource->uri.fspath();
+        decodedPixels = stbi_load(imagePath.string().c_str(), &width, &height, &channelCount, STBI_rgb_alpha);
+        if (textureAsset.name.empty()) {
+            textureAsset.name = imagePath.filename().string();
+        }
+    } else {
+        const std::span<const std::byte> imageBytes = GetImageSourceBytes(asset, image);
+        if (!imageBytes.empty()) {
+            decodedPixels = stbi_load_from_memory(
+                reinterpret_cast<const stbi_uc*>(imageBytes.data()), static_cast<int>(imageBytes.size()), &width, &height, &channelCount, STBI_rgb_alpha);
+        }
     }
 
-    const fastgltf::Material& material = asset.materials[primitive.materialIndex.value()];
-    return glm::vec4(material.pbrData.baseColorFactor[0],
-        material.pbrData.baseColorFactor[1],
-        material.pbrData.baseColorFactor[2],
-        material.pbrData.baseColorFactor[3]);
+    if (decodedPixels == nullptr || width <= 0 || height <= 0) {
+        if (decodedPixels != nullptr) {
+            stbi_image_free(decodedPixels);
+        }
+        return std::nullopt;
+    }
+
+    textureAsset.width = static_cast<uint32_t>(width);
+    textureAsset.height = static_cast<uint32_t>(height);
+    textureAsset.rgba8Pixels.resize(static_cast<size_t>(width) * static_cast<size_t>(height) * 4u);
+    std::memcpy(textureAsset.rgba8Pixels.data(), decodedPixels, textureAsset.rgba8Pixels.size());
+    stbi_image_free(decodedPixels);
+
+    if (textureAsset.name.empty()) {
+        textureAsset.name = "SceneTexture";
+    }
+    return textureAsset;
+}
+
+SceneMaterial MakeDefaultMaterial()
+{
+    return SceneMaterial{};
+}
+
+std::vector<glm::vec4> GenerateTangents(std::span<const glm::vec3> positions,
+    std::span<const glm::vec3> normals,
+    std::span<const glm::vec2> texCoords,
+    std::span<const uint32_t> indices)
+{
+    std::vector<glm::vec4> tangents(positions.size(), glm::vec4(1.0f, 0.0f, 0.0f, 1.0f));
+    if (positions.empty() || texCoords.size() < positions.size() || indices.size() < 3) {
+        return tangents;
+    }
+
+    std::vector<glm::vec3> tan1(positions.size(), glm::vec3(0.0f));
+    std::vector<glm::vec3> tan2(positions.size(), glm::vec3(0.0f));
+
+    for (size_t triangle = 0; triangle + 2 < indices.size(); triangle += 3) {
+        const uint32_t i0 = indices[triangle + 0];
+        const uint32_t i1 = indices[triangle + 1];
+        const uint32_t i2 = indices[triangle + 2];
+        if (i0 >= positions.size() || i1 >= positions.size() || i2 >= positions.size()) {
+            continue;
+        }
+
+        const glm::vec3 edge1 = positions[i1] - positions[i0];
+        const glm::vec3 edge2 = positions[i2] - positions[i0];
+        const glm::vec2 uv1 = texCoords[i1] - texCoords[i0];
+        const glm::vec2 uv2 = texCoords[i2] - texCoords[i0];
+        const float denominator = uv1.x * uv2.y - uv1.y * uv2.x;
+        if (std::abs(denominator) < 1.0e-6f) {
+            continue;
+        }
+
+        const float inverse = 1.0f / denominator;
+        const glm::vec3 tangent = (edge1 * uv2.y - edge2 * uv1.y) * inverse;
+        const glm::vec3 bitangent = (edge2 * uv1.x - edge1 * uv2.x) * inverse;
+
+        tan1[i0] += tangent;
+        tan1[i1] += tangent;
+        tan1[i2] += tangent;
+        tan2[i0] += bitangent;
+        tan2[i1] += bitangent;
+        tan2[i2] += bitangent;
+    }
+
+    for (size_t vertexIndex = 0; vertexIndex < positions.size(); ++vertexIndex) {
+        glm::vec3 normal = vertexIndex < normals.size() ? normals[vertexIndex] : glm::vec3(0.0f, 1.0f, 0.0f);
+        if (!std::isfinite(normal.x) || !std::isfinite(normal.y) || !std::isfinite(normal.z) || glm::length(normal) < 1.0e-4f) {
+            normal = glm::vec3(0.0f, 1.0f, 0.0f);
+        } else {
+            normal = glm::normalize(normal);
+        }
+
+        glm::vec3 tangent = tan1[vertexIndex] - normal * glm::dot(normal, tan1[vertexIndex]);
+        if (!std::isfinite(tangent.x) || !std::isfinite(tangent.y) || !std::isfinite(tangent.z) || glm::length(tangent) < 1.0e-4f) {
+            tangent = std::abs(normal.y) > 0.99f ? glm::vec3(1.0f, 0.0f, 0.0f) : glm::normalize(glm::cross(glm::vec3(0.0f, 1.0f, 0.0f), normal));
+        } else {
+            tangent = glm::normalize(tangent);
+        }
+
+        const float handedness = glm::dot(glm::cross(normal, tangent), tan2[vertexIndex]) < 0.0f ? -1.0f : 1.0f;
+        tangents[vertexIndex] = glm::vec4(tangent, handedness);
+    }
+
+    return tangents;
 }
 
 void FinalizeBounds(SceneBounds& bounds, const std::vector<SceneVertex>& vertices)
@@ -132,6 +310,75 @@ SceneSurfaceBounds ComputeSurfaceBounds(const std::vector<SceneVertex>& vertices
     return bounds;
 }
 
+SceneBounds ComputeVertexRangeBounds(const std::vector<SceneVertex>& vertices, uint32_t firstVertex, uint32_t vertexCount)
+{
+    SceneBounds bounds{};
+    if (vertexCount == 0 || firstVertex >= vertices.size()) {
+        return bounds;
+    }
+
+    const uint32_t endVertex = std::min<uint32_t>(firstVertex + vertexCount, static_cast<uint32_t>(vertices.size()));
+    bounds.minimum = vertices[firstVertex].position;
+    bounds.maximum = vertices[firstVertex].position;
+    for (uint32_t vertexIndex = firstVertex; vertexIndex < endVertex; ++vertexIndex) {
+        bounds.minimum = glm::min(bounds.minimum, vertices[vertexIndex].position);
+        bounds.maximum = glm::max(bounds.maximum, vertices[vertexIndex].position);
+    }
+
+    bounds.center = (bounds.minimum + bounds.maximum) * 0.5f;
+    bounds.radius = 0.0f;
+    for (uint32_t vertexIndex = firstVertex; vertexIndex < endVertex; ++vertexIndex) {
+        bounds.radius = std::max(bounds.radius, glm::distance(bounds.center, vertices[vertexIndex].position));
+    }
+    return bounds;
+}
+
+void DestroyRayTracingResources(vesta::render::RenderDevice& device, GpuScene& gpu)
+{
+    if (gpu.topLevelAccelerationStructure != VK_NULL_HANDLE) {
+        device.GetRayTracingFunctions().vkDestroyAccelerationStructureKHR(device.GetDevice(), gpu.topLevelAccelerationStructure, nullptr);
+        gpu.topLevelAccelerationStructure = VK_NULL_HANDLE;
+    }
+    if (gpu.bottomLevelAccelerationStructure != VK_NULL_HANDLE) {
+        device.GetRayTracingFunctions().vkDestroyAccelerationStructureKHR(
+            device.GetDevice(), gpu.bottomLevelAccelerationStructure, nullptr);
+        gpu.bottomLevelAccelerationStructure = VK_NULL_HANDLE;
+    }
+    if (gpu.topLevelBuffer) {
+        device.DestroyBuffer(gpu.topLevelBuffer);
+        gpu.topLevelBuffer = {};
+    }
+    if (gpu.bottomLevelBuffer) {
+        device.DestroyBuffer(gpu.bottomLevelBuffer);
+        gpu.bottomLevelBuffer = {};
+    }
+    gpu.bottomLevelBuildMs = 0.0f;
+    gpu.topLevelBuildMs = 0.0f;
+}
+
+bool IntersectRaySphere(
+    const glm::vec3& rayOrigin, const glm::vec3& rayDirection, const glm::vec3& center, float radius, float& hitDistance)
+{
+    const glm::vec3 offset = rayOrigin - center;
+    const float b = glm::dot(offset, rayDirection);
+    const float c = glm::dot(offset, offset) - radius * radius;
+    const float discriminant = b * b - c;
+    if (discriminant < 0.0f) {
+        return false;
+    }
+
+    float t = -b - std::sqrt(discriminant);
+    if (t < 0.0f) {
+        t = -b + std::sqrt(discriminant);
+    }
+    if (t < 0.0f) {
+        return false;
+    }
+
+    hitDistance = t;
+    return true;
+}
+
 template <typename T>
 void CopyToMappedBuffer(vesta::render::RenderDevice& device, vesta::render::BufferHandle handle, std::span<const T> data)
 {
@@ -150,6 +397,312 @@ VkTransformMatrixKHR MakeIdentityTransformMatrix()
     matrix.matrix[1][1] = 1.0f;
     matrix.matrix[2][2] = 1.0f;
     return matrix;
+}
+
+enum class PlyFormat {
+    Unknown = 0,
+    Ascii,
+    BinaryLittleEndian,
+};
+
+enum class PlyScalarType {
+    Invalid = 0,
+    Int8,
+    Uint8,
+    Int16,
+    Uint16,
+    Int32,
+    Uint32,
+    Float32,
+    Float64,
+};
+
+struct PlyProperty {
+    std::string name;
+    PlyScalarType type{ PlyScalarType::Invalid };
+};
+
+struct PlyVertexLayout {
+    PlyFormat format{ PlyFormat::Unknown };
+    size_t vertexCount{ 0 };
+    std::vector<PlyProperty> properties;
+    size_t headerBytes{ 0 };
+};
+
+PlyScalarType ParsePlyScalarType(std::string_view type)
+{
+    if (type == "char" || type == "int8") {
+        return PlyScalarType::Int8;
+    }
+    if (type == "uchar" || type == "uint8") {
+        return PlyScalarType::Uint8;
+    }
+    if (type == "short" || type == "int16") {
+        return PlyScalarType::Int16;
+    }
+    if (type == "ushort" || type == "uint16") {
+        return PlyScalarType::Uint16;
+    }
+    if (type == "int" || type == "int32") {
+        return PlyScalarType::Int32;
+    }
+    if (type == "uint" || type == "uint32") {
+        return PlyScalarType::Uint32;
+    }
+    if (type == "float" || type == "float32") {
+        return PlyScalarType::Float32;
+    }
+    if (type == "double" || type == "float64") {
+        return PlyScalarType::Float64;
+    }
+    return PlyScalarType::Invalid;
+}
+
+size_t PlyScalarTypeSize(PlyScalarType type)
+{
+    switch (type) {
+    case PlyScalarType::Int8:
+    case PlyScalarType::Uint8:
+        return 1;
+    case PlyScalarType::Int16:
+    case PlyScalarType::Uint16:
+        return 2;
+    case PlyScalarType::Int32:
+    case PlyScalarType::Uint32:
+    case PlyScalarType::Float32:
+        return 4;
+    case PlyScalarType::Float64:
+        return 8;
+    case PlyScalarType::Invalid:
+    default:
+        return 0;
+    }
+}
+
+float Sigmoid(float value)
+{
+    return 1.0f / (1.0f + std::exp(-value));
+}
+
+float ReadPlyScalarAsFloat(const std::byte* source, PlyScalarType type)
+{
+    switch (type) {
+    case PlyScalarType::Int8:
+        return static_cast<float>(*reinterpret_cast<const int8_t*>(source));
+    case PlyScalarType::Uint8:
+        return static_cast<float>(*reinterpret_cast<const uint8_t*>(source));
+    case PlyScalarType::Int16:
+        return static_cast<float>(*reinterpret_cast<const int16_t*>(source));
+    case PlyScalarType::Uint16:
+        return static_cast<float>(*reinterpret_cast<const uint16_t*>(source));
+    case PlyScalarType::Int32:
+        return static_cast<float>(*reinterpret_cast<const int32_t*>(source));
+    case PlyScalarType::Uint32:
+        return static_cast<float>(*reinterpret_cast<const uint32_t*>(source));
+    case PlyScalarType::Float32:
+        return *reinterpret_cast<const float*>(source);
+    case PlyScalarType::Float64:
+        return static_cast<float>(*reinterpret_cast<const double*>(source));
+    case PlyScalarType::Invalid:
+    default:
+        return 0.0f;
+    }
+}
+
+bool ParsePlyHeader(const std::filesystem::path& path, PlyVertexLayout& layout)
+{
+    std::ifstream input(path, std::ios::binary);
+    if (!input.is_open()) {
+        return false;
+    }
+
+    std::string line;
+    if (!std::getline(input, line) || line != "ply") {
+        return false;
+    }
+    bool inVertexElement = false;
+    while (std::getline(input, line)) {
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+
+        std::istringstream stream(line);
+        std::string token;
+        stream >> token;
+        if (token == "format") {
+            std::string formatName;
+            stream >> formatName;
+            if (formatName == "ascii") {
+                layout.format = PlyFormat::Ascii;
+            } else if (formatName == "binary_little_endian") {
+                layout.format = PlyFormat::BinaryLittleEndian;
+            } else {
+                layout.format = PlyFormat::Unknown;
+            }
+        } else if (token == "element") {
+            std::string elementName;
+            size_t count = 0;
+            stream >> elementName >> count;
+            inVertexElement = elementName == "vertex";
+            if (inVertexElement) {
+                layout.vertexCount = count;
+            }
+        } else if (token == "property" && inVertexElement) {
+            std::string typeName;
+            std::string propertyName;
+            stream >> typeName;
+            if (typeName == "list") {
+                return false;
+            }
+            stream >> propertyName;
+            layout.properties.push_back(PlyProperty{
+                .name = propertyName,
+                .type = ParsePlyScalarType(typeName),
+            });
+        } else if (token == "end_header") {
+            layout.headerBytes = static_cast<size_t>(input.tellg());
+            return layout.format != PlyFormat::Unknown && layout.vertexCount > 0 && !layout.properties.empty();
+        }
+    }
+
+    return false;
+}
+
+bool ParseGaussianPly(const std::filesystem::path& path, ParsedScene& parsedScene)
+{
+    PlyVertexLayout layout;
+    if (!ParsePlyHeader(path, layout)) {
+        return false;
+    }
+
+    std::unordered_map<std::string, size_t> propertyIndex;
+    for (size_t i = 0; i < layout.properties.size(); ++i) {
+        propertyIndex.emplace(layout.properties[i].name, i);
+        if (layout.properties[i].type == PlyScalarType::Invalid) {
+            return false;
+        }
+    }
+
+    const auto readVertexFromValues = [&](const std::vector<float>& values) {
+        auto getValue = [&](std::string_view name, float fallback = 0.0f) {
+            const auto it = propertyIndex.find(std::string(name));
+            return it != propertyIndex.end() && it->second < values.size() ? values[it->second] : fallback;
+        };
+
+        SceneVertex vertex{};
+        vertex.position = glm::vec3(getValue("x"), getValue("y"), getValue("z"));
+
+        const bool hasShColor = propertyIndex.contains("f_dc_0") && propertyIndex.contains("f_dc_1") && propertyIndex.contains("f_dc_2");
+        if (hasShColor) {
+            vertex.color.r = glm::clamp(kShC0 * getValue("f_dc_0") + 0.5f, 0.0f, 1.0f);
+            vertex.color.g = glm::clamp(kShC0 * getValue("f_dc_1") + 0.5f, 0.0f, 1.0f);
+            vertex.color.b = glm::clamp(kShC0 * getValue("f_dc_2") + 0.5f, 0.0f, 1.0f);
+        } else if (propertyIndex.contains("red") && propertyIndex.contains("green") && propertyIndex.contains("blue")) {
+            vertex.color.r = getValue("red") > 1.0f ? getValue("red") / 255.0f : getValue("red");
+            vertex.color.g = getValue("green") > 1.0f ? getValue("green") / 255.0f : getValue("green");
+            vertex.color.b = getValue("blue") > 1.0f ? getValue("blue") / 255.0f : getValue("blue");
+        }
+
+        const bool hasScales =
+            propertyIndex.contains("scale_0") && propertyIndex.contains("scale_1") && propertyIndex.contains("scale_2");
+        if (hasScales) {
+            const float sx = std::exp(getValue("scale_0"));
+            const float sy = std::exp(getValue("scale_1"));
+            const float sz = std::exp(getValue("scale_2"));
+            vertex.splatParams.x = (sx + sy + sz) / 3.0f;
+        } else {
+            // Plain point clouds do not carry learned Gaussian scale, so use a
+            // tiny screen-space baseline that stays readable instead of a huge blur.
+            vertex.splatParams.x = 0.28f;
+        }
+
+        vertex.splatParams.y = propertyIndex.contains("opacity") ? Sigmoid(getValue("opacity")) : vertex.color.a;
+        vertex.color.a = 1.0f;
+        vertex.normal = glm::vec3(0.0f, 1.0f, 0.0f);
+        return vertex;
+    };
+
+    parsedScene.sceneKind = propertyIndex.contains("scale_0") && propertyIndex.contains("scale_1") && propertyIndex.contains("scale_2")
+        ? SceneKind::Gaussian
+        : SceneKind::PointCloud;
+    parsedScene.gaussianUsesNativeScale =
+        propertyIndex.contains("scale_0") && propertyIndex.contains("scale_1") && propertyIndex.contains("scale_2");
+    parsedScene.gaussianVertices.clear();
+    parsedScene.gaussianVertices.reserve(layout.vertexCount);
+
+    if (layout.format == PlyFormat::Ascii) {
+        std::ifstream input(path);
+        if (!input.is_open()) {
+            return false;
+        }
+
+        std::string line;
+        bool headerEnded = false;
+        while (std::getline(input, line)) {
+            if (!headerEnded) {
+                if (line == "end_header" || line == "end_header\r") {
+                    headerEnded = true;
+                }
+                continue;
+            }
+
+            if (line.empty()) {
+                continue;
+            }
+            std::istringstream stream(line);
+            std::vector<float> values;
+            values.reserve(layout.properties.size());
+            for (size_t property = 0; property < layout.properties.size(); ++property) {
+                float value = 0.0f;
+                stream >> value;
+                values.push_back(value);
+            }
+            parsedScene.gaussianVertices.push_back(readVertexFromValues(values));
+        }
+    } else {
+        std::ifstream input(path, std::ios::binary);
+        if (!input.is_open()) {
+            return false;
+        }
+        input.seekg(static_cast<std::streamoff>(layout.headerBytes), std::ios::beg);
+
+        size_t stride = 0;
+        for (const PlyProperty& property : layout.properties) {
+            stride += PlyScalarTypeSize(property.type);
+        }
+        if (stride == 0) {
+            return false;
+        }
+
+        std::vector<std::byte> rowBytes(stride);
+        for (size_t vertexIndex = 0; vertexIndex < layout.vertexCount; ++vertexIndex) {
+            input.read(reinterpret_cast<char*>(rowBytes.data()), static_cast<std::streamsize>(rowBytes.size()));
+            if (!input) {
+                return false;
+            }
+
+            std::vector<float> values;
+            values.reserve(layout.properties.size());
+            size_t offset = 0;
+            for (const PlyProperty& property : layout.properties) {
+                values.push_back(ReadPlyScalarAsFloat(rowBytes.data() + offset, property.type));
+                offset += PlyScalarTypeSize(property.type);
+            }
+            parsedScene.gaussianVertices.push_back(readVertexFromValues(values));
+        }
+    }
+
+    if (!parsedScene.gaussianVertices.empty()) {
+        parsedScene.objects.push_back(ParsedSceneObject{
+            .name = path.stem().string(),
+            .initialWorldTransform = glm::mat4(1.0f),
+            .worldTransform = glm::mat4(1.0f),
+            .firstPrimitive = 0,
+            .primitiveCount = 0,
+        });
+    }
+
+    return !parsedScene.gaussianVertices.empty();
 }
 
 template <typename T>
@@ -175,6 +728,33 @@ template <typename T>
 std::span<const std::byte> AsBytes(std::span<const T> data)
 {
     return std::as_bytes(data);
+}
+
+uint32_t RemapTextureIndex(uint32_t textureIndex, std::span<const GpuSceneTexture> textures)
+{
+    if (textureIndex == render::kInvalidResourceIndex || textureIndex >= textures.size()) {
+        return render::kInvalidResourceIndex;
+    }
+
+    return textures[textureIndex].bindlessSampledImage;
+}
+
+void RemapMaterialTextures(SceneMaterial& material, std::span<const GpuSceneTexture> textures)
+{
+    material.textureIndices0.x = RemapTextureIndex(material.textureIndices0.x, textures);
+    material.textureIndices0.y = RemapTextureIndex(material.textureIndices0.y, textures);
+    material.textureIndices0.z = RemapTextureIndex(material.textureIndices0.z, textures);
+    material.textureIndices0.w = RemapTextureIndex(material.textureIndices0.w, textures);
+    material.textureIndices1.x = RemapTextureIndex(material.textureIndices1.x, textures);
+}
+
+void RemapTriangleTextures(SceneTriangle& triangle, std::span<const GpuSceneTexture> textures)
+{
+    triangle.textureIndices0.x = RemapTextureIndex(triangle.textureIndices0.x, textures);
+    triangle.textureIndices0.y = RemapTextureIndex(triangle.textureIndices0.y, textures);
+    triangle.textureIndices0.z = RemapTextureIndex(triangle.textureIndices0.z, textures);
+    triangle.textureIndices0.w = RemapTextureIndex(triangle.textureIndices0.w, textures);
+    triangle.textureIndices1.x = RemapTextureIndex(triangle.textureIndices1.x, textures);
 }
 } // namespace
 
@@ -202,10 +782,29 @@ const GpuScene& Scene::GetGpuOrEmpty() const
 
 bool Scene::LoadFromFile(const std::filesystem::path& path)
 {
+    return ParseFromFile(path) && PrepareParsedScene();
+}
+
+bool Scene::ParseFromFile(const std::filesystem::path& path)
+{
+    _parsed.reset();
     _prepared.reset();
 
     if (!std::filesystem::exists(path)) {
         return false;
+    }
+
+    auto parsed = std::make_shared<ParsedScene>();
+    ParsedScene& parsedScene = *parsed;
+    parsedScene.sourcePath = path;
+    parsedScene.sceneKind = SceneKind::Empty;
+
+    if (path.extension() == ".ply" || path.extension() == ".PLY") {
+        if (!ParseGaussianPly(path, parsedScene)) {
+            return false;
+        }
+        _parsed = std::move(parsed);
+        return _parsed->IsLoaded();
     }
 
     fastgltf::Parser parser(fastgltf::Extensions::KHR_mesh_quantization);
@@ -233,8 +832,68 @@ bool Scene::LoadFromFile(const std::filesystem::path& path)
         return false;
     }
 
-    auto prepared = std::make_shared<PreparedScene>();
-    PreparedScene& sceneData = *prepared;
+    std::unordered_map<uint64_t, uint32_t> textureCache;
+    auto resolveSceneTextureIndex = [&](size_t gltfTextureIndex, bool srgb) -> uint32_t {
+        if (gltfTextureIndex >= gltf.textures.size()) {
+            return render::kInvalidResourceIndex;
+        }
+
+        const fastgltf::Texture& texture = gltf.textures.at(gltfTextureIndex);
+        if (!texture.imageIndex.has_value()) {
+            return render::kInvalidResourceIndex;
+        }
+
+        const size_t imageIndex = texture.imageIndex.value();
+        if (imageIndex >= gltf.images.size()) {
+            return render::kInvalidResourceIndex;
+        }
+
+        const uint64_t cacheKey = (static_cast<uint64_t>(imageIndex) << 1u) | (srgb ? 1ull : 0ull);
+        if (const auto it = textureCache.find(cacheKey); it != textureCache.end()) {
+            return it->second;
+        }
+
+        const std::optional<SceneTextureAsset> decodedTexture = DecodeTextureAsset(gltf, gltf.images.at(imageIndex), path, srgb);
+        if (!decodedTexture.has_value()) {
+            return render::kInvalidResourceIndex;
+        }
+
+        const uint32_t mappedTextureIndex = static_cast<uint32_t>(parsedScene.textures.size());
+        parsedScene.textures.push_back(*decodedTexture);
+        textureCache.emplace(cacheKey, mappedTextureIndex);
+        return mappedTextureIndex;
+    };
+
+    auto resolveTextureSlot = [&](const auto& textureInfo, bool srgb) -> uint32_t {
+        if (!textureInfo.has_value()) {
+            return render::kInvalidResourceIndex;
+        }
+        return resolveSceneTextureIndex(textureInfo->textureIndex, srgb);
+    };
+
+    parsedScene.materials.reserve(gltf.materials.size() + 1);
+    for (const fastgltf::Material& material : gltf.materials) {
+        SceneMaterial sceneMaterial = MakeDefaultMaterial();
+        sceneMaterial.baseColorFactor = glm::vec4(material.pbrData.baseColorFactor[0],
+            material.pbrData.baseColorFactor[1],
+            material.pbrData.baseColorFactor[2],
+            material.pbrData.baseColorFactor[3]);
+        sceneMaterial.emissiveFactor =
+            glm::vec4(material.emissiveFactor[0], material.emissiveFactor[1], material.emissiveFactor[2], 0.0f);
+        sceneMaterial.materialParams = glm::vec4(material.pbrData.metallicFactor,
+            material.pbrData.roughnessFactor,
+            material.occlusionTexture.has_value() ? material.occlusionTexture->strength : 1.0f,
+            material.normalTexture.has_value() ? material.normalTexture->scale : 1.0f);
+        sceneMaterial.textureIndices0 = glm::uvec4(resolveTextureSlot(material.pbrData.baseColorTexture, true),
+            resolveTextureSlot(material.pbrData.metallicRoughnessTexture, false),
+            resolveTextureSlot(material.normalTexture, false),
+            resolveTextureSlot(material.occlusionTexture, false));
+        sceneMaterial.textureIndices1 =
+            glm::uvec4(resolveTextureSlot(material.emissiveTexture, true), render::kInvalidResourceIndex, render::kInvalidResourceIndex, render::kInvalidResourceIndex);
+        parsedScene.materials.push_back(sceneMaterial);
+    }
+    const uint32_t defaultMaterialIndex = static_cast<uint32_t>(parsedScene.materials.size());
+    parsedScene.materials.push_back(MakeDefaultMaterial());
 
     const size_t sceneIndex = gltf.defaultScene.value_or(0);
     const fastgltf::Scene& rootScene = gltf.scenes.at(sceneIndex);
@@ -242,9 +901,17 @@ bool Scene::LoadFromFile(const std::filesystem::path& path)
     std::function<void(size_t, const glm::mat4&)> appendNode = [&](size_t nodeIndex, const glm::mat4& parentMatrix) {
         const fastgltf::Node& node = gltf.nodes.at(nodeIndex);
         const glm::mat4 worldMatrix = parentMatrix * NodeToMatrix(node);
-        const glm::mat3 normalMatrix = glm::transpose(glm::inverse(glm::mat3(worldMatrix)));
 
         if (node.meshIndex.has_value()) {
+            const uint32_t objectIndex = static_cast<uint32_t>(parsedScene.objects.size());
+            parsedScene.objects.push_back(ParsedSceneObject{
+                .name = node.name.empty() ? fmt::format("Object {}", objectIndex) : std::string(node.name),
+                .initialWorldTransform = worldMatrix,
+                .worldTransform = worldMatrix,
+                .firstPrimitive = static_cast<uint32_t>(parsedScene.primitives.size()),
+                .primitiveCount = 0,
+            });
+
             const fastgltf::Mesh& mesh = gltf.meshes.at(node.meshIndex.value());
             for (const fastgltf::Primitive& primitive : mesh.primitives) {
                 const auto positionAttribute = primitive.findAttribute("POSITION");
@@ -262,6 +929,19 @@ bool Scene::LoadFromFile(const std::filesystem::path& path)
                     normals = ReadVec3Accessor(gltf, gltf.accessors.at(normalAttribute->second));
                 }
 
+                std::vector<glm::vec2> texCoords(positions.size(), glm::vec2(0.0f));
+                const auto texCoordAttribute = primitive.findAttribute("TEXCOORD_0");
+                if (texCoordAttribute != primitive.attributes.end()) {
+                    texCoords = ReadVec2Accessor(gltf, gltf.accessors.at(texCoordAttribute->second));
+                }
+
+                std::vector<glm::vec4> tangents(positions.size(), glm::vec4(1.0f, 0.0f, 0.0f, 1.0f));
+                const auto tangentAttribute = primitive.findAttribute("TANGENT");
+                const bool hasTangents = tangentAttribute != primitive.attributes.end();
+                if (hasTangents) {
+                    tangents = ReadVec4Accessor(gltf, gltf.accessors.at(tangentAttribute->second));
+                }
+
                 std::vector<uint32_t> primitiveIndices;
                 if (primitive.indicesAccessor.has_value()) {
                     primitiveIndices = ReadIndexAccessor(gltf, gltf.accessors.at(primitive.indicesAccessor.value()));
@@ -272,62 +952,26 @@ bool Scene::LoadFromFile(const std::filesystem::path& path)
                     }
                 }
 
-                const glm::vec4 albedo = ReadBaseColor(gltf, primitive);
-                const uint32_t baseVertex = static_cast<uint32_t>(sceneData.vertices.size());
-                sceneData.vertices.reserve(sceneData.vertices.size() + positions.size());
-
-                for (size_t vertexIndex = 0; vertexIndex < positions.size(); ++vertexIndex) {
-                    const glm::vec3 worldPosition = glm::vec3(worldMatrix * glm::vec4(positions[vertexIndex], 1.0f));
-                    glm::vec3 worldNormal = glm::normalize(normalMatrix * normals[vertexIndex]);
-                    const bool normalFinite = std::isfinite(worldNormal.x) && std::isfinite(worldNormal.y) && std::isfinite(worldNormal.z);
-                    if (!normalFinite || glm::length(worldNormal) < 0.001f) {
-                        worldNormal = glm::vec3(0.0f, 1.0f, 0.0f);
-                    }
-
-                    sceneData.vertices.push_back(SceneVertex{
-                        .position = worldPosition,
-                        .normal = worldNormal,
-                        .color = albedo,
-                    });
+                if (!hasTangents) {
+                    tangents = GenerateTangents(positions, normals, texCoords, primitiveIndices);
                 }
 
-                if (!hasNormals) {
-                    for (size_t triangle = 0; triangle + 2 < primitiveIndices.size(); triangle += 3) {
-                        const uint32_t i0 = baseVertex + primitiveIndices[triangle + 0];
-                        const uint32_t i1 = baseVertex + primitiveIndices[triangle + 1];
-                        const uint32_t i2 = baseVertex + primitiveIndices[triangle + 2];
-                        const glm::vec3 faceNormal = glm::normalize(
-                            glm::cross(sceneData.vertices[i1].position - sceneData.vertices[i0].position,
-                                sceneData.vertices[i2].position - sceneData.vertices[i0].position));
-                        sceneData.vertices[i0].normal = faceNormal;
-                        sceneData.vertices[i1].normal = faceNormal;
-                        sceneData.vertices[i2].normal = faceNormal;
-                    }
-                }
-
-                const uint32_t firstIndex = static_cast<uint32_t>(sceneData.indices.size());
-                sceneData.indices.reserve(sceneData.indices.size() + primitiveIndices.size());
-                for (uint32_t index : primitiveIndices) {
-                    sceneData.indices.push_back(baseVertex + index);
-                }
-
-                sceneData.surfaces.push_back(SceneSurface{
-                    .firstIndex = firstIndex,
-                    .indexCount = static_cast<uint32_t>(primitiveIndices.size()),
+                const uint32_t materialIndex = primitive.materialIndex.has_value()
+                    ? static_cast<uint32_t>(primitive.materialIndex.value())
+                    : defaultMaterialIndex;
+                parsedScene.primitives.push_back(ParsedPrimitive{
+                    .positions = std::move(positions),
+                    .normals = std::move(normals),
+                    .tangents = std::move(tangents),
+                    .texCoords = std::move(texCoords),
+                    .indices = std::move(primitiveIndices),
+                    .worldTransform = worldMatrix,
+                    .objectIndex = objectIndex,
+                    .materialIndex = materialIndex,
+                    .hasNormals = hasNormals,
+                    .hasTangents = hasTangents,
                 });
-                sceneData.surfaceBounds.push_back(ComputeSurfaceBounds(sceneData.vertices, baseVertex, primitiveIndices));
-
-                for (size_t triangle = 0; triangle + 2 < primitiveIndices.size(); triangle += 3) {
-                    const SceneVertex& v0 = sceneData.vertices[baseVertex + primitiveIndices[triangle + 0]];
-                    const SceneVertex& v1 = sceneData.vertices[baseVertex + primitiveIndices[triangle + 1]];
-                    const SceneVertex& v2 = sceneData.vertices[baseVertex + primitiveIndices[triangle + 2]];
-                    sceneData.triangles.push_back(SceneTriangle{
-                        .p0 = glm::vec4(v0.position, 1.0f),
-                        .p1 = glm::vec4(v1.position, 1.0f),
-                        .p2 = glm::vec4(v2.position, 1.0f),
-                        .albedo = albedo,
-                    });
-                }
+                parsedScene.objects.back().primitiveCount += 1;
             }
         }
 
@@ -345,15 +989,184 @@ bool Scene::LoadFromFile(const std::filesystem::path& path)
 
         appendNode(rootScene.nodeIndices[rootIndex], rootTransform);
     }
+    if (!parsedScene.primitives.empty()) {
+        parsedScene.sceneKind = SceneKind::Mesh;
+    }
+    _parsed = std::move(parsed);
+    return _parsed->IsLoaded();
+}
+
+bool Scene::PrepareParsedScene()
+{
+    _prepared.reset();
+    const std::shared_ptr<ParsedScene> parsed = _parsed;
+    if (!parsed || !parsed->IsLoaded()) {
+        return false;
+    }
+
+    auto prepared = std::make_shared<PreparedScene>();
+    PreparedScene& sceneData = *prepared;
+    sceneData.sceneKind = parsed->sceneKind;
+    sceneData.materials = parsed->materials;
+    sceneData.objects.resize(parsed->objects.size());
+    for (size_t objectIndex = 0; objectIndex < parsed->objects.size(); ++objectIndex) {
+        const ParsedSceneObject& parsedObject = parsed->objects[objectIndex];
+        sceneData.objects[objectIndex] = SceneObject{
+            .name = parsedObject.name,
+            .initialWorldTransform = parsedObject.initialWorldTransform,
+            .worldTransform = parsedObject.worldTransform,
+            .firstPrimitive = parsedObject.firstPrimitive,
+            .primitiveCount = parsedObject.primitiveCount,
+        };
+    }
+
+    if (parsed->sceneKind == SceneKind::Gaussian || parsed->sceneKind == SceneKind::PointCloud) {
+        sceneData.vertices = parsed->gaussianVertices;
+        if (!sceneData.objects.empty()) {
+            sceneData.objects.front().firstVertex = 0;
+            sceneData.objects.front().vertexCount = static_cast<uint32_t>(sceneData.vertices.size());
+        }
+    } else {
+        for (const ParsedPrimitive& primitive : parsed->primitives) {
+            const uint32_t baseVertex = static_cast<uint32_t>(sceneData.vertices.size());
+            const glm::mat3 normalMatrix = glm::transpose(glm::inverse(glm::mat3(primitive.worldTransform)));
+            const glm::mat3 tangentMatrix = glm::mat3(primitive.worldTransform);
+            const SceneMaterial& material = sceneData.materials.at(primitive.materialIndex);
+            SceneObject& sceneObject = sceneData.objects.at(primitive.objectIndex);
+
+            if (sceneObject.vertexCount == 0) {
+                sceneObject.firstVertex = baseVertex;
+                sceneObject.firstSurface = static_cast<uint32_t>(sceneData.surfaces.size());
+                sceneObject.firstTriangle = static_cast<uint32_t>(sceneData.triangles.size());
+            }
+
+            sceneData.vertices.reserve(sceneData.vertices.size() + primitive.positions.size());
+            for (size_t vertexIndex = 0; vertexIndex < primitive.positions.size(); ++vertexIndex) {
+                const glm::vec3 worldPosition =
+                    glm::vec3(primitive.worldTransform * glm::vec4(primitive.positions[vertexIndex], 1.0f));
+                glm::vec3 worldNormal = glm::vec3(0.0f, 1.0f, 0.0f);
+                if (vertexIndex < primitive.normals.size()) {
+                    worldNormal = glm::normalize(normalMatrix * primitive.normals[vertexIndex]);
+                }
+
+                const bool normalFinite =
+                    std::isfinite(worldNormal.x) && std::isfinite(worldNormal.y) && std::isfinite(worldNormal.z);
+                if (!normalFinite || glm::length(worldNormal) < 0.001f) {
+                    worldNormal = glm::vec3(0.0f, 1.0f, 0.0f);
+                }
+
+                glm::vec4 tangent = vertexIndex < primitive.tangents.size() ? primitive.tangents[vertexIndex] : glm::vec4(1.0f, 0.0f, 0.0f, 1.0f);
+                glm::vec3 worldTangent = tangentMatrix * glm::vec3(tangent);
+                worldTangent = worldTangent - worldNormal * glm::dot(worldNormal, worldTangent);
+                const bool tangentFinite =
+                    std::isfinite(worldTangent.x) && std::isfinite(worldTangent.y) && std::isfinite(worldTangent.z);
+                if (!tangentFinite || glm::length(worldTangent) < 0.001f) {
+                    worldTangent = std::abs(worldNormal.y) > 0.99f ? glm::vec3(1.0f, 0.0f, 0.0f)
+                                                                   : glm::normalize(glm::cross(glm::vec3(0.0f, 1.0f, 0.0f), worldNormal));
+                    tangent.w = 1.0f;
+                } else {
+                    worldTangent = glm::normalize(worldTangent);
+                }
+
+                sceneData.vertices.push_back(SceneVertex{
+                    .position = worldPosition,
+                    .normal = worldNormal,
+                    .tangent = glm::vec4(worldTangent, tangent.w),
+                    .color = material.baseColorFactor,
+                    .texCoord = vertexIndex < primitive.texCoords.size() ? primitive.texCoords[vertexIndex] : glm::vec2(0.0f),
+                    .splatParams = glm::vec2(1.0f, material.baseColorFactor.a),
+                    .materialIndex = primitive.materialIndex,
+                });
+            }
+            sceneObject.vertexCount += static_cast<uint32_t>(primitive.positions.size());
+
+            if (!primitive.hasNormals) {
+                for (size_t triangle = 0; triangle + 2 < primitive.indices.size(); triangle += 3) {
+                    const uint32_t i0 = baseVertex + primitive.indices[triangle + 0];
+                    const uint32_t i1 = baseVertex + primitive.indices[triangle + 1];
+                    const uint32_t i2 = baseVertex + primitive.indices[triangle + 2];
+                    const glm::vec3 faceNormal = glm::normalize(
+                        glm::cross(sceneData.vertices[i1].position - sceneData.vertices[i0].position,
+                            sceneData.vertices[i2].position - sceneData.vertices[i0].position));
+                    sceneData.vertices[i0].normal = faceNormal;
+                    sceneData.vertices[i1].normal = faceNormal;
+                    sceneData.vertices[i2].normal = faceNormal;
+                }
+            }
+
+            const uint32_t firstIndex = static_cast<uint32_t>(sceneData.indices.size());
+            sceneData.indices.reserve(sceneData.indices.size() + primitive.indices.size());
+            for (uint32_t index : primitive.indices) {
+                sceneData.indices.push_back(baseVertex + index);
+            }
+
+            sceneData.surfaces.push_back(SceneSurface{
+                .firstIndex = firstIndex,
+                .indexCount = static_cast<uint32_t>(primitive.indices.size()),
+            });
+            sceneData.surfaceBounds.push_back(ComputeSurfaceBounds(sceneData.vertices, baseVertex, primitive.indices));
+            sceneObject.surfaceCount += 1;
+
+            for (size_t triangle = 0; triangle + 2 < primitive.indices.size(); triangle += 3) {
+                const SceneVertex& v0 = sceneData.vertices[baseVertex + primitive.indices[triangle + 0]];
+                const SceneVertex& v1 = sceneData.vertices[baseVertex + primitive.indices[triangle + 1]];
+                const SceneVertex& v2 = sceneData.vertices[baseVertex + primitive.indices[triangle + 2]];
+                sceneData.triangles.push_back(SceneTriangle{
+                    .p0 = glm::vec4(v0.position, 1.0f),
+                    .p1 = glm::vec4(v1.position, 1.0f),
+                    .p2 = glm::vec4(v2.position, 1.0f),
+                    .n0 = glm::vec4(glm::normalize(v0.normal), 0.0f),
+                    .n1 = glm::vec4(glm::normalize(v1.normal), 0.0f),
+                    .n2 = glm::vec4(glm::normalize(v2.normal), 0.0f),
+                    .uv0 = glm::vec4(v0.texCoord, 0.0f, 0.0f),
+                    .uv1 = glm::vec4(v1.texCoord, 0.0f, 0.0f),
+                    .uv2 = glm::vec4(v2.texCoord, 0.0f, 0.0f),
+                    .baseColorFactor = material.baseColorFactor,
+                    .emissiveFactor = material.emissiveFactor,
+                    .materialParams = material.materialParams,
+                    .textureIndices0 = material.textureIndices0,
+                    .textureIndices1 = material.textureIndices1,
+                });
+            }
+            sceneObject.triangleCount += static_cast<uint32_t>(primitive.indices.size() / 3);
+        }
+    }
 
     FinalizeBounds(sceneData.bounds, sceneData.vertices);
-    sceneData.sourcePath = path;
+    if (parsed->sceneKind == SceneKind::Gaussian || parsed->sceneKind == SceneKind::PointCloud) {
+        if (!sceneData.objects.empty()) {
+            sceneData.objects.front().bounds = sceneData.bounds;
+        }
+    } else {
+        for (SceneObject& object : sceneData.objects) {
+            object.bounds = ComputeVertexRangeBounds(sceneData.vertices, object.firstVertex, object.vertexCount);
+        }
+    }
+
+    if ((parsed->sceneKind == SceneKind::Gaussian || parsed->sceneKind == SceneKind::PointCloud) && sceneData.bounds.radius > 0.0f) {
+        if (parsed->gaussianUsesNativeScale) {
+            for (SceneVertex& vertex : sceneData.vertices) {
+                vertex.splatParams.x = glm::clamp(vertex.splatParams.x / sceneData.bounds.radius * 220.0f, 0.18f, 6.0f);
+                vertex.splatParams.y = glm::clamp(vertex.splatParams.y, 0.04f, 1.0f);
+            }
+        } else {
+            const float pointCloudBaseSize =
+                glm::clamp(120.0f / std::sqrt(static_cast<float>(std::max<size_t>(sceneData.vertices.size(), 1))), 0.16f, 0.42f);
+            for (SceneVertex& vertex : sceneData.vertices) {
+                vertex.splatParams.x = pointCloudBaseSize;
+                vertex.splatParams.y = glm::clamp(std::max(vertex.splatParams.y, 0.85f), 0.85f, 1.0f);
+            }
+        }
+    }
+    sceneData.sourcePath = parsed->sourcePath;
+    sceneData.textures = parsed->textures;
     _prepared = std::move(prepared);
     return IsLoaded();
 }
 
 void Scene::UploadToGpu(vesta::render::RenderDevice& device, const vesta::render::SceneUploadOptions& options)
 {
+    const auto geometryStart = std::chrono::steady_clock::now();
     AllocateGpuResources(device, options);
     const PreparedScene& prepared = GetPreparedOrEmpty();
     if (_gpu == nullptr || !prepared.IsLoaded()) {
@@ -362,8 +1175,28 @@ void Scene::UploadToGpu(vesta::render::RenderDevice& device, const vesta::render
 
     if (options.useDeviceLocalSceneBuffers) {
         UploadGpuResourceChunk(device, SceneUploadResource::Vertex, 0, sizeof(SceneVertex) * prepared.vertices.size());
-        UploadGpuResourceChunk(device, SceneUploadResource::Index, 0, sizeof(uint32_t) * prepared.indices.size());
-        UploadGpuResourceChunk(device, SceneUploadResource::Triangle, 0, sizeof(SceneTriangle) * prepared.triangles.size());
+        if (!prepared.materials.empty()) {
+            UploadGpuResourceChunk(device, SceneUploadResource::Material, 0, sizeof(SceneMaterial) * prepared.materials.size());
+        }
+        if (!prepared.indices.empty()) {
+            UploadGpuResourceChunk(device, SceneUploadResource::Index, 0, sizeof(uint32_t) * prepared.indices.size());
+        }
+        if (!prepared.triangles.empty()) {
+            UploadGpuResourceChunk(device, SceneUploadResource::Triangle, 0, sizeof(SceneTriangle) * prepared.triangles.size());
+        }
+        device.FlushUploadBatch();
+    }
+    _gpu->geometryUploadMs =
+        std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - geometryStart).count();
+
+    _gpu->textureUploadMs = 0.0f;
+    if (options.textureStreamingEnabled) {
+        const auto textureStart = std::chrono::steady_clock::now();
+        for (size_t textureIndex = 0; textureIndex < prepared.textures.size(); ++textureIndex) {
+            UploadGpuTexture(device, textureIndex);
+        }
+        _gpu->textureUploadMs =
+            std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - textureStart).count();
     }
 
     if (options.buildRayTracingStructuresOnLoad && device.IsRayTracingSupported() && !prepared.indices.empty()) {
@@ -395,36 +1228,107 @@ void Scene::AllocateGpuResources(vesta::render::RenderDevice& device, const vest
     const VkBufferUsageFlags indexUsage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
         | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
     const VkBufferUsageFlags triangleUsage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    const VkBufferUsageFlags materialUsage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+
+    gpu.textures.resize(prepared.textures.size());
+    if (options.textureStreamingEnabled) {
+        const VmaMemoryUsage textureMemoryUsage =
+            options.useDeviceLocalTextures ? VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE : VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+        for (size_t textureIndex = 0; textureIndex < prepared.textures.size(); ++textureIndex) {
+            const SceneTextureAsset& texture = prepared.textures[textureIndex];
+            if (!texture.IsValid()) {
+                continue;
+            }
+
+            gpu.textures[textureIndex].image = device.CreateImage(vesta::render::ImageDesc{
+                .extent = VkExtent3D{ texture.width, texture.height, 1 },
+                .format = texture.srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM,
+                .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                .aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT,
+                .memoryUsage = textureMemoryUsage,
+                .registerBindlessSampled = true,
+                .debugName = texture.name.empty() ? "SceneBaseColorTexture" : texture.name,
+            });
+            gpu.textures[textureIndex].bindlessSampledImage =
+                device.GetImageResource(gpu.textures[textureIndex].image).bindless.sampledImage;
+        }
+    }
+
+    gpu.rasterVertices = prepared.vertices;
+    gpu.triangles = prepared.triangles;
+    gpu.materials = prepared.materials;
+    if (!options.textureStreamingEnabled) {
+        for (SceneMaterial& material : gpu.materials) {
+            material.textureIndices0 = glm::uvec4(render::kInvalidResourceIndex);
+            material.textureIndices1 = glm::uvec4(render::kInvalidResourceIndex);
+        }
+        for (SceneTriangle& triangle : gpu.triangles) {
+            triangle.textureIndices0 = glm::uvec4(render::kInvalidResourceIndex);
+            triangle.textureIndices1 = glm::uvec4(render::kInvalidResourceIndex);
+        }
+    } else {
+        for (SceneMaterial& material : gpu.materials) {
+            RemapMaterialTextures(material, gpu.textures);
+        }
+        for (SceneTriangle& triangle : gpu.triangles) {
+            RemapTriangleTextures(triangle, gpu.textures);
+        }
+    }
 
     if (options.useDeviceLocalSceneBuffers) {
-        gpu.vertexBuffer = device.CreateBuffer(vesta::render::BufferDesc{
-            .size = sizeof(SceneVertex) * prepared.vertices.size(),
-            .usage = vertexUsage | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-            .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-            .registerBindlessStorage = false,
-            .debugName = "SceneVertices",
-        });
-        gpu.indexBuffer = device.CreateBuffer(vesta::render::BufferDesc{
-            .size = sizeof(uint32_t) * prepared.indices.size(),
-            .usage = indexUsage | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-            .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-            .registerBindlessStorage = false,
-            .debugName = "SceneIndices",
-        });
-        gpu.triangleBuffer = device.CreateBuffer(vesta::render::BufferDesc{
-            .size = sizeof(SceneTriangle) * prepared.triangles.size(),
-            .usage = triangleUsage,
-            .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
-            .registerBindlessStorage = true,
-            .debugName = "SceneTriangles",
-        });
+        if (!gpu.rasterVertices.empty()) {
+            gpu.vertexBuffer = device.CreateBuffer(vesta::render::BufferDesc{
+                .size = sizeof(SceneVertex) * gpu.rasterVertices.size(),
+                .usage = vertexUsage | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                .registerBindlessStorage = false,
+                .debugName = "SceneVertices",
+            });
+        }
+        if (!prepared.indices.empty()) {
+            gpu.indexBuffer = device.CreateBuffer(vesta::render::BufferDesc{
+                .size = sizeof(uint32_t) * prepared.indices.size(),
+                .usage = indexUsage | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                .registerBindlessStorage = false,
+                .debugName = "SceneIndices",
+            });
+        }
+        if (!prepared.triangles.empty()) {
+            gpu.triangleBuffer = device.CreateBuffer(vesta::render::BufferDesc{
+                .size = sizeof(SceneTriangle) * gpu.triangles.size(),
+                .usage = triangleUsage,
+                .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                .registerBindlessStorage = true,
+                .debugName = "SceneTriangles",
+            });
+        }
+        if (!gpu.materials.empty()) {
+            gpu.materialBuffer = device.CreateBuffer(vesta::render::BufferDesc{
+                .size = sizeof(SceneMaterial) * gpu.materials.size(),
+                .usage = materialUsage,
+                .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                .registerBindlessStorage = true,
+                .debugName = "SceneMaterials",
+            });
+        }
     } else {
-        gpu.vertexBuffer =
-            CreateHostBufferAndCopy(device, std::span<const SceneVertex>(prepared.vertices), vertexUsage, "SceneVertices", false);
-        gpu.indexBuffer =
-            CreateHostBufferAndCopy(device, std::span<const uint32_t>(prepared.indices), indexUsage, "SceneIndices", false);
-        gpu.triangleBuffer = CreateHostBufferAndCopy(
-            device, std::span<const SceneTriangle>(prepared.triangles), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "SceneTriangles", true);
+        if (!gpu.rasterVertices.empty()) {
+            gpu.vertexBuffer =
+                CreateHostBufferAndCopy(device, std::span<const SceneVertex>(gpu.rasterVertices), vertexUsage, "SceneVertices", false);
+        }
+        if (!prepared.indices.empty()) {
+            gpu.indexBuffer =
+                CreateHostBufferAndCopy(device, std::span<const uint32_t>(prepared.indices), indexUsage, "SceneIndices", false);
+        }
+        if (!prepared.triangles.empty()) {
+            gpu.triangleBuffer = CreateHostBufferAndCopy(
+                device, std::span<const SceneTriangle>(gpu.triangles), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "SceneTriangles", true);
+        }
+        if (!gpu.materials.empty()) {
+            gpu.materialBuffer = CreateHostBufferAndCopy(
+                device, std::span<const SceneMaterial>(gpu.materials), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "SceneMaterials", true);
+        }
     }
 }
 
@@ -438,54 +1342,58 @@ void Scene::UploadGpuResourceChunk(
     const PreparedScene& prepared = GetPreparedOrEmpty();
     std::span<const std::byte> sourceBytes;
     vesta::render::BufferHandle destinationBuffer;
-    const char* debugName = nullptr;
-
     switch (resource) {
     case SceneUploadResource::Vertex:
-        sourceBytes = AsBytes(std::span<const SceneVertex>(prepared.vertices));
+        sourceBytes = AsBytes(std::span<const SceneVertex>(GetGpuOrEmpty().rasterVertices));
         destinationBuffer = _gpu->vertexBuffer;
-        debugName = "SceneVerticesStagingChunk";
+        break;
+    case SceneUploadResource::Material:
+        sourceBytes = AsBytes(std::span<const SceneMaterial>(GetGpuOrEmpty().materials));
+        destinationBuffer = _gpu->materialBuffer;
         break;
     case SceneUploadResource::Index:
         sourceBytes = AsBytes(std::span<const uint32_t>(prepared.indices));
         destinationBuffer = _gpu->indexBuffer;
-        debugName = "SceneIndicesStagingChunk";
         break;
     case SceneUploadResource::Triangle:
     default:
-        sourceBytes = AsBytes(std::span<const SceneTriangle>(prepared.triangles));
+        sourceBytes = AsBytes(std::span<const SceneTriangle>(GetGpuOrEmpty().triangles));
         destinationBuffer = _gpu->triangleBuffer;
-        debugName = "SceneTrianglesStagingChunk";
         break;
     }
 
     if (!destinationBuffer || offsetBytes >= sourceBytes.size()) {
+        VESTA_ASSERT_STATE(destinationBuffer || sourceBytes.empty(), "UploadGpuResourceChunk lost its destination buffer.");
         return;
     }
 
     const size_t clampedSize = std::min(sizeBytes, sourceBytes.size() - offsetBytes);
+    VESTA_ASSERT_STATE(offsetBytes + clampedSize <= sourceBytes.size(), "UploadGpuResourceChunk exceeded source byte range.");
     const std::span<const std::byte> chunkBytes = sourceBytes.subspan(offsetBytes, clampedSize);
-    const vesta::render::BufferHandle stagingBuffer = device.CreateBuffer(vesta::render::BufferDesc{
-        .size = clampedSize,
-        .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-        .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
-        .allocationFlags = kMappedHostFlags,
-        .debugName = debugName,
-    });
+    device.UploadBufferData(destinationBuffer, static_cast<VkDeviceSize>(offsetBytes), chunkBytes);
+}
 
-    const vesta::render::AllocatedBuffer& stagingResource = device.GetBufferResource(stagingBuffer);
-    std::memcpy(stagingResource.allocationInfo.pMappedData, chunkBytes.data(), clampedSize);
+void Scene::UploadGpuTexture(vesta::render::RenderDevice& device, size_t textureIndex)
+{
+    if (_gpu == nullptr) {
+        return;
+    }
 
-    device.ImmediateSubmit([&](VkCommandBuffer commandBuffer) {
-        const VkBufferCopy copyRegion{
-            .srcOffset = 0,
-            .dstOffset = static_cast<VkDeviceSize>(offsetBytes),
-            .size = static_cast<VkDeviceSize>(clampedSize),
-        };
-        vkCmdCopyBuffer(commandBuffer, device.GetBuffer(stagingBuffer), device.GetBuffer(destinationBuffer), 1, &copyRegion);
-    });
+    const PreparedScene& prepared = GetPreparedOrEmpty();
+    if (textureIndex >= prepared.textures.size() || textureIndex >= _gpu->textures.size()) {
+        return;
+    }
 
-    device.DestroyBuffer(stagingBuffer);
+    const SceneTextureAsset& texture = prepared.textures[textureIndex];
+    GpuSceneTexture& gpuTexture = _gpu->textures[textureIndex];
+    if (!texture.IsValid() || !gpuTexture.image || gpuTexture.resident) {
+        return;
+    }
+
+    device.UploadImageData(gpuTexture.image,
+        std::span<const std::byte>(
+            reinterpret_cast<const std::byte*>(texture.rgba8Pixels.data()), texture.rgba8Pixels.size()));
+    gpuTexture.resident = true;
 }
 
 void Scene::BuildBottomLevelAccelerationStructure(vesta::render::RenderDevice& device)
@@ -498,6 +1406,8 @@ void Scene::BuildBottomLevelAccelerationStructure(vesta::render::RenderDevice& d
     if (prepared.indices.empty() || !device.IsRayTracingSupported()) {
         return;
     }
+
+    VESTA_ASSERT_STATE(_gpu->vertexBuffer && _gpu->indexBuffer, "BLAS build requires uploaded vertex and index buffers.");
 
     GpuScene& gpu = *_gpu;
     const auto& rt = device.GetRayTracingFunctions();
@@ -572,6 +1482,8 @@ void Scene::BuildTopLevelAccelerationStructure(vesta::render::RenderDevice& devi
     if (_gpu == nullptr || _gpu->bottomLevelAccelerationStructure == VK_NULL_HANDLE || !device.IsRayTracingSupported()) {
         return;
     }
+
+    VESTA_ASSERT_STATE(_gpu->bottomLevelBuffer, "TLAS build requires a valid BLAS buffer.");
 
     GpuScene& gpu = *_gpu;
     const auto& rt = device.GetRayTracingFunctions();
@@ -689,6 +1601,19 @@ void Scene::DestroyGpu(vesta::render::RenderDevice& device)
         device.DestroyBuffer(_gpu->triangleBuffer);
         _gpu->triangleBuffer = {};
     }
+    if (_gpu->materialBuffer) {
+        device.DestroyBuffer(_gpu->materialBuffer);
+        _gpu->materialBuffer = {};
+    }
+    for (GpuSceneTexture& texture : _gpu->textures) {
+        if (texture.image) {
+            device.DestroyImage(texture.image);
+            texture.image = {};
+        }
+        texture.bindlessSampledImage = render::kInvalidResourceIndex;
+        texture.resident = false;
+    }
+    _gpu->textures.clear();
     if (_gpu->indexBuffer) {
         device.DestroyBuffer(_gpu->indexBuffer);
         _gpu->indexBuffer = {};
@@ -697,6 +1622,154 @@ void Scene::DestroyGpu(vesta::render::RenderDevice& device)
         device.DestroyBuffer(_gpu->vertexBuffer);
         _gpu->vertexBuffer = {};
     }
+    _gpu->triangles.clear();
+    _gpu->materials.clear();
+    _gpu->rasterVertices.clear();
     _gpu.reset();
+}
+
+size_t Scene::GetResidentTextureCount() const
+{
+    const GpuScene& gpu = GetGpuOrEmpty();
+    return std::count_if(gpu.textures.begin(), gpu.textures.end(), [](const GpuSceneTexture& texture) {
+        return texture.resident;
+    });
+}
+
+bool Scene::HasResidentTexture(size_t textureIndex) const
+{
+    const GpuScene& gpu = GetGpuOrEmpty();
+    return textureIndex < gpu.textures.size() && gpu.textures[textureIndex].resident;
+}
+
+uint32_t Scene::GetTextureBindlessIndex(size_t textureIndex) const
+{
+    const GpuScene& gpu = GetGpuOrEmpty();
+    if (textureIndex >= gpu.textures.size()) {
+        return render::kInvalidResourceIndex;
+    }
+    return gpu.textures[textureIndex].bindlessSampledImage;
+}
+
+std::optional<uint32_t> Scene::PickObject(const glm::vec3& rayOrigin, const glm::vec3& rayDirection) const
+{
+    const PreparedScene& prepared = GetPreparedOrEmpty();
+    if (prepared.objects.empty()) {
+        return std::nullopt;
+    }
+
+    float closestDistance = std::numeric_limits<float>::max();
+    std::optional<uint32_t> pickedObject;
+    for (uint32_t objectIndex = 0; objectIndex < static_cast<uint32_t>(prepared.objects.size()); ++objectIndex) {
+        const SceneObject& object = prepared.objects[objectIndex];
+        float hitDistance = 0.0f;
+        const float radius = std::max(object.bounds.radius, 0.15f);
+        if (!IntersectRaySphere(rayOrigin, rayDirection, object.bounds.center, radius, hitDistance)) {
+            continue;
+        }
+        if (hitDistance < closestDistance) {
+            closestDistance = hitDistance;
+            pickedObject = objectIndex;
+        }
+    }
+
+    return pickedObject;
+}
+
+bool Scene::TranslateObject(render::RenderDevice& device, uint32_t objectIndex, const glm::vec3& deltaWorld)
+{
+    if (glm::dot(deltaWorld, deltaWorld) <= 1.0e-10f) {
+        return true;
+    }
+
+    const std::shared_ptr<PreparedScene> prepared = _prepared;
+    const std::shared_ptr<ParsedScene> parsed = _parsed;
+    if (!prepared || objectIndex >= prepared->objects.size()) {
+        return false;
+    }
+
+    SceneObject& object = prepared->objects[objectIndex];
+    object.worldTransform[3] = glm::vec4(glm::vec3(object.worldTransform[3]) + deltaWorld, 1.0f);
+    object.bounds.minimum += deltaWorld;
+    object.bounds.maximum += deltaWorld;
+    object.bounds.center += deltaWorld;
+
+    if (parsed && objectIndex < parsed->objects.size()) {
+        ParsedSceneObject& parsedObject = parsed->objects[objectIndex];
+        parsedObject.worldTransform[3] = glm::vec4(glm::vec3(parsedObject.worldTransform[3]) + deltaWorld, 1.0f);
+        const uint32_t primitiveEnd = parsedObject.firstPrimitive + parsedObject.primitiveCount;
+        for (uint32_t primitiveIndex = parsedObject.firstPrimitive; primitiveIndex < primitiveEnd; ++primitiveIndex) {
+            parsed->primitives[primitiveIndex].worldTransform[3] =
+                glm::vec4(glm::vec3(parsed->primitives[primitiveIndex].worldTransform[3]) + deltaWorld, 1.0f);
+        }
+    }
+
+    const uint32_t vertexEnd = std::min<uint32_t>(object.firstVertex + object.vertexCount, static_cast<uint32_t>(prepared->vertices.size()));
+    for (uint32_t vertexIndex = object.firstVertex; vertexIndex < vertexEnd; ++vertexIndex) {
+        prepared->vertices[vertexIndex].position += deltaWorld;
+    }
+
+    const uint32_t surfaceEnd =
+        std::min<uint32_t>(object.firstSurface + object.surfaceCount, static_cast<uint32_t>(prepared->surfaceBounds.size()));
+    for (uint32_t surfaceIndex = object.firstSurface; surfaceIndex < surfaceEnd; ++surfaceIndex) {
+        prepared->surfaceBounds[surfaceIndex].center += deltaWorld;
+    }
+
+    const uint32_t triangleEnd =
+        std::min<uint32_t>(object.firstTriangle + object.triangleCount, static_cast<uint32_t>(prepared->triangles.size()));
+    for (uint32_t triangleIndex = object.firstTriangle; triangleIndex < triangleEnd; ++triangleIndex) {
+        prepared->triangles[triangleIndex].p0 += glm::vec4(deltaWorld, 0.0f);
+        prepared->triangles[triangleIndex].p1 += glm::vec4(deltaWorld, 0.0f);
+        prepared->triangles[triangleIndex].p2 += glm::vec4(deltaWorld, 0.0f);
+    }
+
+    FinalizeBounds(prepared->bounds, prepared->vertices);
+
+    if (_gpu == nullptr) {
+        return true;
+    }
+
+    GpuScene& gpu = *_gpu;
+    const uint32_t gpuVertexEnd =
+        std::min<uint32_t>(object.firstVertex + object.vertexCount, static_cast<uint32_t>(gpu.rasterVertices.size()));
+    for (uint32_t vertexIndex = object.firstVertex; vertexIndex < gpuVertexEnd; ++vertexIndex) {
+        gpu.rasterVertices[vertexIndex].position += deltaWorld;
+    }
+
+    const uint32_t gpuTriangleEnd =
+        std::min<uint32_t>(object.firstTriangle + object.triangleCount, static_cast<uint32_t>(gpu.triangles.size()));
+    for (uint32_t triangleIndex = object.firstTriangle; triangleIndex < gpuTriangleEnd; ++triangleIndex) {
+        gpu.triangles[triangleIndex].p0 += glm::vec4(deltaWorld, 0.0f);
+        gpu.triangles[triangleIndex].p1 += glm::vec4(deltaWorld, 0.0f);
+        gpu.triangles[triangleIndex].p2 += glm::vec4(deltaWorld, 0.0f);
+    }
+
+    if (gpu.vertexBuffer && object.vertexCount > 0) {
+        const std::span<const std::byte> vertexBytes = AsBytes(std::span<const SceneVertex>(gpu.rasterVertices));
+        const size_t offsetBytes = static_cast<size_t>(object.firstVertex) * sizeof(SceneVertex);
+        const size_t sizeBytes = static_cast<size_t>(object.vertexCount) * sizeof(SceneVertex);
+        device.UploadBufferData(gpu.vertexBuffer, offsetBytes, vertexBytes.subspan(offsetBytes, sizeBytes));
+    }
+    if (gpu.triangleBuffer && object.triangleCount > 0) {
+        const std::span<const std::byte> triangleBytes = AsBytes(std::span<const SceneTriangle>(gpu.triangles));
+        const size_t offsetBytes = static_cast<size_t>(object.firstTriangle) * sizeof(SceneTriangle);
+        const size_t sizeBytes = static_cast<size_t>(object.triangleCount) * sizeof(SceneTriangle);
+        device.UploadBufferData(gpu.triangleBuffer, offsetBytes, triangleBytes.subspan(offsetBytes, sizeBytes));
+    }
+    device.FlushUploadBatch();
+    return true;
+}
+
+bool Scene::RebuildRayTracing(render::RenderDevice& device)
+{
+    if (_gpu == nullptr || !device.IsRayTracingSupported() || GetPreparedOrEmpty().indices.empty()) {
+        return false;
+    }
+
+    device.WaitIdle();
+    DestroyRayTracingResources(device, *_gpu);
+    BuildBottomLevelAccelerationStructure(device);
+    BuildTopLevelAccelerationStructure(device);
+    return _gpu->topLevelAccelerationStructure != VK_NULL_HANDLE;
 }
 } // namespace vesta::scene

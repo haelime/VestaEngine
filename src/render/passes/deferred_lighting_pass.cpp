@@ -6,6 +6,7 @@
 
 #include <vesta/render/vulkan/vk_loader.h>
 #include <vesta/render/vulkan/vk_pipelines.h>
+#include <vesta/scene/camera.h>
 
 namespace vesta::render {
 namespace {
@@ -14,21 +15,39 @@ namespace {
 struct DeferredLightingPushConstants {
     uint32_t albedoImageIndex{ 0 };
     uint32_t normalImageIndex{ 0 };
+    uint32_t materialImageIndex{ 0 };
+    uint32_t depthImageIndex{ 0 };
     uint32_t outputImageIndex{ 0 };
-    uint32_t padding{ 0 };
+    uint32_t padding0{ 0 };
+    uint32_t padding1{ 0 };
+    uint32_t padding2{ 0 };
+    glm::mat4 inverseViewProjection{ 1.0f };
+    glm::vec4 cameraPosition{ 0.0f };
     glm::vec4 lightDirectionAndIntensity{ -0.4f, -1.0f, -0.3f, 2.0f };
 };
 } // namespace
 
-void DeferredLightingPass::SetInputs(GraphTextureHandle albedo, GraphTextureHandle normal)
+void DeferredLightingPass::SetInputs(GraphTextureHandle albedo, GraphTextureHandle normal, GraphTextureHandle material, GraphTextureHandle depth)
 {
     _albedo = albedo;
     _normal = normal;
+    _material = material;
+    _depth = depth;
 }
 
 void DeferredLightingPass::SetOutput(GraphTextureHandle output)
 {
     _output = output;
+}
+
+void DeferredLightingPass::SetCamera(const Camera* camera)
+{
+    _camera = camera;
+}
+
+void DeferredLightingPass::SetLight(glm::vec4 lightDirectionAndIntensity)
+{
+    _lightDirectionAndIntensity = lightDirectionAndIntensity;
 }
 
 void DeferredLightingPass::Initialize(RenderDevice& device)
@@ -60,23 +79,32 @@ void DeferredLightingPass::Setup(RenderGraphBuilder& builder)
 {
     builder.Read(_albedo, ResourceUsage::StorageRead);
     builder.Read(_normal, ResourceUsage::StorageRead);
+    builder.Read(_material, ResourceUsage::StorageRead);
+    builder.Read(_depth, ResourceUsage::SampledRead);
     builder.Write(_output, ResourceUsage::StorageWrite);
 }
 
 void DeferredLightingPass::Execute(const RenderGraphContext& context)
 {
-    if (_pipeline == VK_NULL_HANDLE) {
+    if (_pipeline == VK_NULL_HANDLE || _camera == nullptr) {
         return;
     }
 
     const ImageHandle albedoHandle = context.GetTextureHandle(_albedo);
     const ImageHandle normalHandle = context.GetTextureHandle(_normal);
+    const ImageHandle materialHandle = context.GetTextureHandle(_material);
+    const ImageHandle depthHandle = context.GetTextureHandle(_depth);
     const ImageHandle outputHandle = context.GetTextureHandle(_output);
 
     DeferredLightingPushConstants pushConstants{
         .albedoImageIndex = context.GetDevice().GetImageResource(albedoHandle).bindless.storageImage,
         .normalImageIndex = context.GetDevice().GetImageResource(normalHandle).bindless.storageImage,
+        .materialImageIndex = context.GetDevice().GetImageResource(materialHandle).bindless.storageImage,
+        .depthImageIndex = context.GetDevice().GetImageResource(depthHandle).bindless.sampledImage,
         .outputImageIndex = context.GetDevice().GetImageResource(outputHandle).bindless.storageImage,
+        .inverseViewProjection = _camera->GetInverseViewProjection(),
+        .cameraPosition = glm::vec4(_camera->GetPosition(), 1.0f),
+        .lightDirectionAndIntensity = _lightDirectionAndIntensity,
     };
 
     VkCommandBuffer commandBuffer = context.GetCommandBuffer();

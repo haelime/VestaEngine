@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstring>
 #include <cstdlib>
 #include <limits>
 
@@ -9,7 +10,9 @@
 
 #include <fmt/format.h>
 
+#include <vesta/core/debug.h>
 #include <vesta/render/vulkan/vk_initializers.h>
+#include <vesta/render/vulkan/vk_images.h>
 
 #include "VkBootstrap.h"
 
@@ -18,6 +21,9 @@ namespace {
 constexpr uint32_t kRequiredVulkanMajor = 1;
 constexpr uint32_t kRequiredVulkanMinor = 3;
 constexpr uint32_t kRequiredVulkanPatch = 0;
+constexpr VkDeviceSize kDefaultUploadStagingCapacity = 32ull * 1024ull * 1024ull;
+constexpr VmaAllocationCreateFlags kHostUploadFlags =
+    VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
 uint32_t CalculateDedicatedVideoMemoryMiB(VkPhysicalDevice physicalDevice)
 {
@@ -48,12 +54,14 @@ VkDescriptorSetLayoutBinding make_bindless_binding(uint32_t binding, VkDescripto
 }
 } // namespace
 
-void BindlessDescriptorManager::Initialize(VkDevice device)
+void BindlessDescriptorManager::Initialize(VkDevice device, VkSampler defaultSampler)
 {
     // This project uses one large descriptor set instead of binding a new set
     // for every pass/resource pair. That keeps sample shaders short.
+    _defaultSampler = defaultSampler;
+
     const std::array<VkDescriptorPoolSize, 3> poolSizes{
-        VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, kMaxSampledImages },
+        VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxSampledImages },
         VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kMaxStorageImages },
         VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kMaxStorageBuffers },
     };
@@ -67,7 +75,7 @@ void BindlessDescriptorManager::Initialize(VkDevice device)
     VK_CHECK(vkCreateDescriptorPool(device, &poolInfo, nullptr, &_pool));
 
     std::array<VkDescriptorSetLayoutBinding, 3> bindings{
-        make_bindless_binding(0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, kMaxSampledImages),
+        make_bindless_binding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxSampledImages),
         make_bindless_binding(1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kMaxStorageImages),
         make_bindless_binding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kMaxStorageBuffers),
     };
@@ -110,6 +118,7 @@ void BindlessDescriptorManager::Shutdown(VkDevice device)
     }
 
     _set = VK_NULL_HANDLE;
+    _defaultSampler = VK_NULL_HANDLE;
     _nextSampledImage = 0;
     _nextStorageImage = 0;
     _nextStorageBuffer = 0;
@@ -125,6 +134,7 @@ uint32_t BindlessDescriptorManager::RegisterSampledImage(VkDevice device, VkImag
     const uint32_t slot = _nextSampledImage++;
 
     VkDescriptorImageInfo imageInfo{};
+    imageInfo.sampler = _defaultSampler;
     imageInfo.imageView = view;
     imageInfo.imageLayout = layout;
 
@@ -134,7 +144,7 @@ uint32_t BindlessDescriptorManager::RegisterSampledImage(VkDevice device, VkImag
     write.dstBinding = 0;
     write.dstArrayElement = slot;
     write.descriptorCount = 1;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     write.pImageInfo = &imageInfo;
     vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
 
@@ -202,7 +212,18 @@ bool RenderDevice::Initialize(SDL_Window* window, const RenderDeviceDesc& desc)
     // needs both handles to manage memory allocations for buffers and images.
     CreateInstanceAndDevice(desc);
     CreateAllocator();
-    _bindless.Initialize(_device);
+    InitializeImmediateContext();
+    VkSamplerCreateInfo samplerInfo{};
+    samplerInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.maxLod = VK_LOD_CLAMP_NONE;
+    VK_CHECK(vkCreateSampler(_device, &samplerInfo, nullptr, &_defaultSampler));
+    _bindless.Initialize(_device, _defaultSampler);
     CreateSwapchain(desc.swapchainExtent);
 
     return true;
@@ -212,8 +233,15 @@ void RenderDevice::Shutdown()
 {
     WaitIdle();
     DestroySwapchain();
+    FlushUploadBatch();
     CleanupResourceStorage();
+    ShutdownImmediateContext();
     _bindless.Shutdown(_device);
+
+    if (_defaultSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(_device, _defaultSampler, nullptr);
+        _defaultSampler = VK_NULL_HANDLE;
+    }
 
     if (_allocator != VK_NULL_HANDLE) {
         vmaDestroyAllocator(_allocator);
@@ -267,13 +295,21 @@ BufferHandle RenderDevice::CreateBuffer(const BufferDesc& desc)
     bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     bufferInfo.size = desc.size;
     bufferInfo.usage = desc.usage;
-    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
     VmaAllocationCreateInfo allocInfo{};
     allocInfo.usage = desc.memoryUsage;
     allocInfo.flags = desc.allocationFlags;
 
-    VK_CHECK(vmaCreateBuffer(_allocator, &bufferInfo, &allocInfo, &buffer.buffer, &buffer.allocation, &buffer.allocationInfo));
+    if (_transferQueue != VK_NULL_HANDLE && _transferQueueFamily != _graphicsQueueFamily) {
+        const std::array<uint32_t, 2> queueFamilies{ _graphicsQueueFamily, _transferQueueFamily };
+        bufferInfo.sharingMode = VK_SHARING_MODE_CONCURRENT;
+        bufferInfo.queueFamilyIndexCount = static_cast<uint32_t>(queueFamilies.size());
+        bufferInfo.pQueueFamilyIndices = queueFamilies.data();
+        VK_CHECK(vmaCreateBuffer(_allocator, &bufferInfo, &allocInfo, &buffer.buffer, &buffer.allocation, &buffer.allocationInfo));
+    } else {
+        bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        VK_CHECK(vmaCreateBuffer(_allocator, &bufferInfo, &allocInfo, &buffer.buffer, &buffer.allocation, &buffer.allocationInfo));
+    }
 
     if (desc.registerBindlessStorage) {
         buffer.bindless.storageBuffer = _bindless.RegisterStorageBuffer(_device, buffer.buffer, desc.size);
@@ -292,6 +328,12 @@ ImageHandle RenderDevice::CreateImage(const ImageDesc& desc)
     imageInfo.mipLevels = desc.mipLevels;
     imageInfo.arrayLayers = desc.arrayLayers;
     imageInfo.initialLayout = desc.initialLayout;
+    std::array<uint32_t, 2> queueFamilies{ _graphicsQueueFamily, _transferQueueFamily };
+    if (_transferQueue != VK_NULL_HANDLE && _transferQueueFamily != _graphicsQueueFamily) {
+        imageInfo.sharingMode = VK_SHARING_MODE_CONCURRENT;
+        imageInfo.queueFamilyIndexCount = static_cast<uint32_t>(queueFamilies.size());
+        imageInfo.pQueueFamilyIndices = queueFamilies.data();
+    }
 
     VmaAllocationCreateInfo allocInfo{};
     allocInfo.usage = desc.memoryUsage;
@@ -352,38 +394,274 @@ void RenderDevice::DestroyImage(ImageHandle handle)
     }
 }
 
-void RenderDevice::ImmediateSubmit(const std::function<void(VkCommandBuffer)>& recorder) const
+void RenderDevice::InitializeImmediateContext()
+{
+    if (_device == VK_NULL_HANDLE) {
+        return;
+    }
+
+    VkCommandPoolCreateInfo poolInfo = vkinit::command_pool_create_info(_graphicsQueueFamily);
+    VK_CHECK(vkCreateCommandPool(_device, &poolInfo, nullptr, &_immediateContext.commandPool));
+
+    VkCommandBufferAllocateInfo allocInfo = vkinit::command_buffer_allocate_info(_immediateContext.commandPool);
+    VK_CHECK(vkAllocateCommandBuffers(_device, &allocInfo, &_immediateContext.commandBuffer));
+
+    VkFenceCreateInfo fenceInfo = vkinit::fence_create_info(VK_FENCE_CREATE_SIGNALED_BIT);
+    VK_CHECK(vkCreateFence(_device, &fenceInfo, nullptr, &_immediateContext.fence));
+
+    VkCommandPoolCreateInfo uploadPoolInfo = vkinit::command_pool_create_info(GetTransferQueueFamily());
+    VK_CHECK(vkCreateCommandPool(_device, &uploadPoolInfo, nullptr, &_uploadContext.commandPool));
+
+    VkCommandBufferAllocateInfo uploadAllocInfo = vkinit::command_buffer_allocate_info(_uploadContext.commandPool);
+    VK_CHECK(vkAllocateCommandBuffers(_device, &uploadAllocInfo, &_uploadContext.commandBuffer));
+
+    VK_CHECK(vkCreateFence(_device, &fenceInfo, nullptr, &_uploadContext.fence));
+    EnsureUploadCapacity(kDefaultUploadStagingCapacity);
+}
+
+void RenderDevice::ShutdownImmediateContext()
+{
+    if (_device == VK_NULL_HANDLE) {
+        return;
+    }
+
+    FlushUploadBatch();
+    if (_uploadContext.stagingBuffer) {
+        DestroyBuffer(_uploadContext.stagingBuffer);
+        _uploadContext.stagingBuffer = {};
+    }
+    _uploadContext.mappedData = nullptr;
+    _uploadContext.capacity = 0;
+    _uploadContext.offset = 0;
+    _uploadContext.recording = false;
+    _uploadContext.pendingCopies = 0;
+    _uploadBatchStats = {};
+
+    if (_uploadContext.fence != VK_NULL_HANDLE) {
+        vkDestroyFence(_device, _uploadContext.fence, nullptr);
+        _uploadContext.fence = VK_NULL_HANDLE;
+    }
+    if (_uploadContext.commandPool != VK_NULL_HANDLE) {
+        vkDestroyCommandPool(_device, _uploadContext.commandPool, nullptr);
+        _uploadContext.commandPool = VK_NULL_HANDLE;
+    }
+    _uploadContext.commandBuffer = VK_NULL_HANDLE;
+
+    if (_immediateContext.fence != VK_NULL_HANDLE) {
+        vkDestroyFence(_device, _immediateContext.fence, nullptr);
+        _immediateContext.fence = VK_NULL_HANDLE;
+    }
+    if (_immediateContext.commandPool != VK_NULL_HANDLE) {
+        vkDestroyCommandPool(_device, _immediateContext.commandPool, nullptr);
+        _immediateContext.commandPool = VK_NULL_HANDLE;
+    }
+    _immediateContext.commandBuffer = VK_NULL_HANDLE;
+}
+
+void RenderDevice::EnsureUploadCapacity(VkDeviceSize requiredBytes)
+{
+    const VkDeviceSize targetCapacity = std::max(requiredBytes, kDefaultUploadStagingCapacity);
+    if (_uploadContext.capacity >= targetCapacity && _uploadContext.stagingBuffer) {
+        return;
+    }
+
+    FlushUploadBatch();
+    if (_uploadContext.stagingBuffer) {
+        DestroyBuffer(_uploadContext.stagingBuffer);
+        _uploadContext.stagingBuffer = {};
+    }
+
+    _uploadContext.stagingBuffer = CreateBuffer(BufferDesc{
+        .size = targetCapacity,
+        .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+        .allocationFlags = kHostUploadFlags,
+        .debugName = "UploadSchedulerStaging",
+    });
+    const AllocatedBuffer& stagingBuffer = GetBufferResource(_uploadContext.stagingBuffer);
+    _uploadContext.mappedData = stagingBuffer.allocationInfo.pMappedData;
+    _uploadContext.capacity = targetCapacity;
+    _uploadContext.offset = 0;
+    _uploadBatchStats.stagingCapacity = targetCapacity;
+}
+
+void RenderDevice::BeginUploadBatchRecording()
+{
+    if (_uploadContext.recording || _device == VK_NULL_HANDLE) {
+        return;
+    }
+
+    WaitForFenceOrAssert(_uploadContext.fence, "BeginUploadBatchRecording");
+    VK_CHECK(vkResetFences(_device, 1, &_uploadContext.fence));
+    VK_CHECK(vkResetCommandPool(_device, _uploadContext.commandPool, 0));
+
+    VkCommandBufferBeginInfo beginInfo = vkinit::command_buffer_begin_info(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
+    VK_CHECK(vkBeginCommandBuffer(_uploadContext.commandBuffer, &beginInfo));
+    _uploadContext.recording = true;
+}
+
+void RenderDevice::SetDebugWaitContext(std::string_view context)
+{
+    _debugWaitContext.assign(context.begin(), context.end());
+}
+
+void RenderDevice::WaitForFenceOrAssert(VkFence fence, std::string_view waitLabel)
+{
+    if (_device == VK_NULL_HANDLE || fence == VK_NULL_HANDLE) {
+        return;
+    }
+
+#if defined(NDEBUG)
+    VK_CHECK(vkWaitForFences(_device, 1, &fence, VK_TRUE, std::numeric_limits<uint64_t>::max()));
+#else
+    constexpr uint64_t kDebugWaitTimeoutNs = 5ull * 1000ull * 1000ull * 1000ull;
+    const VkResult waitResult = vkWaitForFences(_device, 1, &fence, VK_TRUE, kDebugWaitTimeoutNs);
+    if (waitResult != VK_SUCCESS) {
+        const std::string context = _debugWaitContext.empty() ? std::string("unspecified") : _debugWaitContext;
+        VESTA_ASSERT(false,
+            fmt::format(
+                "Fence wait failed in {} (result={}) | context='{}' pendingBytes={} pendingCopies={} stagingCapacity={} queue={}",
+                waitLabel,
+                string_VkResult(waitResult),
+                context,
+                static_cast<unsigned long long>(_uploadBatchStats.pendingBytes),
+                _uploadBatchStats.pendingCopies,
+                static_cast<unsigned long long>(_uploadBatchStats.stagingCapacity),
+                _transferQueue != VK_NULL_HANDLE ? "transfer" : "graphics"));
+    }
+#endif
+}
+
+void RenderDevice::ImmediateSubmit(const std::function<void(VkCommandBuffer)>& recorder)
 {
     if (_device == VK_NULL_HANDLE || !recorder) {
         return;
     }
 
-    // ImmediateSubmit is useful for setup work such as uploads or AS builds.
-    // It records a short-lived command buffer, submits it, and waits right away.
-    VkCommandPool commandPool = VK_NULL_HANDLE;
-    VkCommandPoolCreateInfo poolInfo = vkinit::command_pool_create_info(_graphicsQueueFamily);
-    VK_CHECK(vkCreateCommandPool(_device, &poolInfo, nullptr, &commandPool));
-
-    VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
-    VkCommandBufferAllocateInfo allocInfo = vkinit::command_buffer_allocate_info(commandPool);
-    VK_CHECK(vkAllocateCommandBuffers(_device, &allocInfo, &commandBuffer));
-
-    VkFence fence = VK_NULL_HANDLE;
-    VkFenceCreateInfo fenceInfo = vkinit::fence_create_info();
-    VK_CHECK(vkCreateFence(_device, &fenceInfo, nullptr, &fence));
+    FlushUploadBatch();
+    WaitForFenceOrAssert(_immediateContext.fence, "ImmediateSubmit");
+    VK_CHECK(vkResetFences(_device, 1, &_immediateContext.fence));
+    VK_CHECK(vkResetCommandPool(_device, _immediateContext.commandPool, 0));
 
     VkCommandBufferBeginInfo beginInfo = vkinit::command_buffer_begin_info(VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
-    VK_CHECK(vkBeginCommandBuffer(commandBuffer, &beginInfo));
-    recorder(commandBuffer);
-    VK_CHECK(vkEndCommandBuffer(commandBuffer));
+    VK_CHECK(vkBeginCommandBuffer(_immediateContext.commandBuffer, &beginInfo));
+    recorder(_immediateContext.commandBuffer);
+    VK_CHECK(vkEndCommandBuffer(_immediateContext.commandBuffer));
 
-    VkCommandBufferSubmitInfo commandBufferInfo = vkinit::command_buffer_submit_info(commandBuffer);
+    VkCommandBufferSubmitInfo commandBufferInfo = vkinit::command_buffer_submit_info(_immediateContext.commandBuffer);
     VkSubmitInfo2 submitInfo = vkinit::submit_info(&commandBufferInfo, nullptr, nullptr);
-    VK_CHECK(vkQueueSubmit2(_graphicsQueue, 1, &submitInfo, fence));
-    VK_CHECK(vkWaitForFences(_device, 1, &fence, VK_TRUE, std::numeric_limits<uint64_t>::max()));
+    VK_CHECK(vkQueueSubmit2(_graphicsQueue, 1, &submitInfo, _immediateContext.fence));
+    VK_CHECK(vkWaitForFences(_device, 1, &_immediateContext.fence, VK_TRUE, std::numeric_limits<uint64_t>::max()));
+}
 
-    vkDestroyFence(_device, fence, nullptr);
-    vkDestroyCommandPool(_device, commandPool, nullptr);
+void RenderDevice::UploadBufferData(BufferHandle destination, VkDeviceSize destinationOffset, std::span<const std::byte> data)
+{
+    if (_device == VK_NULL_HANDLE || !destination || data.empty()) {
+        return;
+    }
+
+    if (data.size_bytes() > _uploadContext.capacity) {
+        EnsureUploadCapacity(static_cast<VkDeviceSize>(data.size_bytes()));
+    }
+    if (_uploadContext.offset + data.size_bytes() > _uploadContext.capacity) {
+        FlushUploadBatch();
+    }
+
+    BeginUploadBatchRecording();
+
+    std::byte* stagingBytes = static_cast<std::byte*>(_uploadContext.mappedData);
+    std::memcpy(stagingBytes + _uploadContext.offset, data.data(), data.size_bytes());
+
+    const VkBufferCopy copyRegion{
+        .srcOffset = _uploadContext.offset,
+        .dstOffset = destinationOffset,
+        .size = static_cast<VkDeviceSize>(data.size_bytes()),
+    };
+    vkCmdCopyBuffer(_uploadContext.commandBuffer, GetBuffer(_uploadContext.stagingBuffer), GetBuffer(destination), 1, &copyRegion);
+
+    _uploadContext.offset += static_cast<VkDeviceSize>(data.size_bytes());
+    ++_uploadContext.pendingCopies;
+    _uploadBatchStats.pendingBytes = _uploadContext.offset;
+    _uploadBatchStats.pendingCopies = _uploadContext.pendingCopies;
+}
+
+void RenderDevice::UploadImageData(ImageHandle destination, std::span<const std::byte> data)
+{
+    if (_device == VK_NULL_HANDLE || !destination || data.empty()) {
+        return;
+    }
+
+    FlushUploadBatch();
+    const AllocatedImage& image = GetImageResource(destination);
+    const VkDeviceSize requiredBytes = data.size_bytes();
+    EnsureUploadCapacity(requiredBytes);
+
+    std::byte* stagingBytes = static_cast<std::byte*>(_uploadContext.mappedData);
+    std::memcpy(stagingBytes, data.data(), data.size_bytes());
+
+    BeginUploadBatchRecording();
+
+    const VkImageSubresourceRange colorRange = vkutil::make_image_subresource_range(VK_IMAGE_ASPECT_COLOR_BIT);
+    vkutil::transition_image(_uploadContext.commandBuffer,
+        image.image,
+        VK_IMAGE_LAYOUT_UNDEFINED,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        VK_PIPELINE_STAGE_2_NONE,
+        VK_ACCESS_2_NONE,
+        VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+        VK_ACCESS_2_TRANSFER_WRITE_BIT,
+        colorRange);
+
+    VkBufferImageCopy copyRegion{};
+    copyRegion.bufferOffset = 0;
+    copyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    copyRegion.imageSubresource.layerCount = 1;
+    copyRegion.imageExtent = image.desc.extent;
+    vkCmdCopyBufferToImage(_uploadContext.commandBuffer,
+        GetBuffer(_uploadContext.stagingBuffer),
+        image.image,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        1,
+        &copyRegion);
+
+    vkutil::transition_image(_uploadContext.commandBuffer,
+        image.image,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+        VK_ACCESS_2_TRANSFER_WRITE_BIT,
+        VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+        VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+        colorRange);
+
+    _uploadContext.offset = requiredBytes;
+    _uploadContext.pendingCopies = 1;
+    _uploadBatchStats.pendingBytes = requiredBytes;
+    _uploadBatchStats.pendingCopies = 1;
+    FlushUploadBatch();
+}
+
+void RenderDevice::FlushUploadBatch()
+{
+    if (_device == VK_NULL_HANDLE || !_uploadContext.recording) {
+        return;
+    }
+
+    VK_CHECK(vkEndCommandBuffer(_uploadContext.commandBuffer));
+
+    VkCommandBufferSubmitInfo commandBufferInfo = vkinit::command_buffer_submit_info(_uploadContext.commandBuffer);
+    VkSubmitInfo2 submitInfo = vkinit::submit_info(&commandBufferInfo, nullptr, nullptr);
+    VK_CHECK(vkQueueSubmit2(GetTransferQueue(), 1, &submitInfo, _uploadContext.fence));
+    WaitForFenceOrAssert(_uploadContext.fence, "FlushUploadBatch");
+
+    _uploadBatchStats.lastSubmittedBytes = _uploadContext.offset;
+    _uploadBatchStats.totalSubmittedBytes += _uploadContext.offset;
+    _uploadBatchStats.pendingBytes = 0;
+    _uploadBatchStats.pendingCopies = 0;
+
+    _uploadContext.offset = 0;
+    _uploadContext.pendingCopies = 0;
+    _uploadContext.recording = false;
 }
 
 VkBuffer RenderDevice::GetBuffer(BufferHandle handle) const { return _buffers[handle.index].buffer; }
@@ -507,6 +785,15 @@ void RenderDevice::CreateInstanceAndDevice(const RenderDeviceDesc& desc)
     _graphicsQueueFamily = device.get_queue_index(vkb::QueueType::graphics).value();
     _presentQueue = device.get_queue(vkb::QueueType::present).value();
     _presentQueueFamily = device.get_queue_index(vkb::QueueType::present).value();
+    const auto transferQueue = device.get_queue(vkb::QueueType::transfer);
+    const auto transferQueueFamily = device.get_queue_index(vkb::QueueType::transfer);
+    if (transferQueue && transferQueueFamily) {
+        _transferQueue = transferQueue.value();
+        _transferQueueFamily = transferQueueFamily.value();
+    } else {
+        _transferQueue = VK_NULL_HANDLE;
+        _transferQueueFamily = _graphicsQueueFamily;
+    }
 
     if (_rayTracingSupport.supported) {
         // KHR ray tracing entry points are device-level function pointers, so

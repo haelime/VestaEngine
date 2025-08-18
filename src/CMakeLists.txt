@@ -22,6 +22,7 @@ add_executable(engine
   render/vulkan/vk_pipelines.cpp
   ../include/vesta/render/renderer.h
   ../include/vesta/core/job_system.h
+  ../include/vesta/core/debug.h
   ../include/vesta/render/graph/render_graph.h
   ../include/vesta/render/passes/composite_pass.h
   ../include/vesta/render/passes/deferred_lighting_pass.h
@@ -54,7 +55,7 @@ if(MSVC)
   target_compile_options(engine PRIVATE /FS /utf-8)
 endif()
 
-target_link_libraries(engine PUBLIC vma Vulkan::Vulkan fmt::fmt SDL2::SDL2 vkbootstrap glm fastgltf::fastgltf)
+target_link_libraries(engine PUBLIC vma Vulkan::Vulkan fmt::fmt SDL2::SDL2 vkbootstrap glm fastgltf::fastgltf stb_image)
 target_link_libraries(engine PUBLIC imgui)
 
 target_precompile_headers(engine PUBLIC <optional> <vector> <memory> <string> <vector> <unordered_map> <vulkan/vulkan.h>)
@@ -64,4 +65,26 @@ if(WIN32)
     COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_RUNTIME_DLLS:engine> $<TARGET_FILE_DIR:engine>
     COMMAND_EXPAND_LISTS
     )
+endif()
+
+if(BUILD_TESTING)
+  add_executable(vesta_tests
+    tests/renderer_validation_tests.cpp
+    ../include/vesta/core/debug.h
+    ../include/vesta/render/renderer.h
+    ../include/vesta/render/vulkan/vk_engine.h
+  )
+
+  set_property(TARGET vesta_tests PROPERTY CXX_STANDARD 20)
+  target_compile_definitions(vesta_tests PRIVATE GLM_FORCE_DEPTH_ZERO_TO_ONE)
+  target_include_directories(vesta_tests PRIVATE
+    "${PROJECT_SOURCE_DIR}/include"
+    "${PROJECT_SOURCE_DIR}/third_party/SDL/include"
+    "${PROJECT_SOURCE_DIR}/third_party/glm"
+    ${Vulkan_INCLUDE_DIRS}
+  )
+  if(MSVC)
+    target_compile_options(vesta_tests PRIVATE /FS /utf-8)
+  endif()
+  add_test(NAME vesta_tests COMMAND vesta_tests)
 endif()

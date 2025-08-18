@@ -5,10 +5,51 @@
 
 #include <filesystem>
 #include <optional>
+#include <string>
 #include <vector>
 
 #include <vesta/render/renderer.h>
 #include <vesta/render/vulkan/vk_types.h>
+
+struct BenchmarkConfig {
+    std::filesystem::path csvOutputPath;
+    float warmupSeconds{ 2.0f };
+    float captureSeconds{ 10.0f };
+};
+
+struct EngineLaunchOptions {
+    std::optional<std::filesystem::path> startupScenePath;
+    std::optional<vesta::render::RendererPreset> startupPreset;
+    std::optional<vesta::render::RendererDisplayMode> startupDisplayMode;
+    std::optional<vesta::render::PathTraceBackend> startupPathTraceBackend;
+    std::optional<float> startupPathTraceResolutionScale;
+    std::optional<BenchmarkConfig> benchmark;
+    std::filesystem::path startupLogPath{ "out/startup.log" };
+    bool safeStartupMode{ true };
+    bool deferRayTracingBuildUntilAfterFirstPresent{ true };
+    bool enableUi{ true };
+    bool showDebugUi{ true };
+};
+
+[[nodiscard]] inline vesta::render::RendererSettings ApplyStartupSafeRendererSettings(
+    vesta::render::RendererSettings settings, const EngineLaunchOptions& options)
+{
+    if (!options.safeStartupMode) {
+        return settings;
+    }
+
+    settings.displayMode = vesta::render::RendererDisplayMode::DeferredLighting;
+    settings.enableGaussian = false;
+    settings.enablePathTracing = false;
+    settings.buildRayTracingStructuresOnLoad =
+        !options.deferRayTracingBuildUntilAfterFirstPresent ? settings.buildRayTracingStructuresOnLoad : false;
+    settings.textureStreamingEnabled = false;
+    settings.enableDistanceCulling = false;
+    settings.useIndirectDraw = false;
+    settings.sceneUploadMode = vesta::render::SceneUploadMode::Streaming;
+    settings.preferAsyncSceneLoading = true;
+    return settings;
+}
 
 class VestaEngine {
 public:
@@ -29,7 +70,7 @@ public:
 
     // Owns the application loop around the renderer. The renderer itself stays
     // focused on Vulkan work; SDL event handling and ImGui live here.
-    void init();
+    void init(const EngineLaunchOptions& options = {});
     void cleanup();
     void draw(float deltaSeconds);
     void run();
@@ -45,6 +86,29 @@ private:
     void build_debug_ui();
     [[nodiscard]] bool should_forward_event_to_renderer(const union SDL_Event& event) const;
     [[nodiscard]] std::optional<std::filesystem::path> open_scene_with_system_dialog() const;
+    void log_startup_event(std::string_view message);
+    void update_startup_state();
+    void update_benchmark(float deltaSeconds);
+    void finish_benchmark();
     void load_scene_path(const std::filesystem::path& path);
     void remember_recent_scene(const std::filesystem::path& path);
+
+    EngineLaunchOptions _launchOptions{};
+    struct BenchmarkState {
+        bool started{ false };
+        bool capturing{ false };
+        bool completed{ false };
+        float warmupElapsed{ 0.0f };
+        float captureElapsed{ 0.0f };
+        std::vector<float> frameTimesMs;
+    } _benchmarkState;
+    struct StartupState {
+        bool safeOverridesActive{ false };
+        bool firstFramePresented{ false };
+        bool startupSceneRequested{ false };
+        bool startupSceneResolved{ false };
+        vesta::render::RendererSettings savedSettings{};
+        vesta::render::SceneLoadState lastSceneLoadState{ vesta::render::SceneLoadState::Idle };
+        std::string lastSceneLoadMessage;
+    } _startupState;
 };

@@ -8,10 +8,20 @@ layout(push_constant) uniform GaussianPushConstants {
 } pc;
 
 layout(location = 0) in vec4 inColor;
+layout(location = 1) in float inOpacity;
 layout(location = 0) out vec4 outColor;
 
 void main() {
     vec2 centered = gl_PointCoord * 2.0 - 1.0;
-    float falloff = exp(-dot(centered, centered) * 2.8);
-    outColor = vec4(inColor.rgb, pc.params.y * falloff);
+    float radial = dot(centered, centered);
+    if (radial > 1.0) {
+        discard;
+    }
+
+    float falloff = exp(-radial * 5.5);
+    if (falloff < 0.035) {
+        discard;
+    }
+
+    outColor = vec4(inColor.rgb, inOpacity * pc.params.y * falloff);
 }
