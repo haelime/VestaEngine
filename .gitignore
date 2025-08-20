@@ -21,3 +21,12 @@
 /*.vcxproj.filters
 /*.VC.db
 /*.VC.opendb
+
+# Local Gaussian investigation notes and scratch outputs
+/docs/gaussian-*.md
+/altdebug/
+/altdebug3/
+/altdebug4/
+/third_party/SDL/VisualC/SDL/altdebug/
+/third_party/SDL/VisualC/SDL/altdebug3/
+/third_party/SDL/VisualC/SDL/altdebug4/
