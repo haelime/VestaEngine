@@ -30,6 +30,8 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <commdlg.h>
+#include <shlobj.h>
+#include <shobjidl.h>
 #include <windows.h>
 #pragma comment(lib, "Comdlg32.lib")
 #endif
@@ -161,9 +163,18 @@ const char* SceneUploadModeLabel(vesta::render::SceneUploadMode mode)
 
 void ApplySceneModeInference(vesta::render::RendererSettings& settings, const std::filesystem::path& path)
 {
+    if (std::filesystem::is_directory(path)) {
+        settings.displayMode = vesta::render::RendererDisplayMode::Gaussian;
+        settings.enableRaster = false;
+        settings.enableGaussian = true;
+        settings.enablePathTracing = false;
+        return;
+    }
+
     const std::filesystem::path extension = path.extension();
     if (extension == ".ply" || extension == ".PLY") {
         settings.displayMode = vesta::render::RendererDisplayMode::Gaussian;
+        settings.enableRaster = false;
         settings.enableGaussian = true;
         settings.enablePathTracing = false;
         return;
@@ -172,6 +183,7 @@ void ApplySceneModeInference(vesta::render::RendererSettings& settings, const st
     if (extension == ".glb" || extension == ".GLB" || extension == ".gltf" || extension == ".GLTF") {
         settings.displayMode = vesta::render::RendererDisplayMode::DeferredLighting;
         settings.enableRaster = true;
+        settings.enableGaussian = true;
     }
 }
 
@@ -189,6 +201,49 @@ std::string CsvEscape(std::string value)
     }
 
     return "\"" + value + "\"";
+}
+
+std::filesystem::path NormalizeScenePath(std::filesystem::path path)
+{
+    if (path.empty()) {
+        return path;
+    }
+
+    std::wstring native = path.native();
+    while (native.size() > 1 && (native.back() == L'\\' || native.back() == L'/')) {
+        const bool keepDriveRoot = native.size() == 3 && native[1] == L':' && (native[2] == L'\\' || native[2] == L'/');
+        if (keepDriveRoot) {
+            break;
+        }
+        native.pop_back();
+    }
+
+    return std::filesystem::path(native).lexically_normal();
+}
+
+std::string ScenePathLabel(const std::filesystem::path& rawPath)
+{
+    const std::filesystem::path path = NormalizeScenePath(rawPath);
+    if (path.empty()) {
+        return "(unnamed scene)";
+    }
+
+    const std::string filename = path.filename().string();
+    if (!filename.empty()) {
+        return filename;
+    }
+
+    const std::string stem = path.stem().string();
+    if (!stem.empty()) {
+        return stem;
+    }
+
+    const std::string full = path.string();
+    if (!full.empty()) {
+        return full;
+    }
+
+    return "(unnamed scene)";
 }
 
 std::string MakeTimestampedLogLine(std::string_view message)
@@ -531,10 +586,22 @@ void VestaEngine::update_benchmark(float deltaSeconds)
 
     if (!_benchmarkState.started) {
         _benchmarkState.started = true;
+        _benchmarkState.lastGaussianRebuildCount = _renderer.GetOfficialGaussianRebuildCount();
+        _benchmarkState.stableGaussianFrames = 0;
         fmt::println("Benchmark warmup for {:.1f}s", benchmark.warmupSeconds);
     }
 
     if (!_benchmarkState.capturing) {
+        if (_renderer.GetScene().HasTrainedGaussians()) {
+            const uint64_t rebuildCount = _renderer.GetOfficialGaussianRebuildCount();
+            if (rebuildCount != _benchmarkState.lastGaussianRebuildCount) {
+                _benchmarkState.lastGaussianRebuildCount = rebuildCount;
+                _benchmarkState.stableGaussianFrames = 0;
+                _benchmarkState.warmupElapsed = 0.0f;
+            } else {
+                ++_benchmarkState.stableGaussianFrames;
+            }
+        }
         _benchmarkState.warmupElapsed += deltaSeconds;
         if (_benchmarkState.warmupElapsed < benchmark.warmupSeconds) {
             return;
@@ -602,11 +669,14 @@ void VestaEngine::finish_benchmark()
     }
 
     if (writeHeader) {
-        output << "timestamp,scene,gpu,resolution,display_mode,requested_backend,active_backend,scene_upload_mode,"
+        output << "timestamp,scene,scene_kind,gpu,resolution,display_mode,requested_backend,active_backend,scene_upload_mode,"
                << "gaussian,path_tracing,texture_streaming,indirect_draw,frustum_culling,distance_culling,"
+               << "gaussian_trained,gaussian_count,gaussian_sh_degree,gaussian_view_dependent_color,gaussian_antialiasing,"
+               << "gaussian_fast_culling,gaussian_opacity,gaussian_mix,gaussian_interactive_preview,"
                << "pt_scale,avg_frame_ms,p95_frame_ms,min_frame_ms,max_frame_ms,avg_fps,frame_count,"
                << "vertices,triangles,surfaces,textures_total,textures_resident,parse_ms,prepare_ms,"
-               << "geometry_upload_ms,texture_upload_ms,blas_ms,tlas_ms\n";
+               << "geometry_upload_ms,texture_upload_ms,blas_ms,tlas_ms,"
+               << "gaussian_projected,gaussian_duplicates,gaussian_padded_duplicates,gaussian_tiles,gaussian_avg_tiles_touched,gaussian_rebuilds\n";
     }
 
     const auto now = std::chrono::system_clock::now();
@@ -627,6 +697,7 @@ void VestaEngine::finish_benchmark()
 
     output << CsvEscape(timestampStream.str()) << ','
            << CsvEscape(scene.GetSourcePath().string()) << ','
+           << CsvEscape(SceneKindLabel(scene.GetSceneKind())) << ','
            << CsvEscape(_renderer.GetRenderDevice().GetGpuName()) << ','
            << CsvEscape(fmt::format("{}x{}", extent.width, extent.height)) << ','
            << DisplayModeLabel(settings.displayMode) << ','
@@ -639,6 +710,15 @@ void VestaEngine::finish_benchmark()
            << (settings.useIndirectDraw ? "true" : "false") << ','
            << (settings.enableFrustumCulling ? "true" : "false") << ','
            << (settings.enableDistanceCulling ? "true" : "false") << ','
+           << (scene.HasTrainedGaussians() ? "true" : "false") << ','
+           << scene.GetGaussianCount() << ','
+           << scene.GetGaussianShDegree() << ','
+           << (settings.gaussianViewDependentColor ? "true" : "false") << ','
+           << (settings.gaussianAntialiasing ? "true" : "false") << ','
+           << (settings.gaussianFastCulling ? "true" : "false") << ','
+           << settings.gaussianOpacity << ','
+           << settings.gaussianMix << ','
+           << (_renderer.IsGaussianInteractivePreviewActive() ? "true" : "false") << ','
            << settings.pathTraceResolutionScale << ','
            << averageFrameMs << ','
            << p95FrameMs << ','
@@ -656,7 +736,13 @@ void VestaEngine::finish_benchmark()
            << status.geometryUploadMs << ','
            << status.textureUploadMs << ','
            << status.blasMs << ','
-           << status.tlasMs << '\n';
+           << status.tlasMs << ','
+           << _renderer.GetOfficialGaussianProjectedCount() << ','
+           << _renderer.GetOfficialGaussianDuplicateCount() << ','
+           << _renderer.GetOfficialGaussianPaddedDuplicateCount() << ','
+           << _renderer.GetOfficialGaussianTileCount() << ','
+           << _renderer.GetOfficialGaussianAverageTilesTouched() << ','
+           << _renderer.GetOfficialGaussianRebuildCount() << '\n';
 
     fmt::println("Benchmark written to {}", outputPath.string());
 }
@@ -807,14 +893,23 @@ void VestaEngine::build_main_menu_bar()
 
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("File")) {
-            if (ImGui::MenuItem("Open Scene...", nullptr, false, !sceneLoadInProgress)) {
-                if (const std::optional<std::filesystem::path> path = open_scene_with_system_dialog()) {
-                    load_scene_path(*path);
+            if (ImGui::BeginMenu("Open Scene...", !sceneLoadInProgress)) {
+                if (ImGui::MenuItem("Scene File...")) {
+                    if (const std::optional<std::filesystem::path> path = open_scene_with_system_dialog()) {
+                        load_scene_path(*path);
+                    }
                 }
+                if (ImGui::MenuItem("Gaussian Model Folder...")) {
+                    if (const std::optional<std::filesystem::path> path = open_gaussian_model_with_system_dialog()) {
+                        load_scene_path(*path);
+                    }
+                }
+                ImGui::EndMenu();
             }
             if (ImGui::BeginMenu("Open Recent", !_recentScenePaths.empty())) {
                 for (const std::filesystem::path& recentPath : _recentScenePaths) {
-                    if (ImGui::MenuItem(recentPath.filename().string().c_str(), nullptr, false, !sceneLoadInProgress)) {
+                    const std::string label = ScenePathLabel(recentPath);
+                    if (ImGui::MenuItem(label.c_str(), nullptr, false, !sceneLoadInProgress)) {
                         load_scene_path(recentPath);
                     }
                 }
@@ -1029,150 +1124,12 @@ void VestaEngine::build_debug_ui()
 
     auto& settings = _renderer.GetSettings();
     const auto& scene = _renderer.GetScene();
+    const auto& camera = _renderer.GetCamera();
     const auto& device = _renderer.GetRenderDevice();
     const float frameMs = _renderer.GetSmoothedFrameTimeMs();
     const float fps = frameMs > 0.0f ? 1000.0f / frameMs : 0.0f;
-
-    ImGui::SetNextWindowPos(ImVec2(18.0f, 18.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(360.0f, 0.0f), ImGuiCond_FirstUseEver);
-    if (!ImGui::Begin("Vesta Overlay", nullptr, ImGuiWindowFlags_NoSavedSettings)) {
-        ImGui::End();
-        return;
-    }
-
-    ImGui::Text("Frame %.2f ms", frameMs);
-    ImGui::Text("FPS %.1f", fps);
-    ImGui::Text("%s", device.GetGpuName().c_str());
-    ImGui::Text("VRAM %u MiB", device.GetDedicatedVideoMemoryMiB());
-    ImGui::Text("Recommended %s", PresetLabel(_renderer.GetRecommendedPreset()));
-    ImGui::Text("Scene Upload %s", SceneUploadModeLabel(settings.sceneUploadMode));
-    ImGui::Text("Skip Hidden Passes %s", settings.optimizeInactivePasses ? "On" : "Off");
-    ImGui::Text("Device Local Buffers %s", settings.useDeviceLocalSceneBuffers ? "On" : "Off");
-    ImGui::Text("Device Local Textures %s", settings.useDeviceLocalTextures ? "On" : "Off");
-    ImGui::Text("Deferred Scene Free %s", settings.deferOldSceneDestruction ? "On" : "Off");
-    ImGui::Text("Frustum Culling %s", settings.enableFrustumCulling ? "On" : "Off");
-    ImGui::Text("Distance Culling %s", settings.enableDistanceCulling ? "On" : "Off");
-    ImGui::Text("Indirect Draw %s", settings.useIndirectDraw ? "On" : "Off");
-    ImGui::Text("Upload Budget %u MiB", settings.maxUploadBytesPerFrame / (1024u * 1024u));
-    ImGui::Text("Texture Budget %u MiB", settings.maxTextureUploadBytesPerFrame / (1024u * 1024u));
-    ImGui::Text("Upload Pending %.2f MiB",
-        static_cast<float>(device.GetUploadBatchStats().pendingBytes) / (1024.0f * 1024.0f));
-    ImGui::Text("Upload Staging %.2f MiB",
-        static_cast<float>(device.GetUploadBatchStats().stagingCapacity) / (1024.0f * 1024.0f));
-    ImGui::Text("Transfer Queue %s", device.HasTransferQueue() ? "Active" : "Graphics Fallback");
-    ImGui::Text("Workers %u", _renderer.GetWorkerThreadCount());
-    ImGui::Text("Queued Jobs %zu", _renderer.GetPendingJobCount());
-    ImGui::Text("Retired Scenes %zu", _renderer.GetRetiredSceneCount());
-    ImGui::Separator();
-
-    if (ImGui::Button("Apply Recommended")) {
-        _renderer.ApplyPreset(vesta::render::RendererPreset::Recommended);
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Performance")) {
-        _renderer.ApplyPreset(vesta::render::RendererPreset::Performance);
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Balanced")) {
-        _renderer.ApplyPreset(vesta::render::RendererPreset::Balanced);
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Quality")) {
-        _renderer.ApplyPreset(vesta::render::RendererPreset::Quality);
-    }
-    ImGui::Separator();
-
-    const char* displayModes[] = { "Composite", "Raster", "Gaussian", "Path Trace" };
-    int displayMode = static_cast<int>(settings.displayMode);
-    if (ImGui::Combo("Display", &displayMode, displayModes, IM_ARRAYSIZE(displayModes))) {
-        settings.displayMode = static_cast<vesta::render::RendererDisplayMode>(displayMode);
-        _renderer.ResetAccumulation();
-    }
-
-    if (ImGui::Checkbox("Raster", &settings.enableRaster)) {
-        _renderer.ResetAccumulation();
-    }
-    if (ImGui::Checkbox("Gaussian", &settings.enableGaussian)) {
-        _renderer.ResetAccumulation();
-    }
-    if (ImGui::Checkbox("Path Tracing", &settings.enablePathTracing)) {
-        _renderer.ResetAccumulation();
-    }
-    if (ImGui::SliderFloat("Point Size", &settings.gaussianPointSize, 1.0f, 24.0f, "%.1f")) {
-        _renderer.ResetAccumulation();
-    }
-    if (ImGui::SliderFloat("Point Opacity", &settings.gaussianOpacity, 0.05f, 1.0f, "%.2f")) {
-        _renderer.ResetAccumulation();
-    }
-    if (ImGui::SliderFloat("Gaussian Mix", &settings.gaussianMix, 0.0f, 1.0f, "%.2f")) {
-        _renderer.ResetAccumulation();
-    }
-    if (ImGui::SliderFloat("PT Resolution", &settings.pathTraceResolutionScale, 0.25f, 1.0f, "%.2fx")) {
-        _renderer.ResetAccumulation();
-    }
-    const char* backendModes[] = { "Auto", "Compute", "Hardware RT" };
-    int backendMode = static_cast<int>(settings.pathTraceBackend);
-    if (ImGui::Combo("PT Backend", &backendMode, backendModes, IM_ARRAYSIZE(backendModes))) {
-        settings.pathTraceBackend = static_cast<vesta::render::PathTraceBackend>(backendMode);
-        _renderer.ResetAccumulation();
-    }
-    float lightDirection[3] = {
-        settings.lightDirectionAndIntensity.x,
-        settings.lightDirectionAndIntensity.y,
-        settings.lightDirectionAndIntensity.z,
-    };
-    if (ImGui::SliderFloat3("Light Dir", lightDirection, -1.0f, 1.0f, "%.2f")) {
-        glm::vec3 direction = glm::vec3(lightDirection[0], lightDirection[1], lightDirection[2]);
-        if (glm::length(direction) > 1.0e-4f) {
-            direction = glm::normalize(direction);
-            settings.lightDirectionAndIntensity = glm::vec4(direction, settings.lightDirectionAndIntensity.w);
-            _renderer.ResetAccumulation();
-        }
-    }
-    if (ImGui::SliderFloat("Light Intensity", &settings.lightDirectionAndIntensity.w, 0.0f, 8.0f, "%.2f")) {
-        _renderer.ResetAccumulation();
-    }
-
-    ImGui::SeparatorText("Scene");
-    ImGui::Text("%s", scene.GetSourcePath().empty() ? "No scene" : scene.GetSourcePath().filename().string().c_str());
-    ImGui::Text("Scene Type %s", SceneKindLabel(scene.GetSceneKind()));
-    ImGui::Text("Recommended View %s", DisplayModeLabel(_renderer.GetRecommendedDisplayModeForScene()));
-    ImGui::Text("Vertices %zu", scene.GetVertices().size());
-    ImGui::Text("Triangles %zu", scene.GetTriangles().size());
-    ImGui::Text("Surfaces %zu", scene.GetSurfaces().size());
-    ImGui::Text("Objects %zu", scene.GetObjects().size());
-    ImGui::Text("Textures %zu / %u", scene.GetTextures().size(), _renderer.GetResidentTextureCount());
-    ImGui::Text("Visible Surfaces %u", _renderer.GetVisibleSurfaceCount());
+    const std::string sceneLabel = scene.GetSourcePath().empty() ? "No scene" : ScenePathLabel(scene.GetSourcePath());
     const auto& sceneLoadStatus = _renderer.GetSceneLoadStatus();
-    ImGui::Text("Load State %s", SceneLoadStateLabel(sceneLoadStatus.state));
-    if (!sceneLoadStatus.message.empty()) {
-        ImGui::TextWrapped("%s", sceneLoadStatus.message.c_str());
-    }
-    if (!sceneLoadStatus.uploadStage.empty()) {
-        ImGui::Text("Upload Stage %s", sceneLoadStatus.uploadStage.c_str());
-    }
-    if (!sceneLoadStatus.lastBlockingWait.empty()) {
-        ImGui::TextWrapped("Last Wait %s", sceneLoadStatus.lastBlockingWait.c_str());
-    }
-    if (sceneLoadStatus.parseMs > 0.0f) {
-        ImGui::Text("Parse %.2f ms", sceneLoadStatus.parseMs);
-    }
-    if (sceneLoadStatus.prepareMs > 0.0f) {
-        ImGui::Text("Prepare %.2f ms", sceneLoadStatus.prepareMs);
-    }
-    if (sceneLoadStatus.geometryUploadMs > 0.0f) {
-        ImGui::Text("Geometry Upload %.2f ms", sceneLoadStatus.geometryUploadMs);
-    }
-    if (sceneLoadStatus.textureUploadMs > 0.0f) {
-        ImGui::Text("Texture Upload %.2f ms", sceneLoadStatus.textureUploadMs);
-    }
-    if (sceneLoadStatus.pendingUploadBytes > 0 || sceneLoadStatus.pendingUploadCopies > 0) {
-        ImGui::Text("Pending Upload %llu bytes / %u copies",
-            static_cast<unsigned long long>(sceneLoadStatus.pendingUploadBytes),
-            sceneLoadStatus.pendingUploadCopies);
-    }
-    ImGui::Text("PT Frame %u", _renderer.GetPathTraceFrameIndex());
-    ImGui::Text("RT Support %s", _renderer.GetRenderDevice().IsRayTracingSupported() ? "Yes" : "No");
     const char* activeBackend = "Compute";
     switch (_renderer.GetActivePathTraceBackend()) {
     case vesta::render::PathTraceBackend::Auto:
@@ -1186,54 +1143,242 @@ void VestaEngine::build_debug_ui()
         activeBackend = "Compute";
         break;
     }
-    ImGui::Text("Active PT %s", activeBackend);
-    if (scene.HasRayTracingScene()) {
-        ImGui::Text("BLAS %.2f ms", scene.GetBottomLevelBuildMs());
-        ImGui::Text("TLAS %.2f ms", scene.GetTopLevelBuildMs());
-    }
+    const auto drawCameraVector = [](const char* label, const glm::vec3& value) {
+        ImGui::Text("%s %.3f %.3f %.3f", label, value.x, value.y, value.z);
+    };
 
-    ImGui::SeparatorText("Selection");
-    ImGui::Text("Selected %s", _renderer.GetSelectionLabel().c_str());
-    if (ImGui::Button("Select Light")) {
-        _renderer.SelectDirectionalLight();
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Clear Selection")) {
-        _renderer.ClearSelection();
-    }
-    if (const auto& selection = _renderer.GetSelection();
-        selection.kind == vesta::render::SelectionKind::Object && selection.objectIndex < scene.GetObjects().size()) {
-        const auto& object = scene.GetObjects()[selection.objectIndex];
-        const glm::vec3 translation = object.GetTranslation();
-        ImGui::Text("Object %s", object.name.c_str());
-        ImGui::Text("Translate %.2f %.2f %.2f", translation.x, translation.y, translation.z);
-    } else if (_renderer.GetSelection().kind == vesta::render::SelectionKind::DirectionalLight) {
-        ImGui::Text("Drag LMB in viewport to rotate the directional light");
-    }
+    ImGui::SetNextWindowPos(ImVec2(18.0f, 18.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(340.0f, 0.0f), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Vesta Stats", nullptr, ImGuiWindowFlags_NoSavedSettings)) {
+        ImGui::Text("Frame %.2f ms", frameMs);
+        ImGui::Text("FPS %.1f", fps);
+        ImGui::Text("%s", device.GetGpuName().c_str());
+        ImGui::Text("VRAM %u MiB", device.GetDedicatedVideoMemoryMiB());
+        ImGui::Text("Recommended %s", PresetLabel(_renderer.GetRecommendedPreset()));
+        ImGui::Text("Scene Upload %s", SceneUploadModeLabel(settings.sceneUploadMode));
+        ImGui::Text("Skip Hidden Passes %s", settings.optimizeInactivePasses ? "On" : "Off");
+        ImGui::Text("Device Local Buffers %s", settings.useDeviceLocalSceneBuffers ? "On" : "Off");
+        ImGui::Text("Device Local Textures %s", settings.useDeviceLocalTextures ? "On" : "Off");
+        ImGui::Text("Deferred Scene Free %s", settings.deferOldSceneDestruction ? "On" : "Off");
+        ImGui::Text("Frustum Culling %s", settings.enableFrustumCulling ? "On" : "Off");
+        ImGui::Text("Distance Culling %s", settings.enableDistanceCulling ? "On" : "Off");
+        ImGui::Text("Indirect Draw %s", settings.useIndirectDraw ? "On" : "Off");
+        ImGui::Text("Upload Budget %u MiB", settings.maxUploadBytesPerFrame / (1024u * 1024u));
+        ImGui::Text("Texture Budget %u MiB", settings.maxTextureUploadBytesPerFrame / (1024u * 1024u));
+        ImGui::Text("Upload Pending %.2f MiB",
+            static_cast<float>(device.GetUploadBatchStats().pendingBytes) / (1024.0f * 1024.0f));
+        ImGui::Text("Upload Staging %.2f MiB",
+            static_cast<float>(device.GetUploadBatchStats().stagingCapacity) / (1024.0f * 1024.0f));
+        ImGui::Text("Transfer Queue %s", device.HasTransferQueue() ? "Active" : "Graphics Fallback");
+        ImGui::Text("Workers %u", _renderer.GetWorkerThreadCount());
+        ImGui::Text("Queued Jobs %zu", _renderer.GetPendingJobCount());
+        ImGui::Text("Retired Scenes %zu", _renderer.GetRetiredSceneCount());
 
-    if (settings.benchmarkOverlay && _renderer.GetFrameTimeHistoryCount() > 0) {
-        ImGui::SeparatorText("Benchmark");
-        const auto& history = _renderer.GetFrameTimeHistoryMs();
-        const int sampleCount = static_cast<int>(_renderer.GetFrameTimeHistoryCount());
-        float averageMs = 0.0f;
-        float peakMs = 0.0f;
-        for (int i = 0; i < sampleCount; ++i) {
-            averageMs += history[static_cast<size_t>(i)];
-            peakMs = std::max(peakMs, history[static_cast<size_t>(i)]);
+        if (settings.benchmarkOverlay && _renderer.GetFrameTimeHistoryCount() > 0) {
+            ImGui::SeparatorText("Benchmark");
+            const auto& history = _renderer.GetFrameTimeHistoryMs();
+            const int sampleCount = static_cast<int>(_renderer.GetFrameTimeHistoryCount());
+            float averageMs = 0.0f;
+            float peakMs = 0.0f;
+            for (int i = 0; i < sampleCount; ++i) {
+                averageMs += history[static_cast<size_t>(i)];
+                peakMs = std::max(peakMs, history[static_cast<size_t>(i)]);
+            }
+            averageMs /= static_cast<float>(sampleCount);
+            ImGui::Text("Avg %.2f ms", averageMs);
+            ImGui::Text("Peak %.2f ms", peakMs);
+            ImGui::PlotLines(
+                "Frame Times", history.data(), sampleCount, 0, nullptr, 0.0f, std::max(33.0f, peakMs * 1.1f), ImVec2(0.0f, 72.0f));
         }
-        averageMs /= static_cast<float>(sampleCount);
-        ImGui::Text("Avg %.2f ms", averageMs);
-        ImGui::Text("Peak %.2f ms", peakMs);
-        ImGui::PlotLines("Frame Times", history.data(), sampleCount, 0, nullptr, 0.0f, std::max(33.0f, peakMs * 1.1f), ImVec2(0.0f, 72.0f));
     }
+    ImGui::End();
 
-    ImGui::SeparatorText("Controls");
-    ImGui::Text("RMB + Mouse Look");
-    ImGui::Text("WASD / Q / E Move");
-    ImGui::Text("LMB Pick/Drag Object");
-    ImGui::Text("L Select Light, Esc Clear Selection");
-    ImGui::Text("1 Raster, 2 Gaussian, 3 PT, 4 Composite");
-    ImGui::Text("R/G/P toggles, F1 UI");
+    ImGui::SetNextWindowPos(ImVec2(376.0f, 18.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(380.0f, 0.0f), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Vesta Render", nullptr, ImGuiWindowFlags_NoSavedSettings)) {
+        if (ImGui::Button("Apply Recommended")) {
+            _renderer.ApplyPreset(vesta::render::RendererPreset::Recommended);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Performance")) {
+            _renderer.ApplyPreset(vesta::render::RendererPreset::Performance);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Balanced")) {
+            _renderer.ApplyPreset(vesta::render::RendererPreset::Balanced);
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Quality")) {
+            _renderer.ApplyPreset(vesta::render::RendererPreset::Quality);
+        }
+
+        const char* displayModes[] = { "Composite", "Raster", "Gaussian", "Path Trace" };
+        int displayMode = static_cast<int>(settings.displayMode);
+        if (ImGui::Combo("Display", &displayMode, displayModes, IM_ARRAYSIZE(displayModes))) {
+            settings.displayMode = static_cast<vesta::render::RendererDisplayMode>(displayMode);
+            _renderer.ResetAccumulation();
+        }
+
+        if (ImGui::Checkbox("Raster", &settings.enableRaster)) {
+            _renderer.ResetAccumulation();
+        }
+        if (ImGui::Checkbox("Gaussian", &settings.enableGaussian)) {
+            _renderer.ResetAccumulation();
+        }
+        if (ImGui::Checkbox("Path Tracing", &settings.enablePathTracing)) {
+            _renderer.ResetAccumulation();
+        }
+        if (ImGui::SliderFloat("Point Size", &settings.gaussianPointSize, 1.0f, 24.0f, "%.1f")) {
+            _renderer.ResetAccumulation();
+        }
+        if (ImGui::SliderFloat("Point Opacity", &settings.gaussianOpacity, 0.05f, 1.0f, "%.2f")) {
+            _renderer.ResetAccumulation();
+        }
+        if (ImGui::SliderFloat("Gaussian Alpha Cutoff", &settings.gaussianAlphaCutoff, 0.0001f, 0.01f, "%.4f")) {
+            _renderer.ResetAccumulation();
+        }
+        int gaussianShDegree = static_cast<int>(settings.gaussianShDegree);
+        if (ImGui::SliderInt("Gaussian SH Degree", &gaussianShDegree, 0, 3)) {
+            settings.gaussianShDegree = static_cast<uint32_t>(gaussianShDegree);
+            _renderer.ResetAccumulation();
+        }
+        if (ImGui::Checkbox("View-Dependent Gaussian Color", &settings.gaussianViewDependentColor)) {
+            _renderer.ResetAccumulation();
+        }
+        if (ImGui::Checkbox("Gaussian Antialiasing", &settings.gaussianAntialiasing)) {
+            _renderer.ResetAccumulation();
+        }
+        if (ImGui::Checkbox("Gaussian Fast Culling", &settings.gaussianFastCulling)) {
+            _renderer.ResetAccumulation();
+        }
+        if (ImGui::SliderFloat("Gaussian Mix", &settings.gaussianMix, 0.0f, 1.0f, "%.2f")) {
+            _renderer.ResetAccumulation();
+        }
+        if (ImGui::SliderFloat("PT Resolution", &settings.pathTraceResolutionScale, 0.25f, 1.0f, "%.2fx")) {
+            _renderer.ResetAccumulation();
+        }
+
+        const char* backendModes[] = { "Auto", "Compute", "Hardware RT" };
+        int backendMode = static_cast<int>(settings.pathTraceBackend);
+        if (ImGui::Combo("PT Backend", &backendMode, backendModes, IM_ARRAYSIZE(backendModes))) {
+            settings.pathTraceBackend = static_cast<vesta::render::PathTraceBackend>(backendMode);
+            _renderer.ResetAccumulation();
+        }
+
+        float lightDirection[3] = {
+            settings.lightDirectionAndIntensity.x,
+            settings.lightDirectionAndIntensity.y,
+            settings.lightDirectionAndIntensity.z,
+        };
+        if (ImGui::SliderFloat3("Light Dir", lightDirection, -1.0f, 1.0f, "%.2f")) {
+            glm::vec3 direction = glm::vec3(lightDirection[0], lightDirection[1], lightDirection[2]);
+            if (glm::length(direction) > 1.0e-4f) {
+                direction = glm::normalize(direction);
+                settings.lightDirectionAndIntensity = glm::vec4(direction, settings.lightDirectionAndIntensity.w);
+                _renderer.ResetAccumulation();
+            }
+        }
+        if (ImGui::SliderFloat("Light Intensity", &settings.lightDirectionAndIntensity.w, 0.0f, 8.0f, "%.2f")) {
+            _renderer.ResetAccumulation();
+        }
+    }
+    ImGui::End();
+
+    ImGui::SetNextWindowPos(ImVec2(18.0f, 360.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(400.0f, 0.0f), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Vesta Scene", nullptr, ImGuiWindowFlags_NoSavedSettings)) {
+        ImGui::Text("%s", sceneLabel.c_str());
+        ImGui::Text("Scene Type %s", SceneKindLabel(scene.GetSceneKind()));
+        ImGui::Text("Recommended View %s", DisplayModeLabel(_renderer.GetRecommendedDisplayModeForScene()));
+        ImGui::Text("Vertices %zu", scene.GetVertices().size());
+        ImGui::Text("Gaussians %u", scene.GetGaussianCount());
+        ImGui::Text("Gaussian SH Degree %u", scene.GetGaussianShDegree());
+        ImGui::Text("Gaussian AA %s", settings.gaussianAntialiasing ? "On" : "Off");
+        ImGui::Text("Gaussian Fast Culling %s", settings.gaussianFastCulling ? "On" : "Off");
+        if (scene.HasTrainedGaussians()) {
+            ImGui::Text("Official Gaussian Projected %u", _renderer.GetOfficialGaussianProjectedCount());
+            ImGui::Text("Official Gaussian Duplicates %u", _renderer.GetOfficialGaussianDuplicateCount());
+            ImGui::Text("Official Gaussian Padded %u", _renderer.GetOfficialGaussianPaddedDuplicateCount());
+            ImGui::Text("Official Gaussian Tiles %u", _renderer.GetOfficialGaussianTileCount());
+            ImGui::Text("Avg Tiles / Gaussian %.2f", _renderer.GetOfficialGaussianAverageTilesTouched());
+            ImGui::Text("Gaussian Rebuilds %llu", static_cast<unsigned long long>(_renderer.GetOfficialGaussianRebuildCount()));
+            ImGui::Text("Gaussian Preview %s", _renderer.IsGaussianInteractivePreviewActive() ? "Legacy Preview" : "Official");
+        }
+        ImGui::Text("Triangles %zu", scene.GetTriangles().size());
+        ImGui::Text("Surfaces %zu", scene.GetSurfaces().size());
+        ImGui::Text("Objects %zu", scene.GetObjects().size());
+        ImGui::Text("Textures %zu / %u", scene.GetTextures().size(), _renderer.GetResidentTextureCount());
+        ImGui::Text("Visible Surfaces %u", _renderer.GetVisibleSurfaceCount());
+        ImGui::Text("Load State %s", SceneLoadStateLabel(sceneLoadStatus.state));
+        if (!sceneLoadStatus.message.empty()) {
+            ImGui::TextWrapped("%s", sceneLoadStatus.message.c_str());
+        }
+        if (!sceneLoadStatus.uploadStage.empty()) {
+            ImGui::Text("Upload Stage %s", sceneLoadStatus.uploadStage.c_str());
+        }
+        if (!sceneLoadStatus.lastBlockingWait.empty()) {
+            ImGui::TextWrapped("Last Wait %s", sceneLoadStatus.lastBlockingWait.c_str());
+        }
+        if (sceneLoadStatus.parseMs > 0.0f) {
+            ImGui::Text("Parse %.2f ms", sceneLoadStatus.parseMs);
+        }
+        if (sceneLoadStatus.prepareMs > 0.0f) {
+            ImGui::Text("Prepare %.2f ms", sceneLoadStatus.prepareMs);
+        }
+        if (sceneLoadStatus.geometryUploadMs > 0.0f) {
+            ImGui::Text("Geometry Upload %.2f ms", sceneLoadStatus.geometryUploadMs);
+        }
+        if (sceneLoadStatus.textureUploadMs > 0.0f) {
+            ImGui::Text("Texture Upload %.2f ms", sceneLoadStatus.textureUploadMs);
+        }
+        if (sceneLoadStatus.pendingUploadBytes > 0 || sceneLoadStatus.pendingUploadCopies > 0) {
+            ImGui::Text("Pending Upload %llu bytes / %u copies",
+                static_cast<unsigned long long>(sceneLoadStatus.pendingUploadBytes),
+                sceneLoadStatus.pendingUploadCopies);
+        }
+        ImGui::Text("PT Frame %u", _renderer.GetPathTraceFrameIndex());
+        ImGui::Text("RT Support %s", _renderer.GetRenderDevice().IsRayTracingSupported() ? "Yes" : "No");
+        ImGui::Text("Active PT %s", activeBackend);
+        if (scene.HasRayTracingScene()) {
+            ImGui::Text("BLAS %.2f ms", scene.GetBottomLevelBuildMs());
+            ImGui::Text("TLAS %.2f ms", scene.GetTopLevelBuildMs());
+        }
+
+        ImGui::SeparatorText("Selection");
+        ImGui::Text("Selected %s", _renderer.GetSelectionLabel().c_str());
+        if (ImGui::Button("Select Light")) {
+            _renderer.SelectDirectionalLight();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Clear Selection")) {
+            _renderer.ClearSelection();
+        }
+        if (const auto& selection = _renderer.GetSelection();
+            selection.kind == vesta::render::SelectionKind::Object && selection.objectIndex < scene.GetObjects().size()) {
+            const auto& object = scene.GetObjects()[selection.objectIndex];
+            const glm::vec3 translation = object.GetTranslation();
+            ImGui::Text("Object %s", object.name.c_str());
+            ImGui::Text("Translate %.2f %.2f %.2f", translation.x, translation.y, translation.z);
+        } else if (_renderer.GetSelection().kind == vesta::render::SelectionKind::DirectionalLight) {
+            ImGui::Text("Drag LMB in viewport to rotate the directional light");
+        }
+    }
+    ImGui::End();
+
+    ImGui::SetNextWindowPos(ImVec2(436.0f, 360.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(320.0f, 0.0f), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Vesta Camera", nullptr, ImGuiWindowFlags_NoSavedSettings)) {
+        drawCameraVector("Position", camera.GetPosition());
+        drawCameraVector("Forward", camera.GetForward());
+        drawCameraVector("Up", camera.GetUp());
+        ImGui::SeparatorText("Controls");
+        ImGui::Text("RMB + Mouse Look");
+        ImGui::Text("WASD / Q / E Move");
+        ImGui::Text("LMB Pick/Drag Object");
+        ImGui::Text("L Select Light, Esc Clear Selection");
+        ImGui::Text("1 Raster, 2 Gaussian, 3 PT, 4 Composite");
+        ImGui::Text("R/G/P toggles, F1 UI");
+    }
     ImGui::End();
 }
 
@@ -1298,33 +1443,102 @@ std::optional<std::filesystem::path> VestaEngine::open_scene_with_system_dialog(
 #endif
 }
 
+std::optional<std::filesystem::path> VestaEngine::open_gaussian_model_with_system_dialog() const
+{
+#if defined(_WIN32)
+    SDL_SysWMinfo windowInfo{};
+    SDL_VERSION(&windowInfo.version);
+    if (!SDL_GetWindowWMInfo(_window, &windowInfo)) {
+        return std::nullopt;
+    }
+
+    HRESULT initResult = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    const bool shouldUninitialize = SUCCEEDED(initResult);
+    if (FAILED(initResult) && initResult != RPC_E_CHANGED_MODE) {
+        return std::nullopt;
+    }
+
+    std::optional<std::filesystem::path> selectedPath;
+    IFileOpenDialog* dialog = nullptr;
+    if (SUCCEEDED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dialog)))
+        && dialog != nullptr) {
+        DWORD options = 0;
+        if (SUCCEEDED(dialog->GetOptions(&options))) {
+            dialog->SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
+        }
+        dialog->SetTitle(L"Select a trained Gaussian model directory");
+        dialog->SetOkButtonLabel(L"Open Folder");
+
+        const std::filesystem::path currentPath = NormalizeScenePath(_renderer.GetScene().GetSourcePath());
+        std::filesystem::path initialDirectory = currentPath;
+        if (!initialDirectory.empty() && std::filesystem::is_regular_file(initialDirectory)) {
+            initialDirectory = initialDirectory.parent_path();
+        }
+        if (!initialDirectory.empty()) {
+            IShellItem* initialFolder = nullptr;
+            if (SUCCEEDED(SHCreateItemFromParsingName(initialDirectory.c_str(), nullptr, IID_PPV_ARGS(&initialFolder)))
+                && initialFolder != nullptr) {
+                dialog->SetFolder(initialFolder);
+                initialFolder->Release();
+            }
+        }
+
+        if (SUCCEEDED(dialog->Show(windowInfo.info.win.window))) {
+            IShellItem* result = nullptr;
+            if (SUCCEEDED(dialog->GetResult(&result)) && result != nullptr) {
+                PWSTR path = nullptr;
+                if (SUCCEEDED(result->GetDisplayName(SIGDN_FILESYSPATH, &path)) && path != nullptr) {
+                    selectedPath = std::filesystem::path(path);
+                    CoTaskMemFree(path);
+                }
+                result->Release();
+            }
+        }
+
+        dialog->Release();
+    }
+
+    if (shouldUninitialize) {
+        CoUninitialize();
+    }
+
+    return selectedPath;
+#else
+    return std::nullopt;
+#endif
+}
+
 void VestaEngine::load_scene_path(const std::filesystem::path& path)
 {
-    if (path.empty()) {
+    const std::filesystem::path normalizedPath = NormalizeScenePath(path);
+    if (normalizedPath.empty()) {
         return;
     }
 
-    ApplySceneModeInference(_renderer.GetSettings(), path);
+    ApplySceneModeInference(_renderer.GetSettings(), normalizedPath);
     _renderer.ResetAccumulation();
 
-    const bool started = UseAsyncSceneLoading(_renderer.GetSettings()) ? _renderer.LoadSceneAsync(path) : _renderer.LoadScene(path);
+    const bool started = UseAsyncSceneLoading(_renderer.GetSettings())
+        ? _renderer.LoadSceneAsync(normalizedPath)
+        : _renderer.LoadScene(normalizedPath);
     if (started) {
-        remember_recent_scene(path);
+        remember_recent_scene(normalizedPath);
     }
 }
 
 void VestaEngine::remember_recent_scene(const std::filesystem::path& path)
 {
-    if (path.empty()) {
+    const std::filesystem::path normalizedPath = NormalizeScenePath(path);
+    if (normalizedPath.empty()) {
         return;
     }
 
-    const auto existing = std::find(_recentScenePaths.begin(), _recentScenePaths.end(), path);
+    const auto existing = std::find(_recentScenePaths.begin(), _recentScenePaths.end(), normalizedPath);
     if (existing != _recentScenePaths.end()) {
         _recentScenePaths.erase(existing);
     }
 
-    _recentScenePaths.insert(_recentScenePaths.begin(), path);
+    _recentScenePaths.insert(_recentScenePaths.begin(), normalizedPath);
     if (_recentScenePaths.size() > kMaxRecentScenePaths) {
         _recentScenePaths.resize(kMaxRecentScenePaths);
     }

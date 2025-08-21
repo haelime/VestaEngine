@@ -22,6 +22,7 @@ public:
     [[nodiscard]] glm::mat4 GetInverseViewProjection() const;
     [[nodiscard]] glm::vec3 GetPosition() const { return _position; }
     [[nodiscard]] glm::vec3 GetForward() const;
+    [[nodiscard]] glm::vec3 GetUp() const { return _up; }
 
 private:
     void UpdateDirectionFromAngles();
