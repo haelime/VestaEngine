@@ -14,19 +14,19 @@ constexpr uint32_t kInvalidImageIndex = kInvalidResourceIndex;
 // mode selects which intermediate result to visualize. params.x is currently
 // used for gaussian blending strength in composite mode.
 struct CompositePushConstants {
-    uint32_t deferredImageIndex{ 0 };
-    uint32_t pathTraceImageIndex{ 0 };
-    uint32_t gaussianImageIndex{ 0 };
-    uint32_t mode{ 0 };
+    glm::uvec4 imageIndices0{ kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex };
+    glm::uvec4 imageIndices1{ 0u, 0u, 0u, 0u };
     glm::vec4 params{ 0.25f, 0.0f, 0.0f, 0.0f };
 };
 } // namespace
 
-void CompositePass::SetInputs(GraphTextureHandle deferredLighting, GraphTextureHandle pathTrace, GraphTextureHandle gaussian)
+void CompositePass::SetInputs(
+    GraphTextureHandle deferredLighting, GraphTextureHandle pathTrace, GraphTextureHandle gaussianAccum, GraphTextureHandle gaussianReveal)
 {
     _deferredLighting = deferredLighting;
     _pathTrace = pathTrace;
-    _gaussian = gaussian;
+    _gaussianAccum = gaussianAccum;
+    _gaussianReveal = gaussianReveal;
 }
 
 void CompositePass::SetOutput(GraphTextureHandle output)
@@ -78,8 +78,11 @@ void CompositePass::Setup(RenderGraphBuilder& builder)
     if (_pathTrace) {
         builder.Read(_pathTrace, ResourceUsage::StorageRead);
     }
-    if (_gaussian) {
-        builder.Read(_gaussian, ResourceUsage::StorageRead);
+    if (_gaussianAccum) {
+        builder.Read(_gaussianAccum, ResourceUsage::StorageRead);
+    }
+    if (_gaussianReveal) {
+        builder.Read(_gaussianReveal, ResourceUsage::StorageRead);
     }
     builder.Write(_output, ResourceUsage::ColorAttachmentWrite);
 }
@@ -91,24 +94,26 @@ void CompositePass::Execute(const RenderGraphContext& context)
     }
 
     CompositePushConstants pushConstants{
-        .deferredImageIndex = kInvalidImageIndex,
-        .pathTraceImageIndex = kInvalidImageIndex,
-        .gaussianImageIndex = kInvalidImageIndex,
-        .mode = _mode,
+        .imageIndices0 = glm::uvec4(kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex),
+        .imageIndices1 = glm::uvec4(_mode, 0u, 0u, 0u),
         .params = glm::vec4(_gaussianMix, 0.0f, 0.0f, 0.0f),
     };
 
     if (_deferredLighting) {
         const ImageHandle deferredHandle = context.GetTextureHandle(_deferredLighting);
-        pushConstants.deferredImageIndex = context.GetDevice().GetImageResource(deferredHandle).bindless.storageImage;
+        pushConstants.imageIndices0.x = context.GetDevice().GetImageResource(deferredHandle).bindless.storageImage;
     }
     if (_pathTrace) {
         const ImageHandle pathTraceHandle = context.GetTextureHandle(_pathTrace);
-        pushConstants.pathTraceImageIndex = context.GetDevice().GetImageResource(pathTraceHandle).bindless.storageImage;
+        pushConstants.imageIndices0.y = context.GetDevice().GetImageResource(pathTraceHandle).bindless.storageImage;
     }
-    if (_gaussian) {
-        const ImageHandle gaussianHandle = context.GetTextureHandle(_gaussian);
-        pushConstants.gaussianImageIndex = context.GetDevice().GetImageResource(gaussianHandle).bindless.storageImage;
+    if (_gaussianAccum) {
+        const ImageHandle gaussianAccumHandle = context.GetTextureHandle(_gaussianAccum);
+        pushConstants.imageIndices0.z = context.GetDevice().GetImageResource(gaussianAccumHandle).bindless.storageImage;
+    }
+    if (_gaussianReveal) {
+        const ImageHandle gaussianRevealHandle = context.GetTextureHandle(_gaussianReveal);
+        pushConstants.imageIndices0.w = context.GetDevice().GetImageResource(gaussianRevealHandle).bindless.storageImage;
     }
 
     VkClearValue clearValue{};

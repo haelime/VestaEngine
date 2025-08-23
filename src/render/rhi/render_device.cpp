@@ -598,47 +598,44 @@ void RenderDevice::UploadImageData(ImageHandle destination, std::span<const std:
 
     std::byte* stagingBytes = static_cast<std::byte*>(_uploadContext.mappedData);
     std::memcpy(stagingBytes, data.data(), data.size_bytes());
-
-    BeginUploadBatchRecording();
-
-    const VkImageSubresourceRange colorRange = vkutil::make_image_subresource_range(VK_IMAGE_ASPECT_COLOR_BIT);
-    vkutil::transition_image(_uploadContext.commandBuffer,
-        image.image,
-        VK_IMAGE_LAYOUT_UNDEFINED,
-        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        VK_PIPELINE_STAGE_2_NONE,
-        VK_ACCESS_2_NONE,
-        VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        VK_ACCESS_2_TRANSFER_WRITE_BIT,
-        colorRange);
-
-    VkBufferImageCopy copyRegion{};
-    copyRegion.bufferOffset = 0;
-    copyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    copyRegion.imageSubresource.layerCount = 1;
-    copyRegion.imageExtent = image.desc.extent;
-    vkCmdCopyBufferToImage(_uploadContext.commandBuffer,
-        GetBuffer(_uploadContext.stagingBuffer),
-        image.image,
-        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        1,
-        &copyRegion);
-
-    vkutil::transition_image(_uploadContext.commandBuffer,
-        image.image,
-        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
-        VK_PIPELINE_STAGE_2_TRANSFER_BIT,
-        VK_ACCESS_2_TRANSFER_WRITE_BIT,
-        VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
-        VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
-        colorRange);
-
-    _uploadContext.offset = requiredBytes;
-    _uploadContext.pendingCopies = 1;
     _uploadBatchStats.pendingBytes = requiredBytes;
     _uploadBatchStats.pendingCopies = 1;
-    FlushUploadBatch();
+
+    ImmediateSubmit([&](VkCommandBuffer commandBuffer) {
+        const VkImageSubresourceRange colorRange = vkutil::make_image_subresource_range(VK_IMAGE_ASPECT_COLOR_BIT);
+        vkutil::transition_image(commandBuffer,
+            image.image,
+            VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_PIPELINE_STAGE_2_NONE,
+            VK_ACCESS_2_NONE,
+            VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+            VK_ACCESS_2_TRANSFER_WRITE_BIT,
+            colorRange);
+
+        VkBufferImageCopy copyRegion{};
+        copyRegion.bufferOffset = 0;
+        copyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        copyRegion.imageSubresource.layerCount = 1;
+        copyRegion.imageExtent = image.desc.extent;
+        vkCmdCopyBufferToImage(
+            commandBuffer, GetBuffer(_uploadContext.stagingBuffer), image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyRegion);
+
+        vkutil::transition_image(commandBuffer,
+            image.image,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+            VK_ACCESS_2_TRANSFER_WRITE_BIT,
+            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+            VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+            colorRange);
+    });
+
+    _uploadBatchStats.lastSubmittedBytes = requiredBytes;
+    _uploadBatchStats.totalSubmittedBytes += requiredBytes;
+    _uploadBatchStats.pendingBytes = 0;
+    _uploadBatchStats.pendingCopies = 0;
 }
 
 void RenderDevice::FlushUploadBatch()
@@ -720,8 +717,12 @@ void RenderDevice::CreateInstanceAndDevice(const RenderDeviceDesc& desc)
     features12.shaderStorageBufferArrayNonUniformIndexing = VK_TRUE;
     features12.descriptorIndexing = VK_TRUE;
 
+    VkPhysicalDeviceFeatures features10{};
+    features10.independentBlend = VK_TRUE;
+
     vkb::PhysicalDeviceSelector selector{ instance };
     vkb::PhysicalDevice physicalDevice = selector.set_minimum_version(kRequiredVulkanMajor, kRequiredVulkanMinor)
+        .set_required_features(features10)
         .set_required_features_13(features13)
         .set_required_features_12(features12)
         .set_surface(_surface)

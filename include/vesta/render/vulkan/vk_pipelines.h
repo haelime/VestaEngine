@@ -26,6 +26,7 @@ struct GraphicsPipelineDesc {
     bool depthTestEnable{ false };
     bool depthWriteEnable{ false };
     bool blendingEnable{ false };
+    std::vector<VkPipelineColorBlendAttachmentState> colorBlendAttachments;
     std::vector<VkVertexInputBindingDescription> vertexBindings;
     std::vector<VkVertexInputAttributeDescription> vertexAttributes;
 };

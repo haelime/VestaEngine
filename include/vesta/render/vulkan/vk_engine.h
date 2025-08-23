@@ -86,6 +86,7 @@ private:
     void build_debug_ui();
     [[nodiscard]] bool should_forward_event_to_renderer(const union SDL_Event& event) const;
     [[nodiscard]] std::optional<std::filesystem::path> open_scene_with_system_dialog() const;
+    [[nodiscard]] std::optional<std::filesystem::path> open_gaussian_model_with_system_dialog() const;
     void log_startup_event(std::string_view message);
     void update_startup_state();
     void update_benchmark(float deltaSeconds);
@@ -100,6 +101,8 @@ private:
         bool completed{ false };
         float warmupElapsed{ 0.0f };
         float captureElapsed{ 0.0f };
+        uint64_t lastGaussianRebuildCount{ 0 };
+        uint32_t stableGaussianFrames{ 0 };
         std::vector<float> frameTimesMs;
     } _benchmarkState;
     struct StartupState {

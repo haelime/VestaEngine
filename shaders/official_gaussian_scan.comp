@@ -1,0 +1,101 @@
+#version 460
+
+const uint BLOCK_SIZE = 256u;
+
+struct ProjectedGaussian {
+    vec4 centerRadiusDepth;
+    vec4 conicOpacity;
+    vec4 color;
+    uvec4 tileRect;
+    uvec4 tileOffset;
+};
+
+layout(set = 1, binding = 0, std430) buffer ProjectedGaussianBuffer {
+    ProjectedGaussian projected[];
+};
+
+layout(set = 1, binding = 10, std430) buffer ScanBlockSumBuffer {
+    uint scanBlockSums[];
+};
+
+layout(set = 1, binding = 11, std430) buffer CountBuffer {
+    uvec4 countMeta[4];
+};
+
+layout(push_constant) uniform GaussianComputePushConstants {
+    uvec4 params0;
+    uvec4 params1;
+    vec4 params2;
+} pc;
+
+layout(local_size_x = BLOCK_SIZE, local_size_y = 1, local_size_z = 1) in;
+
+shared uint sValues[BLOCK_SIZE];
+
+void main()
+{
+    uint count = pc.params0.x;
+    uint blockCount = pc.params0.y;
+    uint mode = pc.params0.z;
+    uint localIndex = gl_LocalInvocationIndex;
+    uint blockIndex = gl_WorkGroupID.x;
+
+    if (blockIndex >= blockCount) {
+        return;
+    }
+
+    if (mode == 0u) {
+        uint begin = blockIndex * BLOCK_SIZE;
+        uint itemIndex = begin + localIndex;
+        uint value = itemIndex < count ? projected[itemIndex].tileOffset.y : 0u;
+        sValues[localIndex] = value;
+        barrier();
+
+        for (uint offset = 1u; offset < BLOCK_SIZE; offset <<= 1u) {
+            uint addValue = localIndex >= offset ? sValues[localIndex - offset] : 0u;
+            barrier();
+            sValues[localIndex] += addValue;
+            barrier();
+        }
+
+        if (itemIndex < count) {
+            uint inclusive = sValues[localIndex];
+            projected[itemIndex].tileOffset.x = inclusive - value;
+        }
+
+        if (localIndex == BLOCK_SIZE - 1u) {
+            scanBlockSums[blockIndex] = sValues[localIndex];
+        }
+        return;
+    }
+
+    if (mode == 1u) {
+        if (gl_GlobalInvocationID.x != 0u) {
+            return;
+        }
+        uint running = 0u;
+        for (uint i = 0u; i < blockCount; ++i) {
+            uint blockSum = scanBlockSums[i];
+            scanBlockSums[i] = running;
+            running += blockSum;
+        }
+        return;
+    }
+
+    if (mode == 2u) {
+        uint itemIndex = blockIndex * BLOCK_SIZE + localIndex;
+        if (itemIndex >= count) {
+            return;
+        }
+        projected[itemIndex].tileOffset.x += scanBlockSums[blockIndex];
+        if (itemIndex + 1u == count) {
+            uint totalCountRaw = projected[itemIndex].tileOffset.x + projected[itemIndex].tileOffset.y;
+            uint totalCount = min(totalCountRaw, pc.params0.w);
+            uint radixBlockCount = (totalCount + BLOCK_SIZE - 1u) / BLOCK_SIZE;
+            countMeta[0] = uvec4(totalCount, radixBlockCount, radixBlockCount, totalCountRaw > totalCount ? 1u : 0u);
+            countMeta[1] = uvec4(radixBlockCount, 1u, 1u, 0u);
+            countMeta[2] = uvec4(radixBlockCount, 1u, 1u, 0u);
+            countMeta[3] = uvec4(radixBlockCount, 1u, 1u, 0u);
+        }
+    }
+}

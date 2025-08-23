@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -16,6 +17,8 @@ namespace vesta::render {
 class RenderDevice;
 struct SceneUploadOptions;
 }
+
+class Camera;
 
 namespace vesta::scene {
 enum class SceneKind : uint32_t {
@@ -124,6 +127,15 @@ struct SceneTextureAsset {
     [[nodiscard]] bool IsValid() const { return width > 0 && height > 0 && !rgba8Pixels.empty(); }
 };
 
+constexpr uint32_t kGaussianMaxShCoefficients = 16;
+
+struct GaussianPrimitive {
+    glm::vec4 positionOpacity{ 0.0f, 0.0f, 0.0f, 1.0f };
+    glm::vec4 scale{ 1.0f, 1.0f, 1.0f, 0.0f };
+    glm::vec4 rotation{ 0.0f, 0.0f, 0.0f, 1.0f };
+    std::array<glm::vec4, kGaussianMaxShCoefficients> shCoefficients{};
+};
+
 // ParsedScene is the asset-loading result before it is flattened into the
 // renderer-friendly PreparedScene buffers.
 struct ParsedScene {
@@ -133,12 +145,14 @@ struct ParsedScene {
     std::vector<ParsedPrimitive> primitives;
     std::vector<ParsedSceneObject> objects;
     std::vector<SceneVertex> gaussianVertices;
+    std::vector<GaussianPrimitive> gaussianPrimitives;
     SceneKind sceneKind{ SceneKind::Empty };
     bool gaussianUsesNativeScale{ false };
+    uint32_t gaussianShDegree{ 0 };
 
     [[nodiscard]] bool IsLoaded() const
     {
-        return !primitives.empty() || !gaussianVertices.empty() || !textures.empty() || !objects.empty();
+        return !primitives.empty() || !gaussianVertices.empty() || !gaussianPrimitives.empty() || !textures.empty() || !objects.empty();
     }
 };
 
@@ -151,9 +165,10 @@ struct SceneBounds {
 
 enum class SceneUploadResource : uint32_t {
     Vertex = 0,
-    Index = 1,
-    Triangle = 2,
-    Material = 3,
+    Gaussian = 1,
+    Index = 2,
+    Triangle = 3,
+    Material = 4,
 };
 
 struct SceneObject {
@@ -179,6 +194,7 @@ struct PreparedScene {
     std::filesystem::path sourcePath;
     SceneKind sceneKind{ SceneKind::Empty };
     std::vector<SceneVertex> vertices;
+    std::vector<GaussianPrimitive> gaussians;
     std::vector<uint32_t> indices;
     std::vector<SceneTriangle> triangles;
     std::vector<SceneMaterial> materials;
@@ -187,10 +203,11 @@ struct PreparedScene {
     std::vector<SceneTextureAsset> textures;
     SceneBounds bounds{};
     std::vector<SceneObject> objects;
+    uint32_t gaussianShDegree{ 0 };
 
     [[nodiscard]] bool IsLoaded() const { return !vertices.empty(); }
     [[nodiscard]] bool HasRasterGeometry() const { return !indices.empty() && !surfaces.empty(); }
-    [[nodiscard]] bool HasGaussianSplats() const { return !vertices.empty(); }
+    [[nodiscard]] bool HasGaussianSplats() const { return !gaussians.empty(); }
 };
 
 struct GpuSceneTexture {
@@ -203,12 +220,14 @@ struct GpuSceneTexture {
 // destruction and background CPU preparation much easier to reason about.
 struct GpuScene {
     render::BufferHandle vertexBuffer{};
+    render::BufferHandle gaussianBuffer{};
     render::BufferHandle indexBuffer{};
     render::BufferHandle triangleBuffer{};
     render::BufferHandle materialBuffer{};
     render::BufferHandle bottomLevelBuffer{};
     render::BufferHandle topLevelBuffer{};
     std::vector<SceneVertex> rasterVertices;
+    std::vector<GaussianPrimitive> gaussians;
     std::vector<SceneTriangle> triangles;
     std::vector<SceneMaterial> materials;
     std::vector<GpuSceneTexture> textures;
@@ -252,11 +271,15 @@ public:
     [[nodiscard]] bool HasGaussianSplats() const
     {
         const SceneKind kind = GetPreparedOrEmpty().sceneKind;
-        return (kind == SceneKind::PointCloud || kind == SceneKind::Gaussian) && !GetPreparedOrEmpty().vertices.empty()
-            && GetGpuOrEmpty().vertexBuffer;
+        return (kind == SceneKind::PointCloud || kind == SceneKind::Gaussian) && !GetPreparedOrEmpty().gaussians.empty()
+            && GetGpuOrEmpty().gaussianBuffer;
     }
+    [[nodiscard]] bool HasTrainedGaussians() const { return GetPreparedOrEmpty().sceneKind == SceneKind::Gaussian; }
     [[nodiscard]] const std::filesystem::path& GetSourcePath() const { return GetPreparedOrEmpty().sourcePath; }
     [[nodiscard]] const std::vector<SceneVertex>& GetVertices() const { return GetPreparedOrEmpty().vertices; }
+    [[nodiscard]] const std::vector<GaussianPrimitive>& GetGaussians() const { return GetPreparedOrEmpty().gaussians; }
+    [[nodiscard]] uint32_t GetGaussianCount() const { return static_cast<uint32_t>(GetPreparedOrEmpty().gaussians.size()); }
+    [[nodiscard]] bool SupportsRealtimeGaussianSorting() const;
     [[nodiscard]] const std::vector<uint32_t>& GetIndices() const { return GetPreparedOrEmpty().indices; }
     [[nodiscard]] const std::vector<SceneTriangle>& GetTriangles() const { return GetPreparedOrEmpty().triangles; }
     [[nodiscard]] const std::vector<SceneMaterial>& GetMaterials() const { return GetPreparedOrEmpty().materials; }
@@ -269,6 +292,7 @@ public:
     [[nodiscard]] std::shared_ptr<const PreparedScene> GetPreparedScene() const { return _prepared; }
 
     [[nodiscard]] render::BufferHandle GetVertexBuffer() const { return GetGpuOrEmpty().vertexBuffer; }
+    [[nodiscard]] render::BufferHandle GetGaussianBuffer() const { return GetGpuOrEmpty().gaussianBuffer; }
     [[nodiscard]] render::BufferHandle GetIndexBuffer() const { return GetGpuOrEmpty().indexBuffer; }
     [[nodiscard]] render::BufferHandle GetTriangleBuffer() const { return GetGpuOrEmpty().triangleBuffer; }
     [[nodiscard]] render::BufferHandle GetMaterialBuffer() const { return GetGpuOrEmpty().materialBuffer; }
@@ -284,10 +308,13 @@ public:
     }
     [[nodiscard]] float GetBottomLevelBuildMs() const { return GetGpuOrEmpty().bottomLevelBuildMs; }
     [[nodiscard]] float GetTopLevelBuildMs() const { return GetGpuOrEmpty().topLevelBuildMs; }
+    [[nodiscard]] uint32_t GetGaussianShDegree() const { return GetPreparedOrEmpty().gaussianShDegree; }
+    [[nodiscard]] uint64_t GetContentVersion() const { return _contentVersion; }
     [[nodiscard]] bool SupportsObjectEditing() const { return !GetPreparedOrEmpty().objects.empty(); }
     [[nodiscard]] std::optional<uint32_t> PickObject(const glm::vec3& rayOrigin, const glm::vec3& rayDirection) const;
     bool TranslateObject(render::RenderDevice& device, uint32_t objectIndex, const glm::vec3& deltaWorld);
     bool RebuildRayTracing(render::RenderDevice& device);
+    bool ResortGaussians(render::RenderDevice& device, const Camera& camera);
 
 private:
     [[nodiscard]] static const PreparedScene& EmptyPreparedScene();
@@ -298,5 +325,6 @@ private:
     std::shared_ptr<ParsedScene> _parsed;
     std::shared_ptr<PreparedScene> _prepared;
     std::unique_ptr<GpuScene> _gpu;
+    uint64_t _contentVersion{ 1 };
 };
 } // namespace vesta::scene

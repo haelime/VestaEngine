@@ -1,0 +1,68 @@
+#version 460
+
+const uint TILE_SIZE = 8u;
+
+struct ProjectedGaussian {
+    vec4 centerRadiusDepth;
+    vec4 conicOpacity;
+    vec4 color;
+    uvec4 tileRect;
+    uvec4 tileOffset;
+};
+
+layout(set = 1, binding = 0, std430) readonly buffer ProjectedGaussianBuffer {
+    ProjectedGaussian projected[];
+};
+
+layout(set = 1, binding = 1, std430) writeonly buffer DuplicateKeyBuffer {
+    uint duplicateKeys[];
+};
+
+layout(set = 1, binding = 2, std430) writeonly buffer DuplicateValueBuffer {
+    uint duplicateValues[];
+};
+
+layout(push_constant) uniform GaussianComputePushConstants {
+    uvec4 params0;
+    uvec4 params1;
+    vec4 params2;
+} pc;
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+void main()
+{
+    uint gaussianIndex = gl_GlobalInvocationID.x;
+    if (gaussianIndex >= pc.params0.x) {
+        return;
+    }
+
+    ProjectedGaussian gaussian = projected[gaussianIndex];
+    uvec4 tileRect = gaussian.tileRect;
+    uvec4 tileOffset = gaussian.tileOffset;
+    if (tileRect.z == 0u || tileRect.w == 0u || tileOffset.y == 0u) {
+        return;
+    }
+
+    uint tileCount = pc.params0.y * pc.params0.z;
+    uint tileBitCount = tileCount <= 1u ? 1u : findMSB(tileCount - 1u) + 1u;
+    uint depthBitCount = 32u - min(tileBitCount, 24u);
+    uint depthMask = (1u << depthBitCount) - 1u;
+    float depth01 = clamp(gaussian.centerRadiusDepth.w * 0.5 + 0.5, 0.0, 1.0);
+    uint depthBits = uint(round(depth01 * float(depthMask)));
+    uint tileShift = depthBitCount;
+
+    uint localOffset = 0u;
+    for (uint tileY = 0u; tileY < tileRect.w; ++tileY) {
+        for (uint tileX = 0u; tileX < tileRect.z; ++tileX) {
+            uint writeIndex = tileOffset.x + localOffset;
+            if (writeIndex >= pc.params0.w) {
+                return;
+            }
+            uint tileIndex = (tileRect.y + tileY) * pc.params0.y + (tileRect.x + tileX);
+            duplicateKeys[writeIndex] = (tileIndex << tileShift) | depthBits;
+            duplicateValues[writeIndex] = gaussianIndex;
+            ++localOffset;
+        }
+    }
+}

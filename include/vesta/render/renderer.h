@@ -158,7 +158,12 @@ struct RendererSettings {
     float distanceCullScale{ 6.0f };
     float gaussianPointSize{ 8.0f };
     float gaussianOpacity{ 0.35f };
+    float gaussianAlphaCutoff{ 0.001f };
     float gaussianMix{ 0.28f };
+    uint32_t gaussianShDegree{ 3 };
+    bool gaussianViewDependentColor{ true };
+    bool gaussianAntialiasing{ true };
+    bool gaussianFastCulling{ true };
     float pathTraceResolutionScale{ 0.5f };
     glm::vec4 lightDirectionAndIntensity{ -0.4f, -1.0f, -0.3f, 2.0f };
     PathTraceBackend pathTraceBackend{ PathTraceBackend::Auto };
@@ -184,7 +189,8 @@ struct RendererGraphResources {
     GraphTextureHandle sceneDepth{};
     GraphTextureHandle deferredLighting{};
     GraphTextureHandle pathTraceOutput{};
-    GraphTextureHandle gaussianOutput{};
+    GraphTextureHandle gaussianAccum{};
+    GraphTextureHandle gaussianReveal{};
 };
 
 struct VisibleSet {
@@ -273,6 +279,7 @@ public:
     [[nodiscard]] const vesta::scene::Scene& GetScene() const { return _scene; }
     [[nodiscard]] const Camera& GetCamera() const { return _camera; }
     [[nodiscard]] Camera& GetCamera() { return _camera; }
+    [[nodiscard]] vesta::core::JobSystem& GetJobSystem() { return _jobs; }
     [[nodiscard]] const RendererSettings& GetSettings() const { return _settings; }
     [[nodiscard]] RendererSettings& GetSettings() { return _settings; }
     [[nodiscard]] const SceneLoadStatus& GetSceneLoadStatus() const { return _sceneLoadStatus; }
@@ -289,6 +296,13 @@ public:
     [[nodiscard]] size_t GetRetiredSceneCount() const { return _retiredScenes.size(); }
     [[nodiscard]] uint32_t GetWorkerThreadCount() const { return _jobs.GetWorkerCount(); }
     [[nodiscard]] size_t GetPendingJobCount() const { return _jobs.GetPendingJobCount(); }
+    [[nodiscard]] uint32_t GetOfficialGaussianProjectedCount() const;
+    [[nodiscard]] uint32_t GetOfficialGaussianDuplicateCount() const;
+    [[nodiscard]] uint32_t GetOfficialGaussianPaddedDuplicateCount() const;
+    [[nodiscard]] uint32_t GetOfficialGaussianTileCount() const;
+    [[nodiscard]] float GetOfficialGaussianAverageTilesTouched() const;
+    [[nodiscard]] uint64_t GetOfficialGaussianRebuildCount() const;
+    [[nodiscard]] bool IsGaussianInteractivePreviewActive() const { return _scene.HasTrainedGaussians() && _gaussianInteractivePreviewFramesRemaining > 0; }
     [[nodiscard]] RenderDevice& GetRenderDevice() { return _device; }
     [[nodiscard]] const RenderDevice& GetRenderDevice() const { return _device; }
     [[nodiscard]] PathTraceBackend GetActivePathTraceBackend() const;
@@ -457,5 +471,6 @@ private:
     glm::vec3 _dragPlaneOrigin{ 0.0f };
     glm::vec3 _dragPlaneNormal{ 0.0f, 1.0f, 0.0f };
     glm::vec3 _dragGrabOffset{ 0.0f };
+    uint32_t _gaussianInteractivePreviewFramesRemaining{ 0 };
 };
 } // namespace vesta::render

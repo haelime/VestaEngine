@@ -1,0 +1,165 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : enable
+
+const uint TILE_SIZE = 8u;
+const uint MAX_ENTRIES_PER_TILE = 4096u;
+const uint INVALID_IMAGE_INDEX = 0xffffffffu;
+
+struct ProjectedGaussian {
+    vec4 centerDepthOpacity;
+    vec4 conicOpacity;
+    vec4 color;
+};
+
+layout(set = 0, binding = 0) uniform sampler2D sampledImages[];
+
+layout(set = 1, binding = 1, std430) readonly buffer ProjectedGaussianBuffer {
+    ProjectedGaussian projected[];
+};
+
+layout(set = 1, binding = 2, std430) readonly buffer TileCountBuffer {
+    uint tileCounts[];
+};
+
+layout(set = 1, binding = 3, std430) readonly buffer TileEntryBuffer {
+    uint tileEntries[];
+};
+
+layout(rgba16f, set = 1, binding = 4) uniform writeonly image2D accumOutput;
+layout(rgba16f, set = 1, binding = 5) uniform writeonly image2D revealOutput;
+
+layout(push_constant) uniform GaussianComputePushConstants {
+    mat4 viewMatrix;
+    mat4 viewProjection;
+    vec4 cameraPositionAndSceneType;
+    vec4 params0;
+    uvec4 params1;
+    uvec4 params2;
+    vec4 params3;
+} pc;
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+shared uint sIndices[MAX_ENTRIES_PER_TILE];
+shared float sDepths[MAX_ENTRIES_PER_TILE];
+shared uint sCount;
+shared uint sSortCount;
+
+uint next_power_of_two(uint value)
+{
+    uint result = 1u;
+    while (result < value && result < MAX_ENTRIES_PER_TILE) {
+        result <<= 1u;
+    }
+    return result;
+}
+
+void swapEntries(uint a, uint b)
+{
+    uint tempIndex = sIndices[a];
+    sIndices[a] = sIndices[b];
+    sIndices[b] = tempIndex;
+
+    float tempDepth = sDepths[a];
+    sDepths[a] = sDepths[b];
+    sDepths[b] = tempDepth;
+}
+
+void main()
+{
+    uvec2 tileCoord = gl_WorkGroupID.xy;
+    if (tileCoord.x >= pc.params1.y || tileCoord.y >= pc.params1.z) {
+        return;
+    }
+
+    uint localLinear = gl_LocalInvocationIndex;
+    uint tileIndex = tileCoord.y * pc.params1.y + tileCoord.x;
+    if (localLinear == 0u) {
+        sCount = min(tileCounts[tileIndex], MAX_ENTRIES_PER_TILE);
+        sSortCount = next_power_of_two(max(sCount, 1u));
+    }
+    barrier();
+
+    for (uint entryIndex = localLinear; entryIndex < sSortCount; entryIndex += TILE_SIZE * TILE_SIZE) {
+        if (entryIndex < sCount) {
+            uint gaussianIndex = tileEntries[tileIndex * MAX_ENTRIES_PER_TILE + entryIndex];
+            sIndices[entryIndex] = gaussianIndex;
+            sDepths[entryIndex] = projected[gaussianIndex].centerDepthOpacity.z;
+        } else {
+            sIndices[entryIndex] = 0xffffffffu;
+            sDepths[entryIndex] = 1.0e30;
+        }
+    }
+    barrier();
+
+    for (uint k = 2u; k <= sSortCount; k <<= 1u) {
+        for (uint j = k >> 1u; j > 0u; j >>= 1u) {
+            for (uint i = localLinear; i < sSortCount; i += TILE_SIZE * TILE_SIZE) {
+                uint ixj = i ^ j;
+                if (ixj > i) {
+                    bool ascending = (i & k) == 0u;
+                    bool shouldSwap = ascending ? (sDepths[i] > sDepths[ixj]) : (sDepths[i] < sDepths[ixj]);
+                    if (shouldSwap) {
+                        swapEntries(i, ixj);
+                    }
+                }
+            }
+            barrier();
+        }
+    }
+
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 renderSize = ivec2(int(pc.params0.z), int(pc.params0.w));
+    if (pixel.x >= renderSize.x || pixel.y >= renderSize.y) {
+        return;
+    }
+
+    float sceneDepth = 1.0;
+    if (pc.params2.x != INVALID_IMAGE_INDEX) {
+        sceneDepth = texelFetch(sampledImages[nonuniformEXT(int(pc.params2.x))], pixel, 0).r;
+    }
+
+    vec3 color = vec3(0.0);
+    float transmittance = 1.0;
+    vec2 samplePoint = vec2(pixel) + vec2(0.5);
+
+    for (uint entryIndex = 0u; entryIndex < sCount; ++entryIndex) {
+        ProjectedGaussian gaussian = projected[sIndices[entryIndex]];
+        float opacity = gaussian.conicOpacity.w;
+        if (opacity <= 0.0) {
+            continue;
+        }
+
+        float depth = gaussian.centerDepthOpacity.z;
+        if (pc.params2.x != INVALID_IMAGE_INDEX && depth > sceneDepth + 1.0e-4) {
+            continue;
+        }
+
+        vec2 center = gaussian.centerDepthOpacity.xy;
+        vec2 delta = center - samplePoint;
+        float radius = gaussian.centerDepthOpacity.w;
+        if (abs(delta.x) > radius || abs(delta.y) > radius) {
+            continue;
+        }
+        vec3 conic = gaussian.conicOpacity.xyz;
+        float power = -0.5 * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) - conic.y * delta.x * delta.y;
+        if (power > 0.0) {
+            continue;
+        }
+        float alpha = clamp(opacity * pc.params0.y * exp(power), 0.0, 0.995);
+        if (alpha < pc.params3.x) {
+            continue;
+        }
+
+        float contribution = transmittance * alpha;
+        color += gaussian.color.rgb * contribution;
+        transmittance *= (1.0 - alpha);
+        if (transmittance < pc.params3.y) {
+            break;
+        }
+    }
+
+    float finalAlpha = clamp(1.0 - transmittance, 0.0, 1.0);
+    imageStore(accumOutput, pixel, vec4(color, finalAlpha));
+    imageStore(revealOutput, pixel, vec4(1.0 - finalAlpha));
+}
