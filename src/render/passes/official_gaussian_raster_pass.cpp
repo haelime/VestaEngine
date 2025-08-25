@@ -32,6 +32,8 @@ constexpr float kShC3_3 = 0.3731763325901154f;
 constexpr float kShC3_4 = -0.4570457994644658f;
 constexpr float kShC3_5 = 1.445305721320277f;
 constexpr float kShC3_6 = -0.5900435899266435f;
+constexpr float kGaussianAlphaThreshold = 1.0e-4f;
+constexpr float kGaussianRevealThreshold = 7.5e-4f;
 
 struct GaussianComputePushConstants {
     glm::uvec4 params0{ 0u };
@@ -151,11 +153,9 @@ void OfficialGaussianRasterPass::SetOutputs(GraphTextureHandle accum, GraphTextu
 void OfficialGaussianRasterPass::SetScene(const vesta::scene::Scene* scene) { _scene = scene; }
 void OfficialGaussianRasterPass::SetCamera(const Camera* camera) { _camera = camera; }
 void OfficialGaussianRasterPass::SetJobSystem(vesta::core::JobSystem* jobs) { _jobs = jobs; }
-void OfficialGaussianRasterPass::SetParams(
-    float opacity, float alphaCutoff, uint32_t shDegree, bool viewDependentColor, bool antialiasing, bool fastCulling)
+void OfficialGaussianRasterPass::SetParams(float opacity, uint32_t shDegree, bool viewDependentColor, bool antialiasing, bool fastCulling)
 {
     _opacity = opacity;
-    _alphaCutoff = alphaCutoff;
     _shDegree = shDegree;
     _viewDependentColor = viewDependentColor;
     _antialiasing = antialiasing;
@@ -253,8 +253,7 @@ bool OfficialGaussianRasterPass::NeedsFrameDataRebuild(VkExtent2D extent) const
     if (_scene != _cachedScene || _scene->GetContentVersion() != _cachedSceneVersion || extent.width != _cachedExtent.width
         || extent.height != _cachedExtent.height || _shDegree != _cachedShDegree
         || _viewDependentColor != _cachedViewDependentColor || _antialiasing != _cachedAntialiasing
-        || _fastCulling != _cachedFastCulling || std::abs(_opacity - _cachedOpacity) >= 1.0e-4f
-        || std::abs(_alphaCutoff - _cachedAlphaCutoff) >= 1.0e-6f) {
+        || _fastCulling != _cachedFastCulling || std::abs(_opacity - _cachedOpacity) >= 1.0e-4f) {
         return true;
     }
     return !MatApproximatelyEqual(_camera->GetViewMatrix(), _cachedViewMatrix)
@@ -278,7 +277,6 @@ void OfficialGaussianRasterPass::RebuildFrameDataIfNeeded(VkExtent2D extent)
     _cachedAntialiasing = _antialiasing;
     _cachedFastCulling = _fastCulling;
     _cachedOpacity = _opacity;
-    _cachedAlphaCutoff = _alphaCutoff;
     _gpuBuildDirty = true;
 }
 
@@ -529,7 +527,7 @@ void OfficialGaussianRasterPass::Execute(const RenderGraphContext& context)
         pushConstants = {};
         pushConstants.params0 = glm::uvec4(sourceGaussianCount, context.GetRenderExtent().width, context.GetRenderExtent().height, sourceGaussianBufferIndex);
         pushConstants.params1 = glm::uvec4(_shDegree, tileCountX, tileCountY, preprocessFlags);
-        pushConstants.params2 = glm::vec4(_opacity, _alphaCutoff, std::max(_alphaCutoff * 1.5f, 0.00075f), 0.0f);
+        pushConstants.params2 = glm::vec4(_opacity, kGaussianAlphaThreshold, kGaussianRevealThreshold, 0.0f);
         pushConstants.viewMatrix = _camera->GetViewMatrix();
         pushConstants.viewProjection = _camera->GetViewProjection();
         pushConstants.cameraPositionAndSceneType = glm::vec4(_camera->GetPosition(), 0.0f);
@@ -650,7 +648,7 @@ void OfficialGaussianRasterPass::Execute(const RenderGraphContext& context)
     pushConstants = {};
     pushConstants.params0 = glm::uvec4(tileCountX, tileCountY, depthImageIndex, 0u);
     pushConstants.params1 = glm::uvec4(static_cast<uint32_t>(context.GetRenderExtent().width), static_cast<uint32_t>(context.GetRenderExtent().height), 0u, 0u);
-    pushConstants.params2 = glm::vec4(1.0f, _alphaCutoff, std::max(_alphaCutoff * 1.5f, 0.00075f), 0.0f);
+    pushConstants.params2 = glm::vec4(1.0f, kGaussianAlphaThreshold, kGaussianRevealThreshold, 0.0f);
     vkCmdPushConstants(commandBuffer, _pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pushConstants), &pushConstants);
     vkCmdDispatch(commandBuffer, tileCountX, tileCountY, 1);
 }

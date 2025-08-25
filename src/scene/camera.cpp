@@ -8,6 +8,15 @@
 #include <glm/gtc/matrix_inverse.hpp>
 #include <glm/ext/matrix_transform.hpp>
 
+namespace {
+glm::vec3 RotateAroundAxis(const glm::vec3& vector, const glm::vec3& axis, float radians)
+{
+    const float cosine = std::cos(radians);
+    const float sine = std::sin(radians);
+    return vector * cosine + glm::cross(axis, vector) * sine + axis * glm::dot(axis, vector) * (1.0f - cosine);
+}
+} // namespace
+
 void Camera::SetViewport(uint32_t width, uint32_t height)
 {
     if (height == 0) {
@@ -23,7 +32,32 @@ void Camera::Focus(glm::vec3 center, float radius)
     _position = center + glm::vec3(radius * 0.35f, radius * 0.2f, radius * 1.4f);
     _yawDegrees = -110.0f;
     _pitchDegrees = -10.0f;
-    UpdateDirectionFromAngles();
+    _rollDegrees = 0.0f;
+    UpdateOrientationFromAngles();
+    _movedThisFrame = true;
+}
+
+void Camera::SetPosition(glm::vec3 position)
+{
+    const glm::vec3 delta = position - _position;
+    if (glm::dot(delta, delta) <= 1.0e-10f) {
+        return;
+    }
+    _position = position;
+    _movedThisFrame = true;
+}
+
+void Camera::SetRotationDegrees(glm::vec3 rotationDegrees)
+{
+    rotationDegrees.y = glm::clamp(rotationDegrees.y, -89.0f, 89.0f);
+    const glm::vec3 delta = rotationDegrees - glm::vec3(_yawDegrees, _pitchDegrees, _rollDegrees);
+    if (glm::dot(delta, delta) <= 1.0e-10f) {
+        return;
+    }
+    _yawDegrees = rotationDegrees.x;
+    _pitchDegrees = rotationDegrees.y;
+    _rollDegrees = rotationDegrees.z;
+    UpdateOrientationFromAngles();
     _movedThisFrame = true;
 }
 
@@ -58,7 +92,7 @@ void Camera::HandleEvent(const SDL_Event& event)
         _yawDegrees += static_cast<float>(deltaX) * kMouseSensitivity;
         _pitchDegrees -= static_cast<float>(deltaY) * kMouseSensitivity;
         _pitchDegrees = glm::clamp(_pitchDegrees, -89.0f, 89.0f);
-        UpdateDirectionFromAngles();
+        UpdateOrientationFromAngles();
         _movedThisFrame = true;
     }
 }
@@ -133,7 +167,7 @@ glm::vec3 Camera::GetForward() const
     return _forward;
 }
 
-void Camera::UpdateDirectionFromAngles()
+void Camera::UpdateOrientationFromAngles()
 {
     const float yawRadians = glm::radians(_yawDegrees);
     const float pitchRadians = glm::radians(_pitchDegrees);
@@ -143,4 +177,17 @@ void Camera::UpdateDirectionFromAngles()
     forward.y = std::sin(pitchRadians);
     forward.z = std::sin(yawRadians) * std::cos(pitchRadians);
     _forward = glm::normalize(forward);
+
+    glm::vec3 right = glm::cross(_forward, glm::vec3(0.0f, 1.0f, 0.0f));
+    if (glm::dot(right, right) <= 1.0e-8f) {
+        right = glm::vec3(1.0f, 0.0f, 0.0f);
+    } else {
+        right = glm::normalize(right);
+    }
+
+    glm::vec3 up = glm::normalize(glm::cross(right, _forward));
+    if (std::abs(_rollDegrees) > 1.0e-4f) {
+        up = glm::normalize(RotateAroundAxis(up, _forward, glm::radians(_rollDegrees)));
+    }
+    _up = up;
 }

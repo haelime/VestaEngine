@@ -17,9 +17,7 @@ public:
     void SetOutputs(GraphTextureHandle accum, GraphTextureHandle reveal);
     void SetScene(const vesta::scene::Scene* scene);
     void SetCamera(const Camera* camera);
-    void SetParams(float pointSize,
-        float opacity,
-        float alphaCutoff,
+    void SetParams(float opacity,
         bool enabled,
         uint32_t shDegree,
         bool viewDependentColor,
@@ -46,11 +44,9 @@ private:
     GraphTextureHandle _revealOutput{};
     const vesta::scene::Scene* _scene{ nullptr };
     const Camera* _camera{ nullptr };
-    float _pointSize{ 6.0f };
-    float _opacity{ 0.35f };
-    float _alphaCutoff{ 0.001f };
+    float _opacity{ 1.0f };
     bool _enabled{ true };
-    uint32_t _shDegree{ 3 };
+    uint32_t _shDegree{ 0 };
     bool _viewDependentColor{ true };
     bool _antialiasing{ true };
     bool _fastCulling{ true };

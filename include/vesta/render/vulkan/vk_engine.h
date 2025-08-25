@@ -63,6 +63,7 @@ public:
     struct ImGuiContext* _imguiContext{ nullptr };
     bool _imguiInitialized{ false };
     bool _showDebugUi{ true };
+    bool _showDetailedStats{ false };
     VkDescriptorPool _imguiDescriptorPool{ VK_NULL_HANDLE };
     std::vector<std::filesystem::path> _recentScenePaths;
 

@@ -51,11 +51,15 @@ vec3 quat_rotate(vec4 q, vec3 v)
     return v + q.w * t + cross(q.xyz, t);
 }
 
-vec2 projection_scales(mat4 viewProjection)
+vec3 sanitize_scale(vec3 scale)
 {
-    return vec2(
-        length(vec3(viewProjection[0][0], viewProjection[1][0], viewProjection[2][0])),
-        length(vec3(viewProjection[0][1], viewProjection[1][1], viewProjection[2][1])));
+    return max(scale, vec3(1.0e-6));
+}
+
+vec2 projection_scales(mat4 viewProjection, mat4 viewMatrix)
+{
+    mat3 projection3x3 = mat3(viewProjection) * transpose(mat3(viewMatrix));
+    return vec2(length(projection3x3[0]), length(projection3x3[1]));
 }
 
 vec3 evaluate_sh_color(GaussianPrimitive gaussian, vec3 viewDir)
@@ -129,27 +133,28 @@ void main()
         float rotationLength = length(rotation);
         rotation = rotationLength > 1.0e-4 ? rotation / rotationLength : vec4(0.0, 0.0, 0.0, 1.0);
 
-        vec3 axisU = quat_rotate(rotation, vec3(max(gaussian.scale.x, 1.0e-4), 0.0, 0.0));
-        vec3 axisV = quat_rotate(rotation, vec3(0.0, max(gaussian.scale.y, 1.0e-4), 0.0));
-        vec3 axisW = quat_rotate(rotation, vec3(0.0, 0.0, max(gaussian.scale.z, 1.0e-4)));
+        vec3 scale = sanitize_scale(gaussian.scale.xyz);
+        vec3 axisU = quat_rotate(rotation, vec3(scale.x, 0.0, 0.0));
+        vec3 axisV = quat_rotate(rotation, vec3(0.0, scale.y, 0.0));
+        vec3 axisW = quat_rotate(rotation, vec3(0.0, 0.0, scale.z));
 
         vec3 centerView = (pc.viewMatrix * vec4(centerPosition, 1.0)).xyz;
         float cameraZ = min(centerView.z, -1.0e-4);
         viewDepth = -cameraZ;
 
         mat3 rotationScale = mat3(axisU, axisV, axisW);
-        mat3 covarianceWorld = transpose(rotationScale) * rotationScale;
+        mat3 covarianceWorld = rotationScale * transpose(rotationScale);
 
         vec2 viewportSize = max(pc.params0.zw, vec2(1.0));
-        vec2 focal = projection_scales(pc.viewProjection) * viewportSize * 0.5;
+        vec2 focal = projection_scales(pc.viewProjection, pc.viewMatrix) * viewportSize * 0.5;
         float invCameraZ = 1.0 / cameraZ;
         float invCameraZ2 = invCameraZ * invCameraZ;
         mat3 J = mat3(
             focal.x * invCameraZ, 0.0, -(focal.x * centerView.x) * invCameraZ2,
             0.0, -focal.y * invCameraZ, (focal.y * centerView.y) * invCameraZ2,
             0.0, 0.0, 0.0);
-        mat3 T = transpose(mat3(pc.viewMatrix)) * J;
-        mat3 covarianceScreen = transpose(T) * covarianceWorld * T;
+        mat3 T = J * mat3(pc.viewMatrix);
+        mat3 covarianceScreen = T * covarianceWorld * transpose(T);
         mat2 cov = mat2(
             covarianceScreen[0][0], covarianceScreen[0][1],
             covarianceScreen[1][0], covarianceScreen[1][1]);

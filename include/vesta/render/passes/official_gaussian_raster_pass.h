@@ -23,7 +23,7 @@ public:
     void SetScene(const vesta::scene::Scene* scene);
     void SetCamera(const Camera* camera);
     void SetJobSystem(vesta::core::JobSystem* jobs);
-    void SetParams(float opacity, float alphaCutoff, uint32_t shDegree, bool viewDependentColor, bool antialiasing, bool fastCulling);
+    void SetParams(float opacity, uint32_t shDegree, bool viewDependentColor, bool antialiasing, bool fastCulling);
 
     [[nodiscard]] std::string_view Name() const override { return "OfficialGaussianRasterPass"; }
     void Initialize(RenderDevice& device) override;
@@ -65,9 +65,8 @@ private:
     GraphTextureHandle _revealOutput{};
     const vesta::scene::Scene* _scene{ nullptr };
     const Camera* _camera{ nullptr };
-    float _opacity{ 0.35f };
-    float _alphaCutoff{ 0.001f };
-    uint32_t _shDegree{ 3 };
+    float _opacity{ 1.0f };
+    uint32_t _shDegree{ 0 };
     bool _viewDependentColor{ true };
     bool _antialiasing{ true };
     bool _fastCulling{ true };
@@ -116,8 +115,7 @@ private:
     bool _cachedViewDependentColor{ true };
     bool _cachedAntialiasing{ true };
     bool _cachedFastCulling{ true };
-    float _cachedOpacity{ 0.35f };
-    float _cachedAlphaCutoff{ 0.001f };
+    float _cachedOpacity{ 1.0f };
     bool _gpuBuildDirty{ true };
     Statistics _statistics{};
     vesta::core::JobSystem* _jobs{ nullptr };
