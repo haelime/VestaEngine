@@ -676,7 +676,9 @@ void VestaEngine::finish_benchmark()
                << "pt_scale,avg_frame_ms,p95_frame_ms,min_frame_ms,max_frame_ms,avg_fps,frame_count,"
                << "vertices,triangles,surfaces,textures_total,textures_resident,parse_ms,prepare_ms,"
                << "geometry_upload_ms,texture_upload_ms,blas_ms,tlas_ms,"
-               << "gaussian_projected,gaussian_duplicates,gaussian_padded_duplicates,gaussian_tiles,gaussian_avg_tiles_touched,gaussian_rebuilds\n";
+               << "gaussian_projected,gaussian_duplicates,gaussian_padded_duplicates,gaussian_tiles,gaussian_avg_tiles_touched,gaussian_rebuilds,"
+               << "gaussian_preprocess_ms,gaussian_scan_ms,gaussian_duplicate_ms,gaussian_sort_ms,gaussian_range_ms,"
+               << "gaussian_raster_ms,gaussian_total_build_ms\n";
     }
 
     const auto now = std::chrono::system_clock::now();
@@ -742,7 +744,14 @@ void VestaEngine::finish_benchmark()
            << _renderer.GetOfficialGaussianPaddedDuplicateCount() << ','
            << _renderer.GetOfficialGaussianTileCount() << ','
            << _renderer.GetOfficialGaussianAverageTilesTouched() << ','
-           << _renderer.GetOfficialGaussianRebuildCount() << '\n';
+           << _renderer.GetOfficialGaussianRebuildCount() << ','
+           << _renderer.GetOfficialGaussianPreprocessMs() << ','
+           << _renderer.GetOfficialGaussianScanMs() << ','
+           << _renderer.GetOfficialGaussianDuplicateMs() << ','
+           << _renderer.GetOfficialGaussianSortMs() << ','
+           << _renderer.GetOfficialGaussianRangeMs() << ','
+           << _renderer.GetOfficialGaussianRasterMs() << ','
+           << _renderer.GetOfficialGaussianTotalBuildMs() << '\n';
 
     fmt::println("Benchmark written to {}", outputPath.string());
 }
@@ -1206,6 +1215,13 @@ void VestaEngine::build_debug_ui()
                 ImGui::Text("Avg Tiles / Gaussian %.2f", _renderer.GetOfficialGaussianAverageTilesTouched());
                 ImGui::Text("Gaussian Rebuilds %llu", static_cast<unsigned long long>(_renderer.GetOfficialGaussianRebuildCount()));
                 ImGui::Text("Gaussian Preview %s", _renderer.IsGaussianInteractivePreviewActive() ? "Legacy Preview" : "Official");
+                ImGui::Text("Preprocess %.3f ms", _renderer.GetOfficialGaussianPreprocessMs());
+                ImGui::Text("Scan %.3f ms", _renderer.GetOfficialGaussianScanMs());
+                ImGui::Text("Duplicate %.3f ms", _renderer.GetOfficialGaussianDuplicateMs());
+                ImGui::Text("Sort %.3f ms", _renderer.GetOfficialGaussianSortMs());
+                ImGui::Text("Range %.3f ms", _renderer.GetOfficialGaussianRangeMs());
+                ImGui::Text("Raster %.3f ms", _renderer.GetOfficialGaussianRasterMs());
+                ImGui::Text("Build Total %.3f ms", _renderer.GetOfficialGaussianTotalBuildMs());
             }
             ImGui::Text("Surfaces %zu", scene.GetSurfaces().size());
             ImGui::Text("Textures %zu / %u", scene.GetTextures().size(), _renderer.GetResidentTextureCount());
@@ -1367,6 +1383,50 @@ void VestaEngine::build_debug_ui()
     ImGui::SetNextWindowPos(ImVec2(18.0f, 340.0f), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(420.0f, 0.0f), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("Camera", nullptr, ImGuiWindowFlags_NoSavedSettings)) {
+        const bool canOrbitSelection =
+            _renderer.GetSelection().kind == vesta::render::SelectionKind::Object
+            && _renderer.GetSelection().objectIndex < scene.GetObjects().size();
+        if (!canOrbitSelection) {
+            ImGui::BeginDisabled();
+        }
+        if (ImGui::Button("Orbit Selected") && canOrbitSelection) {
+            _renderer.OrbitCameraAroundSelection();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Dolly Selected") && canOrbitSelection) {
+            _renderer.DollyCameraAroundSelection();
+        }
+        if (!canOrbitSelection) {
+            ImGui::EndDisabled();
+        }
+        if (ImGui::Button("Orbit Scene")) {
+            _renderer.OrbitCameraAroundScene();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Dolly Scene")) {
+            _renderer.DollyCameraAroundScene();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Fly Camera")) {
+            _renderer.DisableCameraOrbit();
+        }
+
+        ImGui::Text("Mode %s", camera.IsDollyOrbitEnabled() ? "Dolly Orbit" : (camera.IsOrbitEnabled() ? "Orbit" : "Fly"));
+        if (camera.IsOrbitEnabled()) {
+            const glm::vec3 orbitTarget = camera.GetOrbitTarget();
+            ImGui::Text("Target %.3f %.3f %.3f", orbitTarget.x, orbitTarget.y, orbitTarget.z);
+            float orbitRadius = camera.GetOrbitRadius();
+            if (ImGui::InputFloat("Dolly Radius", &orbitRadius, 0.1f, 1.0f, "%.3f")) {
+                camera.SetOrbitRadius(orbitRadius);
+                _renderer.ResetAccumulation();
+            }
+            float dollySpeed = camera.GetDollySpeedDegrees();
+            if (ImGui::InputFloat("Dolly Speed", &dollySpeed, 1.0f, 10.0f, "%.2f deg/s")) {
+                camera.SetDollySpeedDegrees(dollySpeed);
+            }
+            ImGui::Text("Track Selected %s", _renderer.IsTrackingSelectionOrbit() ? "On" : "Off");
+        }
+
         float cameraPosition[3] = { camera.GetPosition().x, camera.GetPosition().y, camera.GetPosition().z };
         if (ImGui::InputFloat3("Position", cameraPosition, "%.3f")) {
             camera.SetPosition(glm::vec3(cameraPosition[0], cameraPosition[1], cameraPosition[2]));
@@ -1383,8 +1443,8 @@ void VestaEngine::build_debug_ui()
         ImGui::Text("Forward %.3f %.3f %.3f", camera.GetForward().x, camera.GetForward().y, camera.GetForward().z);
         ImGui::Text("Up %.3f %.3f %.3f", camera.GetUp().x, camera.GetUp().y, camera.GetUp().z);
         ImGui::SeparatorText("Controls");
-        ImGui::Text("RMB + Mouse Look");
-        ImGui::Text("WASD / Q / E Move");
+        ImGui::Text("%s", camera.IsOrbitEnabled() ? "RMB + Mouse Orbit / Dolly Adjust" : "RMB + Mouse Look");
+        ImGui::Text("%s", camera.IsOrbitEnabled() ? "Wheel Zoom" : "WASD / Q / E Move");
         ImGui::Text("LMB Pick/Drag Object");
         ImGui::Text("L Select Light, Esc Clear Selection");
         ImGui::Text("1 Raster, 2 Gaussian, 3 PT, 4 Composite");

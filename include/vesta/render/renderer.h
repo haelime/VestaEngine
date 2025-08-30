@@ -300,6 +300,13 @@ public:
     [[nodiscard]] uint32_t GetOfficialGaussianTileCount() const;
     [[nodiscard]] float GetOfficialGaussianAverageTilesTouched() const;
     [[nodiscard]] uint64_t GetOfficialGaussianRebuildCount() const;
+    [[nodiscard]] float GetOfficialGaussianPreprocessMs() const;
+    [[nodiscard]] float GetOfficialGaussianScanMs() const;
+    [[nodiscard]] float GetOfficialGaussianDuplicateMs() const;
+    [[nodiscard]] float GetOfficialGaussianSortMs() const;
+    [[nodiscard]] float GetOfficialGaussianRangeMs() const;
+    [[nodiscard]] float GetOfficialGaussianRasterMs() const;
+    [[nodiscard]] float GetOfficialGaussianTotalBuildMs() const;
     [[nodiscard]] bool IsGaussianInteractivePreviewActive() const { return _scene.HasTrainedGaussians() && _gaussianInteractivePreviewFramesRemaining > 0; }
     [[nodiscard]] RenderDevice& GetRenderDevice() { return _device; }
     [[nodiscard]] const RenderDevice& GetRenderDevice() const { return _device; }
@@ -322,6 +329,12 @@ public:
     void SetStartupSafeModeActive(bool active) { _startupSafeModeActive = active; }
     void SelectDirectionalLight();
     void ClearSelection();
+    bool OrbitCameraAroundSelection();
+    void OrbitCameraAroundScene();
+    bool DollyCameraAroundSelection();
+    void DollyCameraAroundScene();
+    void DisableCameraOrbit();
+    [[nodiscard]] bool IsTrackingSelectionOrbit() const { return _trackSelectedObjectOrbit; }
     void SetOverlayCallbacks(OverlayDrawFn drawFn, OverlaySwapchainCallback swapchainCallback = {});
     void ClearOverlayCallbacks();
 
@@ -465,6 +478,7 @@ private:
     EditorSelection _selection{};
     bool _selectionDragging{ false };
     bool _selectionEditedSinceDragStart{ false };
+    bool _trackSelectedObjectOrbit{ false };
     glm::vec2 _lastDragMousePosition{ 0.0f };
     glm::vec3 _dragPlaneOrigin{ 0.0f };
     glm::vec3 _dragPlaneNormal{ 0.0f, 1.0f, 0.0f };

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <vector>
 
 #include <glm/glm.hpp>
@@ -49,6 +50,13 @@ private:
         uint32_t tileCount{ 0 };
         float averageTilesTouched{ 0.0f };
         uint64_t rebuildCount{ 0 };
+        float preprocessMs{ 0.0f };
+        float scanMs{ 0.0f };
+        float duplicateMs{ 0.0f };
+        float sortMs{ 0.0f };
+        float rangeMs{ 0.0f };
+        float rasterMs{ 0.0f };
+        float totalBuildMs{ 0.0f };
     };
 
 public:
@@ -59,6 +67,7 @@ private:
     void DestroyResources(RenderDevice& device);
     void RebuildFrameDataIfNeeded(VkExtent2D extent);
     bool NeedsFrameDataRebuild(VkExtent2D extent) const;
+    [[nodiscard]] bool ReadTimestampResults(RenderDevice& device, uint32_t slot);
 
     GraphTextureHandle _depthInput{};
     GraphTextureHandle _accumOutput{};
@@ -87,6 +96,13 @@ private:
     VkDescriptorPool _descriptorPool{ VK_NULL_HANDLE };
     VkDescriptorSetLayout _descriptorSetLayout{ VK_NULL_HANDLE };
     VkDescriptorSet _descriptorSet{ VK_NULL_HANDLE };
+    static constexpr uint32_t kTimestampFrameSlots = 2;
+    std::array<VkQueryPool, kTimestampFrameSlots> _timestampQueryPools{};
+    float _timestampPeriodNs{ 0.0f };
+    bool _timestampsSupported{ false };
+    std::array<bool, kTimestampFrameSlots> _timestampResultsPending{};
+    std::array<bool, kTimestampFrameSlots> _timestampResultsIncludeBuild{};
+    uint32_t _timestampWriteSlot{ 0 };
 
     BufferHandle _projectedBuffer{};
     BufferHandle _duplicateKeyBuffer{};

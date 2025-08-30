@@ -51,13 +51,11 @@ void main()
 
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
     ivec2 renderSize = ivec2(int(pc.params1.x), int(pc.params1.y));
-    if (pixel.x >= renderSize.x || pixel.y >= renderSize.y) {
-        return;
-    }
+    bool pixelValid = pixel.x < renderSize.x && pixel.y < renderSize.y;
 
     bool useDepth = pc.params0.z != INVALID_IMAGE_INDEX;
     float sceneDepth = 1.0;
-    if (useDepth) {
+    if (pixelValid && useDepth) {
         sceneDepth = texelFetch(sampledImages[nonuniformEXT(int(pc.params0.z))], pixel, 0).r;
     }
 
@@ -86,7 +84,7 @@ void main()
         }
         barrier();
 
-        if (!done) {
+        if (!done && pixelValid) {
             for (uint entryIndex = 0u; entryIndex < sBatchCount; ++entryIndex) {
                 vec4 centerRadiusDepth = sCenterRadiusDepth[entryIndex];
                 vec4 conicOpacity = sConicOpacity[entryIndex];
@@ -127,9 +125,13 @@ void main()
                 }
             }
         }
+
         barrier();
     }
 
+    if (!pixelValid) {
+        return;
+    }
     float finalAlpha = clamp(1.0 - transmittance, 0.0, 1.0);
     imageStore(accumOutput, pixel, vec4(color, finalAlpha));
     imageStore(revealOutput, pixel, vec4(1.0 - finalAlpha));

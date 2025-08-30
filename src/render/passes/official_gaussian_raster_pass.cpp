@@ -35,6 +35,18 @@ constexpr float kShC3_6 = -0.5900435899266435f;
 constexpr float kGaussianAlphaThreshold = 1.0e-4f;
 constexpr float kGaussianRevealThreshold = 7.5e-4f;
 constexpr VkDeviceSize kSortDispatchIndirectOffset = sizeof(glm::uvec4);
+constexpr uint32_t kTimestampQueryCount = 8;
+
+enum GaussianTimestampQuery : uint32_t {
+    kTimestampBuildStart = 0,
+    kTimestampPreprocessEnd = 1,
+    kTimestampScanEnd = 2,
+    kTimestampDuplicateEnd = 3,
+    kTimestampSortEnd = 4,
+    kTimestampRangeEnd = 5,
+    kTimestampRasterStart = 6,
+    kTimestampRasterEnd = 7,
+};
 
 struct GaussianComputePushConstants {
     glm::uvec4 params0{ 0u };
@@ -235,6 +247,19 @@ void OfficialGaussianRasterPass::Initialize(RenderDevice& device)
     _sortPipeline = vkutil::create_compute_pipeline(vkDevice, vkutil::ComputePipelineDesc{ .layout = _pipelineLayout, .computeShader = _sortShader });
     _rangePipeline = vkutil::create_compute_pipeline(vkDevice, vkutil::ComputePipelineDesc{ .layout = _pipelineLayout, .computeShader = _rangeShader });
     _rasterPipeline = vkutil::create_compute_pipeline(vkDevice, vkutil::ComputePipelineDesc{ .layout = _pipelineLayout, .computeShader = _rasterShader });
+
+    VkPhysicalDeviceProperties properties{};
+    vkGetPhysicalDeviceProperties(device.GetPhysicalDevice(), &properties);
+    _timestampPeriodNs = properties.limits.timestampPeriod;
+    _timestampsSupported = properties.limits.timestampComputeAndGraphics == VK_TRUE && _timestampPeriodNs > 0.0f;
+    if (_timestampsSupported) {
+        for (VkQueryPool& queryPool : _timestampQueryPools) {
+            VkQueryPoolCreateInfo queryPoolInfo{ VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO };
+            queryPoolInfo.queryType = VK_QUERY_TYPE_TIMESTAMP;
+            queryPoolInfo.queryCount = kTimestampQueryCount;
+            VK_CHECK(vkCreateQueryPool(vkDevice, &queryPoolInfo, nullptr, &queryPool));
+        }
+    }
 }
 
 void OfficialGaussianRasterPass::Setup(RenderGraphBuilder& builder)
@@ -431,6 +456,71 @@ void OfficialGaussianRasterPass::DestroyResources(RenderDevice& device)
     _gpuBuildDirty = true;
 }
 
+bool OfficialGaussianRasterPass::ReadTimestampResults(RenderDevice& device, uint32_t slot)
+{
+    if (!_timestampsSupported || slot >= _timestampQueryPools.size() || !_timestampResultsPending[slot]) {
+        return true;
+    }
+    VkQueryPool queryPool = _timestampQueryPools[slot];
+    if (queryPool == VK_NULL_HANDLE) {
+        return true;
+    }
+
+    const bool includeBuild = _timestampResultsIncludeBuild[slot];
+    const uint32_t firstQuery = includeBuild ? 0u : kTimestampRasterStart;
+    const uint32_t queryCount = includeBuild ? kTimestampQueryCount : 2u;
+    std::array<uint64_t, kTimestampQueryCount * 2u> results{};
+    const VkResult result = vkGetQueryPoolResults(device.GetDevice(),
+        queryPool,
+        firstQuery,
+        queryCount,
+        sizeof(uint64_t) * results.size(),
+        results.data(),
+        sizeof(uint64_t) * 2u,
+        VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+    if (result == VK_NOT_READY) {
+        return false;
+    }
+    if (result != VK_SUCCESS) {
+        _timestampResultsPending[slot] = false;
+        return true;
+    }
+
+    auto isAvailable = [&](uint32_t query) {
+        if (query < firstQuery || query >= firstQuery + queryCount) {
+            return false;
+        }
+        return results[(query - firstQuery) * 2u + 1u] != 0u;
+    };
+    if (!isAvailable(kTimestampRasterStart) || !isAvailable(kTimestampRasterEnd)) {
+        return false;
+    }
+    auto elapsedMs = [&](uint32_t begin, uint32_t end) {
+        if (!isAvailable(begin) || !isAvailable(end)) {
+            return 0.0f;
+        }
+        const uint32_t beginOffset = begin - firstQuery;
+        const uint32_t endOffset = end - firstQuery;
+        if (results[endOffset * 2u] < results[beginOffset * 2u]) {
+            return 0.0f;
+        }
+        const double elapsedNs = static_cast<double>(results[endOffset * 2u] - results[beginOffset * 2u]) * _timestampPeriodNs;
+        return static_cast<float>(elapsedNs / 1.0e6);
+    };
+
+    if (includeBuild) {
+        _statistics.preprocessMs = elapsedMs(kTimestampBuildStart, kTimestampPreprocessEnd);
+        _statistics.scanMs = elapsedMs(kTimestampPreprocessEnd, kTimestampScanEnd);
+        _statistics.duplicateMs = elapsedMs(kTimestampScanEnd, kTimestampDuplicateEnd);
+        _statistics.sortMs = elapsedMs(kTimestampDuplicateEnd, kTimestampSortEnd);
+        _statistics.rangeMs = elapsedMs(kTimestampSortEnd, kTimestampRangeEnd);
+        _statistics.totalBuildMs = elapsedMs(kTimestampBuildStart, kTimestampRangeEnd);
+    }
+    _statistics.rasterMs = elapsedMs(kTimestampRasterStart, kTimestampRasterEnd);
+    _timestampResultsPending[slot] = false;
+    return true;
+}
+
 void OfficialGaussianRasterPass::Execute(const RenderGraphContext& context)
 {
     if (_scene == nullptr || _camera == nullptr || !_scene->HasTrainedGaussians() || !_scene->HasGaussianSplats()) {
@@ -504,6 +594,20 @@ void OfficialGaussianRasterPass::Execute(const RenderGraphContext& context)
     const uint32_t depthImageIndex =
         _depthInput ? device.GetImageResource(context.GetTextureHandle(_depthInput)).bindless.sampledImage : kInvalidImageIndex;
     VkCommandBuffer commandBuffer = context.GetCommandBuffer();
+    const uint32_t timestampSlot = _timestampWriteSlot;
+    _timestampWriteSlot = (_timestampWriteSlot + 1u) % kTimestampFrameSlots;
+    const bool writeTimestamps =
+        _timestampsSupported && ReadTimestampResults(device, timestampSlot) && _timestampQueryPools[timestampSlot] != VK_NULL_HANDLE;
+    auto writeTimestamp = [&](uint32_t query) {
+        if (writeTimestamps) {
+            vkCmdWriteTimestamp2(commandBuffer, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, _timestampQueryPools[timestampSlot], query);
+        }
+    };
+    if (writeTimestamps) {
+        vkCmdResetQueryPool(commandBuffer, _timestampQueryPools[timestampSlot], 0, kTimestampQueryCount);
+        _timestampResultsPending[timestampSlot] = true;
+        _timestampResultsIncludeBuild[timestampSlot] = _gpuBuildDirty;
+    }
     const std::array<VkDescriptorSet, 2> descriptorSets{ device.GetBindless().GetSet(), _descriptorSet };
     vkCmdBindDescriptorSets(commandBuffer,
         VK_PIPELINE_BIND_POINT_COMPUTE,
@@ -516,6 +620,7 @@ void OfficialGaussianRasterPass::Execute(const RenderGraphContext& context)
     GaussianComputePushConstants pushConstants{};
 
     if (_gpuBuildDirty) {
+        writeTimestamp(kTimestampBuildStart);
         vkCmdFillBuffer(commandBuffer, device.GetBuffer(_tileRangeBuffer), 0, sizeof(glm::uvec2) * tileCount, 0xFFFFFFFFu);
         vkCmdFillBuffer(commandBuffer, device.GetBuffer(_duplicateCountBuffer), 0, sizeof(uint32_t) * 16u, 0u);
         InsertMemoryBarrier(commandBuffer,
@@ -542,6 +647,7 @@ void OfficialGaussianRasterPass::Execute(const RenderGraphContext& context)
             VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
             VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+        writeTimestamp(kTimestampPreprocessEnd);
 
         const uint32_t projectedBlockCount = static_cast<uint32_t>((sourceGaussianCount + 255u) / 256u);
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, _scanPipeline);
@@ -572,6 +678,7 @@ void OfficialGaussianRasterPass::Execute(const RenderGraphContext& context)
             VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT,
             VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT | VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT);
+        writeTimestamp(kTimestampScanEnd);
     }
 
     if (_gpuBuildDirty) {
@@ -585,6 +692,7 @@ void OfficialGaussianRasterPass::Execute(const RenderGraphContext& context)
             VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
             VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+        writeTimestamp(kTimestampDuplicateEnd);
 
         if (_duplicateCapacity > 1) {
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, _sortPipeline);
@@ -632,6 +740,7 @@ void OfficialGaussianRasterPass::Execute(const RenderGraphContext& context)
                 std::swap(inputIndex, outputIndex);
             }
         }
+        writeTimestamp(kTimestampSortEnd);
 
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, _rangePipeline);
         pushConstants = {};
@@ -643,10 +752,12 @@ void OfficialGaussianRasterPass::Execute(const RenderGraphContext& context)
             VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
             VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+        writeTimestamp(kTimestampRangeEnd);
 
         _gpuBuildDirty = false;
     }
 
+    writeTimestamp(kTimestampRasterStart);
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, _rasterPipeline);
     pushConstants = {};
     pushConstants.params0 = glm::uvec4(tileCountX, tileCountY, depthImageIndex, 0u);
@@ -654,6 +765,7 @@ void OfficialGaussianRasterPass::Execute(const RenderGraphContext& context)
     pushConstants.params2 = glm::vec4(1.0f, kGaussianAlphaThreshold, kGaussianRevealThreshold, 0.0f);
     vkCmdPushConstants(commandBuffer, _pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pushConstants), &pushConstants);
     vkCmdDispatch(commandBuffer, tileCountX, tileCountY, 1);
+    writeTimestamp(kTimestampRasterEnd);
 }
 
 void OfficialGaussianRasterPass::Shutdown(RenderDevice& device)
@@ -671,7 +783,15 @@ void OfficialGaussianRasterPass::Shutdown(RenderDevice& device)
         vkDestroyDescriptorSetLayout(vkDevice, _descriptorSetLayout, nullptr);
         _descriptorSetLayout = VK_NULL_HANDLE;
     }
+    for (VkQueryPool& queryPool : _timestampQueryPools) {
+        if (queryPool != VK_NULL_HANDLE) {
+            vkDestroyQueryPool(vkDevice, queryPool, nullptr);
+            queryPool = VK_NULL_HANDLE;
+        }
+    }
     _descriptorSet = VK_NULL_HANDLE;
+    _timestampResultsPending.fill(false);
+    _timestampResultsIncludeBuild.fill(false);
     vkutil::destroy_pipeline(vkDevice, _preprocessPipeline);
     vkutil::destroy_pipeline(vkDevice, _duplicatePipeline);
     vkutil::destroy_pipeline(vkDevice, _scanPipeline);
