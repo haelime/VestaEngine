@@ -420,6 +420,7 @@ void CopyToMappedBuffer(vesta::render::RenderDevice& device, vesta::render::Buff
 
     const vesta::render::AllocatedBuffer& buffer = device.GetBufferResource(handle);
     std::memcpy(buffer.allocationInfo.pMappedData, data.data(), data.size_bytes());
+    device.FlushBuffer(handle, 0, static_cast<VkDeviceSize>(data.size_bytes()));
 }
 
 VkTransformMatrixKHR MakeIdentityTransformMatrix()

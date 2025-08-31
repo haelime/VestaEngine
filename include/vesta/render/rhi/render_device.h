@@ -155,6 +155,8 @@ public:
     void UploadBufferData(BufferHandle destination, VkDeviceSize destinationOffset, std::span<const std::byte> data);
     void UploadImageData(ImageHandle destination, std::span<const std::byte> data);
     void FlushUploadBatch();
+    void FlushBuffer(BufferHandle handle, VkDeviceSize offset, VkDeviceSize size);
+    void InvalidateBuffer(BufferHandle handle, VkDeviceSize offset, VkDeviceSize size);
     void SetDebugWaitContext(std::string_view context);
 
     [[nodiscard]] VkBuffer GetBuffer(BufferHandle handle) const;

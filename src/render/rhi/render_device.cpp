@@ -571,6 +571,7 @@ void RenderDevice::UploadBufferData(BufferHandle destination, VkDeviceSize desti
 
     std::byte* stagingBytes = static_cast<std::byte*>(_uploadContext.mappedData);
     std::memcpy(stagingBytes + _uploadContext.offset, data.data(), data.size_bytes());
+    FlushBuffer(_uploadContext.stagingBuffer, _uploadContext.offset, static_cast<VkDeviceSize>(data.size_bytes()));
 
     const VkBufferCopy copyRegion{
         .srcOffset = _uploadContext.offset,
@@ -598,6 +599,7 @@ void RenderDevice::UploadImageData(ImageHandle destination, std::span<const std:
 
     std::byte* stagingBytes = static_cast<std::byte*>(_uploadContext.mappedData);
     std::memcpy(stagingBytes, data.data(), data.size_bytes());
+    FlushBuffer(_uploadContext.stagingBuffer, 0, requiredBytes);
     _uploadBatchStats.pendingBytes = requiredBytes;
     _uploadBatchStats.pendingCopies = 1;
 
@@ -659,6 +661,30 @@ void RenderDevice::FlushUploadBatch()
     _uploadContext.offset = 0;
     _uploadContext.pendingCopies = 0;
     _uploadContext.recording = false;
+}
+
+void RenderDevice::FlushBuffer(BufferHandle handle, VkDeviceSize offset, VkDeviceSize size)
+{
+    if (!handle || handle.index >= _buffers.size()) {
+        return;
+    }
+    AllocatedBuffer& buffer = _buffers[handle.index];
+    if (buffer.allocation == VK_NULL_HANDLE) {
+        return;
+    }
+    VK_CHECK(vmaFlushAllocation(_allocator, buffer.allocation, offset, size));
+}
+
+void RenderDevice::InvalidateBuffer(BufferHandle handle, VkDeviceSize offset, VkDeviceSize size)
+{
+    if (!handle || handle.index >= _buffers.size()) {
+        return;
+    }
+    AllocatedBuffer& buffer = _buffers[handle.index];
+    if (buffer.allocation == VK_NULL_HANDLE) {
+        return;
+    }
+    VK_CHECK(vmaInvalidateAllocation(_allocator, buffer.allocation, offset, size));
 }
 
 VkBuffer RenderDevice::GetBuffer(BufferHandle handle) const { return _buffers[handle.index].buffer; }

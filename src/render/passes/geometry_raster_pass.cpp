@@ -278,6 +278,7 @@ void GeometryRasterPass::Execute(const RenderGraphContext& context)
 
                 const AllocatedBuffer& indirectBuffer = context.GetDevice().GetBufferResource(_indirectBuffer);
                 std::memcpy(indirectBuffer.allocationInfo.pMappedData, drawCommands.data(), requiredBytes);
+                context.GetDevice().FlushBuffer(_indirectBuffer, 0, static_cast<VkDeviceSize>(requiredBytes));
                 vkCmdDrawIndexedIndirect(commandBuffer,
                     context.GetDevice().GetBuffer(_indirectBuffer),
                     0,

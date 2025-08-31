@@ -593,6 +593,11 @@ void VestaEngine::update_benchmark(float deltaSeconds)
 
     if (!_benchmarkState.capturing) {
         if (_renderer.GetScene().HasTrainedGaussians()) {
+            if (_renderer.IsGaussianInteractivePreviewActive()) {
+                _benchmarkState.stableGaussianFrames = 0;
+                _benchmarkState.warmupElapsed = 0.0f;
+                return;
+            }
             const uint64_t rebuildCount = _renderer.GetOfficialGaussianRebuildCount();
             if (rebuildCount != _benchmarkState.lastGaussianRebuildCount) {
                 _benchmarkState.lastGaussianRebuildCount = rebuildCount;
