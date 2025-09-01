@@ -297,6 +297,7 @@ void ConfigureOfficialGaussianPass(Renderer& renderer, IRenderPass& pass, const 
     gaussianPass.SetScene(&renderer.GetScene());
     gaussianPass.SetCamera(&renderer.GetCamera());
     gaussianPass.SetJobSystem(&renderer.GetJobSystem());
+    gaussianPass.SetFrameSlot(renderer.GetFrameSlot());
     const uint32_t effectiveShDegree =
         std::min(renderer.GetSettings().gaussianShDegree, renderer.GetScene().GetGaussianShDegree());
     gaussianPass.SetParams(renderer.GetSettings().gaussianOpacity,
