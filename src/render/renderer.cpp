@@ -51,12 +51,12 @@ uint32_t GaussianInteractivePreviewFrameBudget(const vesta::scene::Scene& scene)
     }
     const uint32_t gaussianCount = scene.GetGaussianCount();
     if (gaussianCount >= 4'000'000u) {
-        return 360u;
+        return 18u;
     }
     if (gaussianCount >= 1'000'000u) {
-        return 240u;
+        return 12u;
     }
-    return 120u;
+    return 8u;
 }
 
 bool NeedsGeometryPass(const RendererSettings& settings)
@@ -278,14 +278,16 @@ void ConfigureGaussianPass(Renderer& renderer, IRenderPass& pass, const Renderer
     gaussianPass.SetOutputs(resources.gaussianAccum, resources.gaussianReveal);
     gaussianPass.SetScene(&renderer.GetScene());
     gaussianPass.SetCamera(&renderer.GetCamera());
-    const uint32_t effectiveShDegree =
-        std::min(renderer.GetSettings().gaussianShDegree, renderer.GetScene().GetGaussianShDegree());
+    const bool interactivePreview = renderer.GetScene().HasTrainedGaussians() && renderer.IsGaussianInteractivePreviewActive();
+    const uint32_t effectiveShDegree = interactivePreview
+        ? 0u
+        : std::min(renderer.GetSettings().gaussianShDegree, renderer.GetScene().GetGaussianShDegree());
     gaussianPass.SetParams(renderer.GetSettings().gaussianOpacity,
         renderer.GetSettings().enableGaussian,
         effectiveShDegree,
-        renderer.GetSettings().gaussianViewDependentColor,
-        renderer.GetSettings().gaussianAntialiasing,
-        renderer.GetSettings().gaussianFastCulling);
+        interactivePreview ? false : renderer.GetSettings().gaussianViewDependentColor,
+        interactivePreview ? false : renderer.GetSettings().gaussianAntialiasing,
+        true);
 }
 
 void ConfigureOfficialGaussianPass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
@@ -922,7 +924,7 @@ void Renderer::OnSceneEdited(bool rebuildRayTracing)
     _visibleSceneToken.reset();
     _frameSnapshot = {};
     if (_scene.HasTrainedGaussians()) {
-        _gaussianInteractivePreviewFramesRemaining = 8;
+        _gaussianInteractivePreviewFramesRemaining = GaussianInteractivePreviewFrameBudget(_scene);
     }
     if (!_scene.HasTrainedGaussians() && _scene.SupportsRealtimeGaussianSorting()) {
         _scene.ResortGaussians(_device, _camera);

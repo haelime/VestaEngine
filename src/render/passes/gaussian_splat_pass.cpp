@@ -2,6 +2,7 @@
 
 #include <array>
 #include <algorithm>
+#include <cmath>
 
 #include <glm/glm.hpp>
 
@@ -17,6 +18,21 @@ constexpr uint32_t kInvalidImageIndex = kInvalidResourceIndex;
 constexpr float kPointCloudPointSize = 8.0f;
 constexpr float kGaussianAlphaThreshold = 1.0e-4f;
 constexpr float kGaussianRevealThreshold = 7.5e-4f;
+constexpr bool kEnableGaussianComputePreview = false;
+
+uint32_t ComputeInteractivePreviewStride(uint32_t gaussianCount)
+{
+    if (gaussianCount >= 4'000'000u) {
+        return 8u;
+    }
+    if (gaussianCount >= 1'000'000u) {
+        return 4u;
+    }
+    if (gaussianCount >= 250'000u) {
+        return 2u;
+    }
+    return 1u;
+}
 
 struct GaussianGraphicsPushConstants {
     glm::mat4 viewMatrix{ 1.0f };
@@ -46,7 +62,11 @@ struct ProjectedGaussianGPU {
 
 bool UseComputeGaussianPath(const vesta::scene::Scene* scene)
 {
-    return scene != nullptr && scene->HasTrainedGaussians();
+    // The compute preview bins every Gaussian and bitonic-sorts each screen tile
+    // every moving frame. The graphics path reprojects in the vertex shader and
+    // is used only as a short interactive preview before the official pass
+    // rebuilds sorted splats once the camera is stable.
+    return kEnableGaussianComputePreview && scene != nullptr && scene->HasTrainedGaussians();
 }
 
 void ClearStorageOutput(const RenderGraphContext& context, GraphTextureHandle accumOutput, GraphTextureHandle revealOutput)
@@ -158,16 +178,16 @@ void GaussianSplatPass::Initialize(RenderDevice& device)
         pipelineDesc.fragmentShader = _fragmentShader;
         pipelineDesc.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
         pipelineDesc.cullMode = VK_CULL_MODE_NONE;
-        pipelineDesc.depthTestEnable = true;
+        pipelineDesc.depthTestEnable = false;
         pipelineDesc.depthWriteEnable = false;
         pipelineDesc.colorBlendAttachments = {
             VkPipelineColorBlendAttachmentState{
                 .blendEnable = VK_TRUE,
                 .srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
-                .dstColorBlendFactor = VK_BLEND_FACTOR_ONE,
+                .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
                 .colorBlendOp = VK_BLEND_OP_ADD,
                 .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
-                .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+                .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
                 .alphaBlendOp = VK_BLEND_OP_ADD,
                 .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT
                     | VK_COLOR_COMPONENT_A_BIT,
@@ -185,6 +205,10 @@ void GaussianSplatPass::Initialize(RenderDevice& device)
             },
         };
         _graphicsPipeline = vkutil::create_graphics_pipeline(vkDevice, pipelineDesc);
+    }
+
+    if constexpr (!kEnableGaussianComputePreview) {
+        return;
     }
 
     if (_binPipeline == VK_NULL_HANDLE) {
@@ -392,6 +416,11 @@ void GaussianSplatPass::ExecuteGraphicsPath(const RenderGraphContext& context)
         const VkDescriptorSet bindlessSet = context.GetDevice().GetBindless().GetSet();
         vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _graphicsPipelineLayout, 0, 1, &bindlessSet, 0, nullptr);
 
+        const uint32_t gaussianCount = static_cast<uint32_t>(_scene->GetGaussianCount());
+        const uint32_t previewStride = _scene->HasTrainedGaussians() ? ComputeInteractivePreviewStride(gaussianCount) : 1u;
+        const uint32_t previewInstanceCount = previewStride > 1u ? (gaussianCount + previewStride - 1u) / previewStride : gaussianCount;
+        const float previewOpacityScale = previewStride > 1u ? std::min(std::sqrt(static_cast<float>(previewStride)), 2.0f) : 1.0f;
+
         GaussianGraphicsPushConstants pushConstants{
             .viewMatrix = _camera->GetViewMatrix(),
             .viewProjection = _camera->GetViewProjection(),
@@ -399,16 +428,16 @@ void GaussianSplatPass::ExecuteGraphicsPath(const RenderGraphContext& context)
                 _camera->GetPosition(),
                 _scene->HasTrainedGaussians() ? 1.0f : 0.0f),
             .params0 = glm::vec4(kPointCloudPointSize,
-                _opacity,
+                _opacity * previewOpacityScale,
                 static_cast<float>(context.GetRenderExtent().width),
                 static_cast<float>(context.GetRenderExtent().height)),
             .params1 = glm::vec4(kGaussianAlphaThreshold, kGaussianRevealThreshold, 0.0f, 0.0f),
             .bufferIndices = glm::uvec4(
                 context.GetDevice().GetBufferResource(_scene->GetGaussianBuffer()).bindless.storageBuffer,
-                static_cast<uint32_t>(_scene->GetGaussianCount()),
+                gaussianCount,
                 std::min(_shDegree, _scene->GetGaussianShDegree()),
                 _viewDependentColor ? 1u : 0u),
-            .options = glm::uvec4(_antialiasing ? 1u : 0u, _fastCulling ? 1u : 0u, 0u, 0u),
+            .options = glm::uvec4(_antialiasing ? 1u : 0u, _fastCulling ? 1u : 0u, previewStride, previewStride > 1u ? 1u : 0u),
         };
         vkCmdPushConstants(commandBuffer,
             _graphicsPipelineLayout,
@@ -416,7 +445,7 @@ void GaussianSplatPass::ExecuteGraphicsPath(const RenderGraphContext& context)
             0,
             sizeof(GaussianGraphicsPushConstants),
             &pushConstants);
-        vkCmdDraw(commandBuffer, 4, pushConstants.bufferIndices.y, 0, 0);
+        vkCmdDraw(commandBuffer, 4, previewInstanceCount, 0, 0);
     }
 
     vkCmdEndRendering(commandBuffer);

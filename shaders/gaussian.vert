@@ -62,7 +62,7 @@ vec2 projection_scales(mat4 viewProjection, mat4 viewMatrix)
     return vec2(length(projection3x3[0]), length(projection3x3[1]));
 }
 
-vec3 evaluate_sh_color(GaussianPrimitive gaussian, vec3 viewDir)
+vec3 evaluate_sh_color(GaussianPrimitive gaussian, vec3 centerPosition)
 {
     vec3 result = kShC0 * gaussian.shCoefficients[0].rgb;
     uint degree = pc.bufferIndices.z;
@@ -71,6 +71,7 @@ vec3 evaluate_sh_color(GaussianPrimitive gaussian, vec3 viewDir)
         return max(result + 0.5, vec3(0.0));
     }
 
+    vec3 viewDir = normalize(pc.cameraPositionAndSceneType.xyz - centerPosition);
     float x = viewDir.x;
     float y = viewDir.y;
     float z = viewDir.z;
@@ -105,7 +106,10 @@ vec3 evaluate_sh_color(GaussianPrimitive gaussian, vec3 viewDir)
 
 void main()
 {
-    GaussianPrimitive gaussian = gaussianBuffers[nonuniformEXT(int(pc.bufferIndices.x))].gaussians[gl_InstanceIndex];
+    uint sourceCount = max(pc.bufferIndices.y, 1u);
+    uint previewStride = max(pc.options.z, 1u);
+    uint gaussianIndex = min(uint(gl_InstanceIndex) * previewStride, sourceCount - 1u);
+    GaussianPrimitive gaussian = gaussianBuffers[nonuniformEXT(int(pc.bufferIndices.x))].gaussians[gaussianIndex];
 
     vec2 corners[4] = vec2[](
         vec2(-1.0, -1.0),
@@ -170,6 +174,9 @@ void main()
         vec2 eigenvector0 = abs(cov[0][1]) > 1.0e-6 ? normalize(vec2(lambda0 - cov[1][1], cov[0][1])) : vec2(1.0, 0.0);
         vec2 eigenvector1 = vec2(-eigenvector0.y, eigenvector0.x);
         float sigmaCoverage = pc.options.x != 0u ? 3.2 : 2.8;
+        if (pc.options.w != 0u) {
+            sigmaCoverage *= 1.18;
+        }
         float majorLengthPixels = sqrt(lambda0) * sigmaCoverage;
         float minorLengthPixels = sqrt(lambda1) * sigmaCoverage;
         majorLengthPixels = min(majorLengthPixels, 96.0);
@@ -198,7 +205,7 @@ void main()
     }
 
     gl_Position = centerClip + vec4(clipOffset, 0.0, 0.0);
-    outColor = vec4(evaluate_sh_color(gaussian, normalize(pc.cameraPositionAndSceneType.xyz - centerPosition)), 1.0);
+    outColor = vec4(evaluate_sh_color(gaussian, centerPosition), 1.0);
     outOpacity = gaussian.positionOpacity.w;
     outLocalCoord = localCorner;
     outViewDepth = viewDepth;
