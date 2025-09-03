@@ -68,13 +68,14 @@ vec2 projection_scales(mat4 viewProjection, mat4 viewMatrix)
     return vec2(length(projection3x3[0]), length(projection3x3[1]));
 }
 
-vec3 evaluate_sh_color(GaussianPrimitive gaussian, uint degree, bool viewDependent, vec3 viewDir)
+vec3 evaluate_sh_color(GaussianPrimitive gaussian, uint degree, bool viewDependent, vec3 centerPosition)
 {
     vec3 result = kShC0 * gaussian.shCoefficients[0].rgb;
     if (!viewDependent || degree == 0u) {
         return max(result + 0.5, vec3(0.0));
     }
 
+    vec3 viewDir = normalize(pc.cameraPositionAndSceneType.xyz - centerPosition);
     float x = viewDir.x;
     float y = viewDir.y;
     float z = viewDir.z;
@@ -206,8 +207,7 @@ void main()
 
     vec3 conic = vec3(cov[1][1], -cov[0][1], cov[0][0]);
     vec3 inverseConic = conic / determinant;
-    vec3 viewDir = normalize(pc.cameraPositionAndSceneType.xyz - centerPosition);
-    vec3 color = evaluate_sh_color(gaussian, shDegree, viewDependent, viewDir);
+    vec3 color = evaluate_sh_color(gaussian, shDegree, viewDependent, centerPosition);
 
     ivec2 tileMin = clamp(ivec2(floor((centerPixel - extentPixels) / float(TILE_SIZE))), ivec2(0), ivec2(int(tileCountX) - 1, int(tileCountY) - 1));
     ivec2 tileMax = clamp(ivec2(floor((centerPixel + extentPixels) / float(TILE_SIZE))), ivec2(0), ivec2(int(tileCountX) - 1, int(tileCountY) - 1));

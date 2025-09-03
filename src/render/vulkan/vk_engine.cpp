@@ -18,6 +18,7 @@
 #include <cmath>
 #include <ctime>
 #include <fstream>
+#include <functional>
 #include <iomanip>
 #include <numeric>
 #include <sstream>
@@ -116,6 +117,25 @@ const char* PathTraceBackendLabel(vesta::render::PathTraceBackend backend)
     }
 }
 
+const char* PathTraceDebugViewLabel(vesta::render::PathTraceDebugView view)
+{
+    switch (view) {
+    case vesta::render::PathTraceDebugView::Albedo:
+        return "Albedo";
+    case vesta::render::PathTraceDebugView::Normal:
+        return "Normal";
+    case vesta::render::PathTraceDebugView::Depth:
+        return "Depth";
+    case vesta::render::PathTraceDebugView::Direct:
+        return "Direct";
+    case vesta::render::PathTraceDebugView::Indirect:
+        return "Indirect";
+    case vesta::render::PathTraceDebugView::Final:
+    default:
+        return "Final";
+    }
+}
+
 const char* SceneLoadStateLabel(vesta::render::SceneLoadState state)
 {
     switch (state) {
@@ -140,6 +160,155 @@ const char* SceneLoadStateLabel(vesta::render::SceneLoadState state)
     case vesta::render::SceneLoadState::Idle:
     default:
         return "Idle";
+    }
+}
+
+const char* ResourceUsageLabel(vesta::render::ResourceUsage usage)
+{
+    switch (usage) {
+    case vesta::render::ResourceUsage::ColorAttachmentWrite:
+        return "Color Write";
+    case vesta::render::ResourceUsage::DepthAttachmentWrite:
+        return "Depth Write";
+    case vesta::render::ResourceUsage::DepthRead:
+        return "Depth Read";
+    case vesta::render::ResourceUsage::SampledRead:
+        return "Sampled";
+    case vesta::render::ResourceUsage::StorageRead:
+        return "Storage Read";
+    case vesta::render::ResourceUsage::StorageWrite:
+        return "Storage Write";
+    case vesta::render::ResourceUsage::TransferSrc:
+        return "Transfer Src";
+    case vesta::render::ResourceUsage::TransferDst:
+        return "Transfer Dst";
+    case vesta::render::ResourceUsage::Present:
+        return "Present";
+    case vesta::render::ResourceUsage::Undefined:
+    default:
+        return "Undefined";
+    }
+}
+
+const char* VkFormatLabel(VkFormat format)
+{
+    switch (format) {
+    case VK_FORMAT_R16G16B16A16_SFLOAT:
+        return "RGBA16F";
+    case VK_FORMAT_D32_SFLOAT:
+        return "D32F";
+    case VK_FORMAT_B8G8R8A8_UNORM:
+        return "BGRA8";
+    case VK_FORMAT_R8G8B8A8_UNORM:
+        return "RGBA8";
+    case VK_FORMAT_R8G8B8A8_SRGB:
+        return "RGBA8_sRGB";
+    case VK_FORMAT_UNDEFINED:
+    default:
+        return "Unknown";
+    }
+}
+
+struct FrameTimingStats {
+    float averageMs{ 0.0f };
+    float minMs{ 0.0f };
+    float maxMs{ 0.0f };
+    float onePercentLowFps{ 0.0f };
+};
+
+FrameTimingStats CalculateFrameTimingStats(const std::array<float, 240>& history, size_t count)
+{
+    FrameTimingStats stats{};
+    if (count == 0) {
+        return stats;
+    }
+
+    std::vector<float> samples;
+    samples.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        if (history[i] > 0.0f) {
+            samples.push_back(history[i]);
+        }
+    }
+    if (samples.empty()) {
+        return stats;
+    }
+
+    const float total = std::accumulate(samples.begin(), samples.end(), 0.0f);
+    stats.averageMs = total / static_cast<float>(samples.size());
+    stats.minMs = *std::min_element(samples.begin(), samples.end());
+    stats.maxMs = *std::max_element(samples.begin(), samples.end());
+
+    std::sort(samples.begin(), samples.end(), std::greater<float>());
+    const size_t worstCount = std::max<size_t>(1, samples.size() / 100);
+    const float worstTotal = std::accumulate(samples.begin(), samples.begin() + static_cast<std::ptrdiff_t>(worstCount), 0.0f);
+    const float onePercentLowMs = worstTotal / static_cast<float>(worstCount);
+    stats.onePercentLowFps = onePercentLowMs > 0.0f ? 1000.0f / onePercentLowMs : 0.0f;
+    return stats;
+}
+
+float TotalGpuMs(const std::vector<vesta::render::RenderGraphPassTiming>& timings)
+{
+    float total = 0.0f;
+    for (const auto& timing : timings) {
+        if (timing.gpuTimingValid) {
+            total += timing.gpuMs;
+        }
+    }
+    return total;
+}
+
+void DrawRenderGraphResourceList(const char* label,
+    const std::vector<vesta::render::RenderGraphPassTiming::ResourceAccess>& accesses)
+{
+    if (!ImGui::TreeNode(label)) {
+        return;
+    }
+
+    if (ImGui::BeginTable(label, 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+        ImGui::TableSetupColumn("Name");
+        ImGui::TableSetupColumn("Usage");
+        ImGui::TableSetupColumn("Format", ImGuiTableColumnFlags_WidthFixed, 82.0f);
+        ImGui::TableSetupColumn("Resolution", ImGuiTableColumnFlags_WidthFixed, 96.0f);
+        ImGui::TableSetupColumn("Scale", ImGuiTableColumnFlags_WidthFixed, 72.0f);
+        ImGui::TableHeadersRow();
+        for (const auto& access : accesses) {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted(access.name.c_str());
+            ImGui::TableSetColumnIndex(1);
+            ImGui::TextUnformatted(ResourceUsageLabel(access.usage));
+            ImGui::TableSetColumnIndex(2);
+            ImGui::TextUnformatted(VkFormatLabel(access.format));
+            ImGui::TableSetColumnIndex(3);
+            ImGui::Text("%ux%u", access.extent.width, access.extent.height);
+            ImGui::TableSetColumnIndex(4);
+            ImGui::TextUnformatted("full-res");
+        }
+        ImGui::EndTable();
+    }
+    ImGui::TreePop();
+}
+
+void DrawBufferResourceRow(const char* name, const vesta::render::RenderDevice& device, vesta::render::BufferHandle handle)
+{
+    ImGui::TableNextRow();
+    ImGui::TableSetColumnIndex(0);
+    ImGui::TextUnformatted(name);
+    ImGui::TableSetColumnIndex(1);
+    ImGui::Text("%s", handle ? "Resident" : "Missing");
+    ImGui::TableSetColumnIndex(2);
+    if (handle) {
+        const auto& buffer = device.GetBufferResource(handle);
+        ImGui::Text("%.2f MiB", static_cast<double>(buffer.desc.size) / (1024.0 * 1024.0));
+    } else {
+        ImGui::TextUnformatted("-");
+    }
+    ImGui::TableSetColumnIndex(3);
+    if (handle) {
+        ImGui::Text("%u", handle.index);
+    } else {
+        ImGui::TextUnformatted("-");
     }
 }
 
@@ -260,6 +429,22 @@ std::string MakeTimestampedLogLine(std::string_view message)
     std::ostringstream stream;
     stream << '[' << std::put_time(&localTime, "%H:%M:%S") << "] " << message;
     return stream.str();
+}
+
+std::filesystem::path MakeTimestampedCapturePath(std::string_view prefix, std::string_view extension)
+{
+    const auto now = std::chrono::system_clock::now();
+    const std::time_t nowTime = std::chrono::system_clock::to_time_t(now);
+    std::tm localTime{};
+#if defined(_WIN32)
+    localtime_s(&localTime, &nowTime);
+#else
+    localtime_r(&localTime, &nowTime);
+#endif
+
+    std::ostringstream stream;
+    stream << prefix << '_' << std::put_time(&localTime, "%Y%m%d_%H%M%S") << extension;
+    return std::filesystem::path("out/captures") / stream.str();
 }
 }
 
@@ -443,6 +628,8 @@ void VestaEngine::run()
 
     // main loop
     while (!bQuit) {
+        const auto frameStart = std::chrono::steady_clock::now();
+
         // Handle events on queue
         while (SDL_PollEvent(&e) != 0) {
             if (_imguiInitialized) {
@@ -467,6 +654,16 @@ void VestaEngine::run()
                 _showDebugUi = !_showDebugUi;
                 continue;
             }
+            if (e.type == SDL_KEYDOWN && e.key.repeat == 0 && e.key.keysym.sym == SDLK_F5) {
+                const bool reloaded = _renderer.ReloadShaders();
+                log_startup_event(reloaded ? "Shader hot reload complete" : "Shader hot reload failed: " + _renderer.GetLastShaderReloadMessage());
+                continue;
+            }
+            if (e.type == SDL_KEYDOWN && e.key.repeat == 0 && e.key.keysym.sym == SDLK_F12) {
+                const std::filesystem::path path = MakeTimestampedCapturePath("screenshot", ".ppm");
+                log_startup_event(_renderer.RequestScreenshot(path) ? "Screenshot queued: " + path.string() : "Screenshot failed");
+                continue;
+            }
 
             // ImGui gets first chance at the event. Only forward it to the
             // renderer when the UI is not actively capturing that input stream.
@@ -489,12 +686,26 @@ void VestaEngine::run()
 
         draw(deltaSeconds);
         update_benchmark(deltaSeconds);
+
+        const auto& settings = _renderer.GetSettings();
+        if (settings.enableFpsLimit && settings.fpsLimit > 0 && !_launchOptions.benchmark.has_value()) {
+            const float targetSeconds = 1.0f / static_cast<float>(settings.fpsLimit);
+            const auto frameEnd = std::chrono::steady_clock::now();
+            const float elapsedSeconds = std::chrono::duration<float>(frameEnd - frameStart).count();
+            if (elapsedSeconds < targetSeconds) {
+                std::this_thread::sleep_for(std::chrono::duration<float>(targetSeconds - elapsedSeconds));
+            }
+        }
     }
 }
 
 void VestaEngine::log_startup_event(std::string_view message)
 {
     const std::string line = MakeTimestampedLogLine(message);
+    _logConsoleLines.push_back(line);
+    if (_logConsoleLines.size() > 512) {
+        _logConsoleLines.erase(_logConsoleLines.begin(), _logConsoleLines.begin() + static_cast<std::ptrdiff_t>(_logConsoleLines.size() - 512));
+    }
     fmt::println("{}", line);
 #if defined(_WIN32)
     OutputDebugStringA((line + "\n").c_str());
@@ -549,6 +760,16 @@ void VestaEngine::update_startup_state()
             ApplySceneModeInference(_renderer.GetSettings(), _renderer.GetScene().GetSourcePath());
         }
         _renderer.SetStartupSafeModeActive(false);
+        if (_renderer.GetSettings().buildRayTracingStructuresOnLoad
+            && _renderer.GetRenderDevice().IsRayTracingSupported()
+            && !_renderer.GetScene().HasRayTracingScene()) {
+            log_startup_event("Building deferred RT structures");
+            if (_renderer.EnsureRayTracingScene()) {
+                log_startup_event("Deferred RT structures ready");
+            } else {
+                log_startup_event("Deferred RT structures skipped");
+            }
+        }
         _renderer.ResetAccumulation();
         _startupState.safeOverridesActive = false;
         log_startup_event("Safe startup overrides restored");
@@ -1043,6 +1264,11 @@ void VestaEngine::build_main_menu_bar()
                 ImGui::MenuItem("Use Indirect Draw", nullptr, &settings.useIndirectDraw);
                 ImGui::MenuItem("Frame Timing Capture", nullptr, &settings.frameTimingCapture);
                 ImGui::MenuItem("Benchmark Overlay", nullptr, &settings.benchmarkOverlay);
+                ImGui::MenuItem("FPS Limit", nullptr, &settings.enableFpsLimit);
+                int fpsLimit = static_cast<int>(settings.fpsLimit);
+                if (ImGui::SliderInt("FPS Limit Value", &fpsLimit, 15, 360)) {
+                    settings.fpsLimit = static_cast<uint32_t>(fpsLimit);
+                }
                 int uploadBudgetMiB = static_cast<int>(settings.maxUploadBytesPerFrame / (1024u * 1024u));
                 if (ImGui::SliderInt("Upload Budget (MiB)", &uploadBudgetMiB, 1, 32)) {
                     settings.maxUploadBytesPerFrame = static_cast<uint32_t>(uploadBudgetMiB) * 1024u * 1024u;
@@ -1118,6 +1344,30 @@ void VestaEngine::build_main_menu_bar()
             ImGui::EndMenu();
         }
 
+        if (ImGui::BeginMenu("Debug")) {
+            ImGui::MenuItem("Frame / Engine Overview", nullptr, &_showFrameOverview);
+            ImGui::MenuItem("Render Graph", nullptr, &_showRenderGraphPanel);
+            ImGui::MenuItem("GPU Profiler", nullptr, &_showGpuProfilerPanel);
+            ImGui::MenuItem("Debug Visualization", nullptr, &_showDebugVisualizationPanel);
+            ImGui::MenuItem("Scene Inspector", nullptr, &_showSceneInspectorPanel);
+            ImGui::MenuItem("Resource Inspector", nullptr, &_showResourceInspectorPanel);
+            ImGui::MenuItem("Log Console", nullptr, &_showLogConsolePanel);
+            ImGui::Separator();
+            if (ImGui::MenuItem("Reset Accumulation")) {
+                _renderer.ResetAccumulation();
+                log_startup_event("Path tracing accumulation reset");
+            }
+            if (ImGui::MenuItem("Shader Hot Reload")) {
+                const bool reloaded = _renderer.ReloadShaders();
+                log_startup_event(reloaded ? "Shader hot reload complete" : "Shader hot reload failed: " + _renderer.GetLastShaderReloadMessage());
+            }
+            if (ImGui::MenuItem("Capture Frame")) {
+                const std::filesystem::path path = MakeTimestampedCapturePath("frame", ".ppm");
+                log_startup_event(_renderer.RequestScreenshot(path) ? "Frame capture queued: " + path.string() : "Frame capture failed");
+            }
+            ImGui::EndMenu();
+        }
+
         const std::string& sceneStatus = _renderer.GetSceneLoadStatusMessage();
         if (!sceneStatus.empty()) {
             ImGui::Separator();
@@ -1158,6 +1408,225 @@ void VestaEngine::build_debug_ui()
         break;
     }
     const std::string selectionLabel = _renderer.GetSelectionLabel();
+    const auto& frameHistory = _renderer.GetFrameTimeHistoryMs();
+    const size_t frameHistoryCount = _renderer.GetFrameTimeHistoryCount();
+    const FrameTimingStats frameStats = CalculateFrameTimingStats(frameHistory, frameHistoryCount);
+    const auto& graphTimings = _renderer.GetLastRenderGraphTimings();
+    const float gpuFrameMs = TotalGpuMs(graphTimings);
+    const VkExtent2D swapchainExtent = device.GetSwapchainExtent();
+
+    if (_showFrameOverview) {
+        ImGui::SetNextWindowPos(ImVec2(18.0f, 18.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(640.0f, 0.0f), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Frame / Engine Overview", &_showFrameOverview, ImGuiWindowFlags_NoSavedSettings)) {
+            if (ImGui::BeginTable("OverviewGrid", 4, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg)) {
+                ImGui::TableSetupColumn("Metric");
+                ImGui::TableSetupColumn("Value");
+                ImGui::TableSetupColumn("Metric");
+                ImGui::TableSetupColumn("Value");
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextUnformatted("FPS / Frame");
+                ImGui::TableSetColumnIndex(1);
+                ImGui::Text("%.1f / %.2f ms", fps, frameMs);
+                ImGui::TableSetColumnIndex(2);
+                ImGui::TextUnformatted("Avg / Min / Max");
+                ImGui::TableSetColumnIndex(3);
+                ImGui::Text("%.2f / %.2f / %.2f ms", frameStats.averageMs, frameStats.minMs, frameStats.maxMs);
+
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextUnformatted("CPU / GPU Frame");
+                ImGui::TableSetColumnIndex(1);
+                ImGui::Text("%.2f / %.2f ms", _renderer.GetFrameTimeMs(), gpuFrameMs);
+                ImGui::TableSetColumnIndex(2);
+                ImGui::TextUnformatted("1%% Low");
+                ImGui::TableSetColumnIndex(3);
+                ImGui::Text("%.1f FPS", frameStats.onePercentLowFps);
+
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextUnformatted("Resolution / PT Scale");
+                ImGui::TableSetColumnIndex(1);
+                ImGui::Text("%ux%u / %.2fx", swapchainExtent.width, swapchainExtent.height, settings.pathTraceResolutionScale);
+                ImGui::TableSetColumnIndex(2);
+                ImGui::TextUnformatted("Current Render Pass");
+                ImGui::TableSetColumnIndex(3);
+                ImGui::TextUnformatted(DisplayModeLabel(settings.displayMode));
+
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextUnformatted("GPU / API");
+                ImGui::TableSetColumnIndex(1);
+                ImGui::Text("Vulkan / %s", device.GetGpuName().c_str());
+                ImGui::TableSetColumnIndex(2);
+                ImGui::TextUnformatted("Frame Index");
+                ImGui::TableSetColumnIndex(3);
+                ImGui::Text("%d / PT %u", _frameNumber, _renderer.GetPathTraceFrameIndex());
+                ImGui::EndTable();
+            }
+
+            ImGui::BeginDisabled();
+            ImGui::Checkbox("VSync", &_vsyncUiPlaceholder);
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            ImGui::Checkbox("FPS Limit", &settings.enableFpsLimit);
+            ImGui::SameLine();
+            int fpsLimit = static_cast<int>(settings.fpsLimit);
+            ImGui::SetNextItemWidth(110.0f);
+            if (ImGui::InputInt("Limit", &fpsLimit, 5, 30)) {
+                settings.fpsLimit = static_cast<uint32_t>(std::clamp(fpsLimit, 15, 360));
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Capture")) {
+                const std::filesystem::path path = MakeTimestampedCapturePath("frame", ".ppm");
+                log_startup_event(_renderer.RequestScreenshot(path) ? "Frame capture queued: " + path.string() : "Frame capture failed");
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Screenshot")) {
+                const std::filesystem::path path = MakeTimestampedCapturePath("screenshot", ".ppm");
+                log_startup_event(_renderer.RequestScreenshot(path) ? "Screenshot queued: " + path.string() : "Screenshot failed");
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Shader Reload")) {
+                const bool reloaded = _renderer.ReloadShaders();
+                log_startup_event(reloaded ? "Shader hot reload complete" : "Shader hot reload failed: " + _renderer.GetLastShaderReloadMessage());
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Reset Accumulation")) {
+                _renderer.ResetAccumulation();
+                log_startup_event("Path tracing accumulation reset");
+            }
+        }
+        ImGui::End();
+    }
+
+    if (_showRenderGraphPanel) {
+        ImGui::SetNextWindowPos(ImVec2(18.0f, 238.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(560.0f, 360.0f), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Render Pass / Render Graph", &_showRenderGraphPanel, ImGuiWindowFlags_NoSavedSettings)) {
+            const char* displayModes[] = { "Hybrid: Raster + Gaussian + Path", "Rasterizer", "Gaussian Splatting", "Path Tracing" };
+            int displayMode = static_cast<int>(settings.displayMode);
+            if (ImGui::Combo("Render Mode", &displayMode, displayModes, IM_ARRAYSIZE(displayModes))) {
+                settings.displayMode = static_cast<vesta::render::RendererDisplayMode>(displayMode);
+                _renderer.ResetAccumulation();
+            }
+
+            const std::vector<vesta::render::RenderPassDebugInfo> passInfo = _renderer.GetRenderPassDebugInfo();
+            if (ImGui::BeginTable("PassRegistry", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+                ImGui::TableSetupColumn("Pass");
+                ImGui::TableSetupColumn("Order", ImGuiTableColumnFlags_WidthFixed, 52.0f);
+                ImGui::TableSetupColumn("Enabled", ImGuiTableColumnFlags_WidthFixed, 64.0f);
+                ImGui::TableSetupColumn("Id");
+                ImGui::TableHeadersRow();
+                for (const auto& pass : passInfo) {
+                    bool enabled = pass.enabled;
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::TextUnformatted(pass.name.c_str());
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::Text("%u", pass.order);
+                    ImGui::TableSetColumnIndex(2);
+                    ImGui::PushID(pass.id.c_str());
+                    if (ImGui::Checkbox("##enabled", &enabled)) {
+                        _renderer.SetPassEnabled(pass.id, enabled);
+                        _renderer.ResetAccumulation();
+                    }
+                    ImGui::PopID();
+                    ImGui::TableSetColumnIndex(3);
+                    ImGui::TextUnformatted(pass.id.c_str());
+                }
+                ImGui::EndTable();
+            }
+
+            ImGui::SeparatorText("Current Frame Resources");
+            for (const auto& timing : graphTimings) {
+                if (ImGui::TreeNode(timing.name.c_str())) {
+                    if (timing.gpuTimingValid) {
+                        ImGui::Text("CPU %.3f ms, GPU %.3f ms, Barriers %u", timing.cpuMs, timing.gpuMs, timing.barrierCount);
+                    } else {
+                        ImGui::Text("CPU %.3f ms, GPU -, Barriers %u", timing.cpuMs, timing.barrierCount);
+                    }
+                    DrawRenderGraphResourceList("Inputs", timing.inputs);
+                    DrawRenderGraphResourceList("Outputs", timing.outputs);
+                    ImGui::TreePop();
+                }
+            }
+        }
+        ImGui::End();
+    }
+
+    if (_showGpuProfilerPanel) {
+        ImGui::SetNextWindowPos(ImVec2(590.0f, 238.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(520.0f, 300.0f), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("GPU Profiler", &_showGpuProfilerPanel, ImGuiWindowFlags_NoSavedSettings)) {
+            ImGui::Text("CPU Frame %.3f ms", _renderer.GetFrameTimeMs());
+            ImGui::Text("GPU Frame %.3f ms", gpuFrameMs);
+            ImGui::Text("Draw / Dispatch %s", "tracked per pass via timing table");
+            ImGui::Text("Triangles %zu", scene.GetTriangles().size());
+            ImGui::Text("Visible Surfaces %u / %zu", _renderer.GetVisibleSurfaceCount(), scene.GetSurfaces().size());
+            ImGui::Text("Gaussians %u visible/projection %u", scene.GetGaussianCount(), _renderer.GetOfficialGaussianProjectedCount());
+            ImGui::Text("Splats rendered %u", _renderer.GetOfficialGaussianDuplicateCount());
+            ImGui::Text("VRAM Dedicated %u MiB", device.GetDedicatedVideoMemoryMiB());
+            if (ImGui::BeginTable("GpuPassTiming", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+                ImGui::TableSetupColumn("Pass");
+                ImGui::TableSetupColumn("CPU ms", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+                ImGui::TableSetupColumn("GPU ms", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+                ImGui::TableSetupColumn("Sync", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+                ImGui::TableHeadersRow();
+                for (const auto& timing : graphTimings) {
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::TextUnformatted(timing.name.c_str());
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::Text("%.3f", timing.cpuMs);
+                    ImGui::TableSetColumnIndex(2);
+                    timing.gpuTimingValid ? ImGui::Text("%.3f", timing.gpuMs) : ImGui::TextUnformatted("-");
+                    ImGui::TableSetColumnIndex(3);
+                    ImGui::Text("%u barriers", timing.barrierCount);
+                }
+                ImGui::EndTable();
+            }
+            if (frameHistoryCount > 0) {
+                ImGui::PlotLines("CPU Frame History", frameHistory.data(), static_cast<int>(frameHistoryCount), 0, nullptr, 0.0f,
+                    std::max(33.0f, frameStats.maxMs * 1.1f), ImVec2(0.0f, 72.0f));
+            }
+        }
+        ImGui::End();
+    }
+
+    if (_showDebugVisualizationPanel) {
+        ImGui::SetNextWindowPos(ImVec2(1124.0f, 238.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(360.0f, 300.0f), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Debug Visualization", &_showDebugVisualizationPanel, ImGuiWindowFlags_NoSavedSettings)) {
+            const char* commonViews[] = {
+                "Final Color", "Albedo / Base Color", "Normal", "Roughness", "Metallic", "Emissive"
+            };
+            int commonView = static_cast<int>(settings.debugView);
+            if (ImGui::Combo("Debug View", &commonView, commonViews, IM_ARRAYSIZE(commonViews))) {
+                settings.debugView = static_cast<vesta::render::RendererDebugView>(commonView);
+                _renderer.ResetAccumulation();
+            }
+            ImGui::TextDisabled("Raster GBuffer views are live when the raster pass is active.");
+
+            const char* pathTraceDebugViews[] = { "Final", "Albedo", "Normal", "Depth", "Direct", "Indirect" };
+            int pathTraceDebugView = static_cast<int>(settings.pathTraceDebugView);
+            if (ImGui::Combo("Path Tracing AOV", &pathTraceDebugView, pathTraceDebugViews, IM_ARRAYSIZE(pathTraceDebugViews))) {
+                settings.pathTraceDebugView = static_cast<vesta::render::PathTraceDebugView>(pathTraceDebugView);
+            }
+            const char* gaussianViews[] = {
+                "Final Splat Image", "Splat Alpha", "Revealage", "Overdraw Heatmap", "Splat Depth", "Tile Occupancy"
+            };
+            int gaussianView = static_cast<int>(settings.gaussianDebugView);
+            if (ImGui::Combo("Gaussian Debug View", &gaussianView, gaussianViews, IM_ARRAYSIZE(gaussianViews))) {
+                settings.gaussianDebugView = static_cast<vesta::render::GaussianDebugView>(gaussianView);
+                _renderer.ResetAccumulation();
+            }
+            ImGui::Checkbox("Wireframe", &_wireframeUiPlaceholder);
+            ImGui::Checkbox("Overdraw Heatmap", &_overdrawUiPlaceholder);
+        }
+        ImGui::End();
+    }
 
     ImGui::SetNextWindowPos(ImVec2(18.0f, 18.0f), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(420.0f, 0.0f), ImGuiCond_FirstUseEver);
@@ -1195,6 +1664,7 @@ void VestaEngine::build_debug_ui()
             ImGui::Text("Frustum Culling %s", settings.enableFrustumCulling ? "On" : "Off");
             ImGui::Text("Distance Culling %s", settings.enableDistanceCulling ? "On" : "Off");
             ImGui::Text("Indirect Draw %s", settings.useIndirectDraw ? "On" : "Off");
+            ImGui::Text("FPS Limit %s / %u", settings.enableFpsLimit ? "On" : "Off", settings.fpsLimit);
             ImGui::Text("Upload Budget %u MiB", settings.maxUploadBytesPerFrame / (1024u * 1024u));
             ImGui::Text("Texture Budget %u MiB", settings.maxTextureUploadBytesPerFrame / (1024u * 1024u));
             ImGui::Text("Upload Pending %.2f MiB",
@@ -1205,6 +1675,40 @@ void VestaEngine::build_debug_ui()
             ImGui::Text("Workers %u", _renderer.GetWorkerThreadCount());
             ImGui::Text("Queued Jobs %zu", _renderer.GetPendingJobCount());
             ImGui::Text("Retired Scenes %zu", _renderer.GetRetiredSceneCount());
+
+            const auto& graphTimings = _renderer.GetLastRenderGraphTimings();
+            if (!graphTimings.empty()) {
+                ImGui::SeparatorText("Render Graph / Profiler");
+                if (ImGui::BeginTable("RenderGraphProfiler", 6, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+                    ImGui::TableSetupColumn("Pass");
+                    ImGui::TableSetupColumn("CPU ms", ImGuiTableColumnFlags_WidthFixed, 68.0f);
+                    ImGui::TableSetupColumn("GPU ms", ImGuiTableColumnFlags_WidthFixed, 68.0f);
+                    ImGui::TableSetupColumn("R", ImGuiTableColumnFlags_WidthFixed, 34.0f);
+                    ImGui::TableSetupColumn("W", ImGuiTableColumnFlags_WidthFixed, 34.0f);
+                    ImGui::TableSetupColumn("Barriers", ImGuiTableColumnFlags_WidthFixed, 58.0f);
+                    ImGui::TableHeadersRow();
+                    for (const auto& timing : graphTimings) {
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::TextUnformatted(timing.name.c_str());
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::Text("%.3f", timing.cpuMs);
+                        ImGui::TableSetColumnIndex(2);
+                        if (timing.gpuTimingValid) {
+                            ImGui::Text("%.3f", timing.gpuMs);
+                        } else {
+                            ImGui::TextUnformatted("-");
+                        }
+                        ImGui::TableSetColumnIndex(3);
+                        ImGui::Text("%u", timing.readCount);
+                        ImGui::TableSetColumnIndex(4);
+                        ImGui::Text("%u", timing.writeCount);
+                        ImGui::TableSetColumnIndex(5);
+                        ImGui::Text("%u", timing.barrierCount);
+                    }
+                    ImGui::EndTable();
+                }
+            }
 
             ImGui::SeparatorText("Scene Details");
             ImGui::Text("Recommended View %s", DisplayModeLabel(_renderer.GetRecommendedDisplayModeForScene()));
@@ -1255,6 +1759,10 @@ void VestaEngine::build_debug_ui()
                     sceneLoadStatus.pendingUploadCopies);
             }
             ImGui::Text("PT Frame %u", _renderer.GetPathTraceFrameIndex());
+            ImGui::Text("PT SPP %u", settings.pathTraceSamplesPerPixel);
+            ImGui::Text("PT Max Bounces %u", settings.pathTraceMaxBounces);
+            ImGui::Text("PT Debug %s", PathTraceDebugViewLabel(settings.pathTraceDebugView));
+            ImGui::Text("PT Denoiser %s", settings.enablePathTraceDenoiser ? "On" : "Off");
             ImGui::Text("RT Support %s", _renderer.GetRenderDevice().IsRayTracingSupported() ? "Yes" : "No");
             ImGui::Text("Active PT %s", activeBackend);
             if (scene.HasRayTracingScene()) {
@@ -1358,6 +1866,39 @@ void VestaEngine::build_debug_ui()
         if (ImGui::SliderFloat("PT Resolution", &settings.pathTraceResolutionScale, 0.25f, 1.0f, "%.2fx")) {
             _renderer.ResetAccumulation();
         }
+        int pathTraceSpp = static_cast<int>(settings.pathTraceSamplesPerPixel);
+        if (ImGui::SliderInt("PT Samples / Pixel", &pathTraceSpp, 1, 16)) {
+            settings.pathTraceSamplesPerPixel = static_cast<uint32_t>(pathTraceSpp);
+            _renderer.ResetAccumulation();
+        }
+        int pathTraceMaxBounces = static_cast<int>(settings.pathTraceMaxBounces);
+        if (ImGui::SliderInt("PT Max Bounces", &pathTraceMaxBounces, 1, 12)) {
+            settings.pathTraceMaxBounces = static_cast<uint32_t>(pathTraceMaxBounces);
+            _renderer.ResetAccumulation();
+        }
+
+        const char* pathTraceDebugViews[] = { "Final", "Albedo", "Normal", "Depth", "Direct", "Indirect" };
+        int pathTraceDebugView = static_cast<int>(settings.pathTraceDebugView);
+        if (ImGui::Combo("PT Debug View", &pathTraceDebugView, pathTraceDebugViews, IM_ARRAYSIZE(pathTraceDebugViews))) {
+            settings.pathTraceDebugView = static_cast<vesta::render::PathTraceDebugView>(pathTraceDebugView);
+        }
+        if (ImGui::Checkbox("PT Denoiser", &settings.enablePathTraceDenoiser)) {
+            _renderer.ResetAccumulation();
+        }
+        if (settings.enablePathTraceDenoiser) {
+            if (settings.pathTraceDebugView != vesta::render::PathTraceDebugView::Final) {
+                ImGui::TextDisabled("Denoiser applies to Final view only");
+            }
+            if (ImGui::SliderFloat("PT Denoiser Strength", &settings.pathTraceDenoiserStrength, 0.0f, 1.0f, "%.2f")) {
+                _renderer.ResetAccumulation();
+            }
+            if (ImGui::SliderFloat("PT Denoiser Temporal", &settings.pathTraceDenoiserTemporalBlend, 0.0f, 0.98f, "%.2f")) {
+                _renderer.ResetAccumulation();
+            }
+        }
+        if (ImGui::Button("Reset PT Accumulation")) {
+            _renderer.ResetAccumulation();
+        }
 
         const char* backendModes[] = { "Auto", "Compute", "Hardware RT" };
         int backendMode = static_cast<int>(settings.pathTraceBackend);
@@ -1453,9 +1994,241 @@ void VestaEngine::build_debug_ui()
         ImGui::Text("LMB Pick/Drag Object");
         ImGui::Text("L Select Light, Esc Clear Selection");
         ImGui::Text("1 Raster, 2 Gaussian, 3 PT, 4 Composite");
-        ImGui::Text("R/G/P toggles, F1 UI");
+        ImGui::Text("R/G/P toggles, F1 UI, F5 Reload, F12 Screenshot");
     }
     ImGui::End();
+
+    if (_showSceneInspectorPanel) {
+        ImGui::SetNextWindowPos(ImVec2(1124.0f, 552.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(420.0f, 360.0f), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Scene / Camera / Light", &_showSceneInspectorPanel, ImGuiWindowFlags_NoSavedSettings)) {
+            if (ImGui::BeginTabBar("SceneInspectorTabs")) {
+                if (ImGui::BeginTabItem("Outliner")) {
+                    if (ImGui::BeginTable("ObjectTable", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+                        ImGui::TableSetupColumn("Object");
+                        ImGui::TableSetupColumn("Prims", ImGuiTableColumnFlags_WidthFixed, 52.0f);
+                        ImGui::TableSetupColumn("Tris", ImGuiTableColumnFlags_WidthFixed, 52.0f);
+                        ImGui::TableSetupColumn("Position");
+                        ImGui::TableHeadersRow();
+                        const auto& objects = scene.GetObjects();
+                        for (size_t objectIndex = 0; objectIndex < objects.size(); ++objectIndex) {
+                            const auto& object = objects[objectIndex];
+                            const glm::vec3 position = object.GetTranslation();
+                            const bool selected = _renderer.GetSelection().kind == vesta::render::SelectionKind::Object
+                                && _renderer.GetSelection().objectIndex == static_cast<uint32_t>(objectIndex);
+                            ImGui::TableNextRow();
+                            ImGui::TableSetColumnIndex(0);
+                            ImGui::PushID(static_cast<int>(objectIndex));
+                            const char* objectName = object.name.empty() ? "(unnamed)" : object.name.c_str();
+                            if (ImGui::Selectable(objectName, selected, ImGuiSelectableFlags_SpanAllColumns)) {
+                                _renderer.SelectObject(static_cast<uint32_t>(objectIndex));
+                            }
+                            ImGui::PopID();
+                            ImGui::TableSetColumnIndex(1);
+                            ImGui::Text("%u", object.primitiveCount);
+                            ImGui::TableSetColumnIndex(2);
+                            ImGui::Text("%u", object.triangleCount);
+                            ImGui::TableSetColumnIndex(3);
+                            ImGui::Text("%.2f %.2f %.2f", position.x, position.y, position.z);
+                        }
+                        ImGui::EndTable();
+                    }
+                    if (_renderer.GetSelection().kind == vesta::render::SelectionKind::Object) {
+                        if (ImGui::Button("Orbit Selected")) {
+                            _renderer.OrbitCameraAroundSelection();
+                        }
+                        ImGui::SameLine();
+                        if (ImGui::Button("Dolly Selected")) {
+                            _renderer.DollyCameraAroundSelection();
+                        }
+                    }
+                    ImGui::EndTabItem();
+                }
+                if (ImGui::BeginTabItem("Camera")) {
+                    float fov = camera.GetFovDegrees();
+                    float nearPlane = camera.GetNearPlane();
+                    float farPlane = camera.GetFarPlane();
+                    bool lensChanged = ImGui::SliderFloat("FOV", &fov, 20.0f, 120.0f, "%.1f");
+                    lensChanged |= ImGui::InputFloat("Near", &nearPlane, 0.01f, 0.1f, "%.3f");
+                    lensChanged |= ImGui::InputFloat("Far", &farPlane, 1.0f, 10.0f, "%.1f");
+                    if (lensChanged) {
+                        camera.SetLens(fov, nearPlane, farPlane);
+                        _renderer.ResetAccumulation();
+                    }
+                    ImGui::Text("Position %.3f %.3f %.3f", camera.GetPosition().x, camera.GetPosition().y, camera.GetPosition().z);
+                    ImGui::Text("Rotation %.2f %.2f %.2f",
+                        camera.GetRotationDegrees().x,
+                        camera.GetRotationDegrees().y,
+                        camera.GetRotationDegrees().z);
+                    ImGui::EndTabItem();
+                }
+                if (ImGui::BeginTabItem("Light")) {
+                    float lightDirection[3] = {
+                        settings.lightDirectionAndIntensity.x,
+                        settings.lightDirectionAndIntensity.y,
+                        settings.lightDirectionAndIntensity.z,
+                    };
+                    if (ImGui::SliderFloat3("Directional", lightDirection, -1.0f, 1.0f, "%.2f")) {
+                        glm::vec3 direction(lightDirection[0], lightDirection[1], lightDirection[2]);
+                        if (glm::length(direction) > 1.0e-4f) {
+                            direction = glm::normalize(direction);
+                            settings.lightDirectionAndIntensity = glm::vec4(direction, settings.lightDirectionAndIntensity.w);
+                            _renderer.ResetAccumulation();
+                        }
+                    }
+                    if (ImGui::SliderFloat("Intensity", &settings.lightDirectionAndIntensity.w, 0.0f, 8.0f, "%.2f")) {
+                        _renderer.ResetAccumulation();
+                    }
+                    ImGui::Text("Environment HDRI %s", "not loaded");
+                    ImGui::EndTabItem();
+                }
+                if (ImGui::BeginTabItem("Materials")) {
+                    if (ImGui::BeginTable("MaterialTable", 7, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+                        ImGui::TableSetupColumn("Id", ImGuiTableColumnFlags_WidthFixed, 42.0f);
+                        ImGui::TableSetupColumn("Base Color", ImGuiTableColumnFlags_WidthFixed, 112.0f);
+                        ImGui::TableSetupColumn("Metallic", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+                        ImGui::TableSetupColumn("Roughness", ImGuiTableColumnFlags_WidthFixed, 76.0f);
+                        ImGui::TableSetupColumn("Emissive", ImGuiTableColumnFlags_WidthFixed, 112.0f);
+                        ImGui::TableSetupColumn("Normal", ImGuiTableColumnFlags_WidthFixed, 58.0f);
+                        ImGui::TableSetupColumn("Textures");
+                        ImGui::TableHeadersRow();
+                        const auto& materials = scene.GetMaterials();
+                        for (size_t materialIndex = 0; materialIndex < materials.size(); ++materialIndex) {
+                            auto material = materials[materialIndex];
+                            bool materialChanged = false;
+                            ImGui::TableNextRow();
+                            ImGui::TableSetColumnIndex(0);
+                            ImGui::Text("%zu", materialIndex);
+                            ImGui::PushID(static_cast<int>(materialIndex));
+                            ImGui::TableSetColumnIndex(1);
+                            materialChanged |= ImGui::ColorEdit4("##base",
+                                &material.baseColorFactor.x,
+                                ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaBar);
+                            ImGui::TableSetColumnIndex(2);
+                            materialChanged |= ImGui::SliderFloat("##metallic", &material.materialParams.x, 0.0f, 1.0f, "%.2f");
+                            ImGui::TableSetColumnIndex(3);
+                            materialChanged |= ImGui::SliderFloat("##roughness", &material.materialParams.y, 0.02f, 1.0f, "%.2f");
+                            ImGui::TableSetColumnIndex(4);
+                            materialChanged |= ImGui::ColorEdit3("##emissive", &material.emissiveFactor.x, ImGuiColorEditFlags_NoInputs);
+                            ImGui::TableSetColumnIndex(5);
+                            materialChanged |= ImGui::SliderFloat("##normal", &material.materialParams.w, 0.0f, 2.0f, "%.2f");
+                            ImGui::TableSetColumnIndex(6);
+                            ImGui::Text("BC %u MR %u N %u E %u",
+                                material.textureIndices0.x,
+                                material.textureIndices0.y,
+                                material.textureIndices0.z,
+                                material.textureIndices1.x);
+                            if (materialChanged) {
+                                _renderer.UpdateMaterial(static_cast<uint32_t>(materialIndex), material);
+                            }
+                            ImGui::PopID();
+                        }
+                        ImGui::EndTable();
+                    }
+                    ImGui::EndTabItem();
+                }
+                ImGui::EndTabBar();
+            }
+        }
+        ImGui::End();
+    }
+
+    if (_showResourceInspectorPanel) {
+        ImGui::SetNextWindowPos(ImVec2(590.0f, 552.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(520.0f, 360.0f), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Resource Inspector", &_showResourceInspectorPanel, ImGuiWindowFlags_NoSavedSettings)) {
+            if (ImGui::BeginTabBar("ResourceTabs")) {
+                if (ImGui::BeginTabItem("Textures")) {
+                    if (ImGui::BeginTable("TextureTable", 6, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+                        ImGui::TableSetupColumn("Name");
+                        ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 82.0f);
+                        ImGui::TableSetupColumn("Format", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+                        ImGui::TableSetupColumn("Mips", ImGuiTableColumnFlags_WidthFixed, 44.0f);
+                        ImGui::TableSetupColumn("Usage", ImGuiTableColumnFlags_WidthFixed, 72.0f);
+                        ImGui::TableSetupColumn("GPU", ImGuiTableColumnFlags_WidthFixed, 52.0f);
+                        ImGui::TableHeadersRow();
+                        const auto& textures = scene.GetTextures();
+                        for (size_t textureIndex = 0; textureIndex < textures.size(); ++textureIndex) {
+                            const auto& texture = textures[textureIndex];
+                            ImGui::TableNextRow();
+                            ImGui::TableSetColumnIndex(0);
+                            ImGui::TextUnformatted(texture.name.empty() ? "(texture)" : texture.name.c_str());
+                            ImGui::TableSetColumnIndex(1);
+                            ImGui::Text("%ux%u", texture.width, texture.height);
+                            ImGui::TableSetColumnIndex(2);
+                            ImGui::TextUnformatted(texture.srgb ? "RGBA8_sRGB" : "RGBA8");
+                            ImGui::TableSetColumnIndex(3);
+                            ImGui::TextUnformatted("1");
+                            ImGui::TableSetColumnIndex(4);
+                            ImGui::TextUnformatted("Sampled");
+                            ImGui::TableSetColumnIndex(5);
+                            ImGui::Text("%s", scene.HasResidentTexture(textureIndex) ? "Yes" : "No");
+                        }
+                        ImGui::EndTable();
+                    }
+                    ImGui::EndTabItem();
+                }
+                if (ImGui::BeginTabItem("Buffers")) {
+                    if (ImGui::BeginTable("BufferTable", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+                        ImGui::TableSetupColumn("Name");
+                        ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 74.0f);
+                        ImGui::TableSetupColumn("GPU Memory", ImGuiTableColumnFlags_WidthFixed, 88.0f);
+                        ImGui::TableSetupColumn("Handle", ImGuiTableColumnFlags_WidthFixed, 58.0f);
+                        ImGui::TableHeadersRow();
+                        DrawBufferResourceRow("Vertex Buffer", device, scene.GetVertexBuffer());
+                        DrawBufferResourceRow("Index Buffer", device, scene.GetIndexBuffer());
+                        DrawBufferResourceRow("Material Buffer", device, scene.GetMaterialBuffer());
+                        DrawBufferResourceRow("Triangle Buffer", device, scene.GetTriangleBuffer());
+                        DrawBufferResourceRow("Gaussian Position/Covariance/SH", device, scene.GetGaussianBuffer());
+                        ImGui::EndTable();
+                    }
+                    ImGui::EndTabItem();
+                }
+                if (ImGui::BeginTabItem("Acceleration")) {
+                    ImGui::Text("TLAS %s", scene.HasRayTracingScene() ? "Resident" : "Missing");
+                    ImGui::Text("BLAS Build %.3f ms", scene.GetBottomLevelBuildMs());
+                    ImGui::Text("TLAS Build %.3f ms", scene.GetTopLevelBuildMs());
+                    ImGui::Text("Instances %zu", scene.GetObjects().size());
+                    ImGui::EndTabItem();
+                }
+                if (ImGui::BeginTabItem("Gaussian")) {
+                    ImGui::Text("Position/Covariance/SH/Opacity buffer %s", scene.GetGaussianBuffer() ? "Resident" : "Missing");
+                    ImGui::Text("Sort Keys %u duplicates", _renderer.GetOfficialGaussianDuplicateCount());
+                    ImGui::Text("Tile/Bin Count %u", _renderer.GetOfficialGaussianTileCount());
+                    ImGui::Text("Memory Source %.2f MiB",
+                        static_cast<double>(scene.GetGaussians().size() * sizeof(vesta::scene::GaussianPrimitive)) / (1024.0 * 1024.0));
+                    ImGui::EndTabItem();
+                }
+                ImGui::EndTabBar();
+            }
+        }
+        ImGui::End();
+    }
+
+    if (_showLogConsolePanel) {
+        ImGui::SetNextWindowPos(ImVec2(18.0f, 612.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(560.0f, 300.0f), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Log / Validation / Error Console", &_showLogConsolePanel, ImGuiWindowFlags_NoSavedSettings)) {
+            if (ImGui::Button("Clear")) {
+                _logConsoleLines.clear();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Shader Reload")) {
+                const bool reloaded = _renderer.ReloadShaders();
+                log_startup_event(reloaded ? "Shader hot reload complete" : "Shader hot reload failed: " + _renderer.GetLastShaderReloadMessage());
+            }
+            ImGui::Separator();
+            ImGui::BeginChild("LogScroll", ImVec2(0.0f, 0.0f), true);
+            for (const std::string& line : _logConsoleLines) {
+                ImGui::TextUnformatted(line.c_str());
+            }
+            if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) {
+                ImGui::SetScrollHereY(1.0f);
+            }
+            ImGui::EndChild();
+        }
+        ImGui::End();
+    }
 }
 
 bool VestaEngine::should_forward_event_to_renderer(const SDL_Event& event) const
@@ -1504,7 +2277,7 @@ std::optional<std::filesystem::path> VestaEngine::open_scene_with_system_dialog(
     dialogInfo.lpstrFile = filePath.data();
     dialogInfo.nMaxFile = static_cast<DWORD>(filePath.size());
     dialogInfo.lpstrFilter =
-        L"Supported Scenes (*.glb;*.gltf;*.ply)\0*.glb;*.gltf;*.ply\0glTF Scenes (*.glb;*.gltf)\0*.glb;*.gltf\0Gaussian PLY (*.ply)\0*.ply\0All Files (*.*)\0*.*\0";
+        L"Supported Scenes (*.glb;*.gltf;*.fbx;*.ply)\0*.glb;*.gltf;*.fbx;*.ply\0glTF Scenes (*.glb;*.gltf)\0*.glb;*.gltf\0FBX Meshes (*.fbx)\0*.fbx\0Gaussian PLY (*.ply)\0*.ply\0All Files (*.*)\0*.*\0";
     dialogInfo.lpstrInitialDir = initialDirectory.empty() ? nullptr : initialDirectory.c_str();
     dialogInfo.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY;
     dialogInfo.lpstrDefExt = L"glb";

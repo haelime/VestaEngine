@@ -5,10 +5,15 @@
 // portfolio view shown in Composite mode.
 
 layout(rgba16f, set = 0, binding = 1) uniform readonly image2D storageImages[];
+layout(set = 0, binding = 2, std430) readonly buffer StorageBufferUvec2 {
+    uvec2 values[];
+} storageBuffersUvec2[];
 
 layout(push_constant) uniform CompositePushConstants {
     uvec4 imageIndices0;
     uvec4 imageIndices1;
+    uvec4 imageIndices2;
+    uvec4 gaussianDebug;
     vec4 params;
 } pc;
 
@@ -54,6 +59,106 @@ vec4 resolveGaussian(ivec2 pixel, vec2 uv)
     return vec4(accum.rgb, alpha);
 }
 
+vec4 loadStorage(uint index, ivec2 pixel)
+{
+    if (!hasImage(index)) {
+        return vec4(0.0);
+    }
+    ivec2 size = imageSize(storageImages[nonuniformEXT(int(index))]);
+    ivec2 clampedPixel = clamp(pixel, ivec2(0), size - ivec2(1));
+    return imageLoad(storageImages[nonuniformEXT(int(index))], clampedPixel);
+}
+
+vec3 resolveDebugView(ivec2 pixel)
+{
+    uint debugView = pc.imageIndices1.y;
+    if (debugView == 1u) {
+        if (!hasImage(pc.imageIndices2.x)) { return vec3(-1.0); }
+        return loadStorage(pc.imageIndices2.x, pixel).rgb;
+    }
+    if (debugView == 2u) {
+        if (!hasImage(pc.imageIndices2.y)) { return vec3(-1.0); }
+        return loadStorage(pc.imageIndices2.y, pixel).rgb;
+    }
+    if (debugView == 3u) {
+        if (!hasImage(pc.imageIndices2.y)) { return vec3(-1.0); }
+        vec4 normalRoughness = loadStorage(pc.imageIndices2.y, pixel);
+        return vec3(normalRoughness.a);
+    }
+    if (debugView == 4u) {
+        if (!hasImage(pc.imageIndices2.z)) { return vec3(-1.0); }
+        vec4 material = loadStorage(pc.imageIndices2.z, pixel);
+        return vec3(material.a);
+    }
+    if (debugView == 5u) {
+        if (!hasImage(pc.imageIndices2.z)) { return vec3(-1.0); }
+        return loadStorage(pc.imageIndices2.z, pixel).rgb;
+    }
+    return vec3(-1.0);
+}
+
+vec3 heatmap(float value)
+{
+    value = clamp(value, 0.0, 1.0);
+    vec3 blue = vec3(0.05, 0.12, 0.85);
+    vec3 cyan = vec3(0.0, 0.85, 0.95);
+    vec3 yellow = vec3(1.0, 0.9, 0.05);
+    vec3 red = vec3(1.0, 0.08, 0.02);
+    if (value < 0.33) {
+        return mix(blue, cyan, value / 0.33);
+    }
+    if (value < 0.66) {
+        return mix(cyan, yellow, (value - 0.33) / 0.33);
+    }
+    return mix(yellow, red, (value - 0.66) / 0.34);
+}
+
+vec3 resolveGaussianDebugView(vec4 gaussianColor, ivec2 pixel, vec2 uv)
+{
+    uint gaussianDebugView = pc.imageIndices1.z;
+    if (gaussianDebugView == 0u) {
+        return vec3(-1.0);
+    }
+    if (gaussianDebugView == 1u) {
+        return vec3(gaussianColor.a);
+    }
+    if (gaussianDebugView == 2u) {
+        if (!hasImage(pc.imageIndices0.w)) { return vec3(-1.0); }
+        ivec2 revealSize = imageSize(storageImages[nonuniformEXT(int(pc.imageIndices0.w))]);
+        ivec2 revealPixel = clamp(ivec2(uv * vec2(revealSize)), ivec2(0), revealSize - ivec2(1));
+        float reveal = imageLoad(storageImages[nonuniformEXT(int(pc.imageIndices0.w))], revealPixel).r;
+        return vec3(reveal);
+    }
+    if (gaussianDebugView == 3u) {
+        float density = 1.0 - clamp(gaussianColor.a, 0.0, 1.0);
+        return heatmap(pow(1.0 - density, 0.35));
+    }
+    if (gaussianDebugView == 4u) {
+        if (!hasImage(pc.imageIndices1.w)) { return vec3(-1.0); }
+        ivec2 debugSize = imageSize(storageImages[nonuniformEXT(int(pc.imageIndices1.w))]);
+        ivec2 debugPixel = clamp(ivec2(uv * vec2(debugSize)), ivec2(0), debugSize - ivec2(1));
+        vec4 debugValue = imageLoad(storageImages[nonuniformEXT(int(pc.imageIndices1.w))], debugPixel);
+        if (debugValue.y <= 0.0) {
+            return vec3(0.0);
+        }
+        return heatmap(1.0 - clamp(debugValue.x, 0.0, 1.0));
+    }
+    if (gaussianDebugView == 5u) {
+        if (pc.gaussianDebug.x == INVALID_IMAGE_INDEX || pc.gaussianDebug.y == 0u || pc.gaussianDebug.z == 0u) {
+            return vec3(-1.0);
+        }
+        uvec2 tileCoord = min(uvec2(pixel) / max(pc.gaussianDebug.w, 1u), uvec2(pc.gaussianDebug.y - 1u, pc.gaussianDebug.z - 1u));
+        uint tileIndex = tileCoord.y * pc.gaussianDebug.y + tileCoord.x;
+        uvec2 range = storageBuffersUvec2[nonuniformEXT(int(pc.gaussianDebug.x))].values[tileIndex];
+        if (range.x == INVALID_IMAGE_INDEX || range.y == INVALID_IMAGE_INDEX || range.y <= range.x) {
+            return vec3(0.02);
+        }
+        float occupancy = clamp(float(range.y - range.x) / 256.0, 0.0, 1.0);
+        return heatmap(occupancy);
+    }
+    return vec3(-1.0);
+}
+
 void main() {
     ivec2 pixel = ivec2(gl_FragCoord.xy);
     ivec2 baseSize = ivec2(1);
@@ -82,6 +187,16 @@ void main() {
     }
 
     vec4 gaussianColor = resolveGaussian(pixel, uv);
+    vec3 debugColor = resolveDebugView(pixel);
+    if (debugColor.x >= 0.0) {
+        outColor = vec4(debugColor, 1.0);
+        return;
+    }
+    vec3 gaussianDebugColor = resolveGaussianDebugView(gaussianColor, pixel, uv);
+    if (gaussianDebugColor.x >= 0.0) {
+        outColor = vec4(gaussianDebugColor, 1.0);
+        return;
+    }
 
     vec3 composite = deferredColor;
     if (pc.imageIndices1.x == 1u) {

@@ -1,5 +1,9 @@
 #include <vesta/render/graph/render_graph.h>
 
+#include <algorithm>
+#include <chrono>
+#include <limits>
+
 #include <vesta/render/renderer.h>
 #include <vesta/render/vulkan/vk_initializers.h>
 
@@ -176,6 +180,18 @@ void RenderGraph::Compile(RenderDevice& device)
     for (const RenderGraphPassNode& pass : _passes) {
         CompiledPass compiledPass;
         compiledPass.pass = pass.pass;
+        compiledPass.readCount = static_cast<uint32_t>(pass.reads.size());
+        compiledPass.writeCount = static_cast<uint32_t>(pass.writes.size());
+
+        auto makeAccessSummary = [&](const RenderGraphTextureAccess& access) {
+            const TextureResource& resource = _textures[access.texture.index];
+            return RenderGraphPassTiming::ResourceAccess{
+                .name = resource.name,
+                .usage = access.usage,
+                .format = resource.desc.format,
+                .extent = resource.desc.extent,
+            };
+        };
 
         auto processAccess = [&](const RenderGraphTextureAccess& access) {
             TextureResource& resource = _textures[access.texture.index];
@@ -203,9 +219,11 @@ void RenderGraph::Compile(RenderDevice& device)
         };
 
         for (const RenderGraphTextureAccess& read : pass.reads) {
+            compiledPass.inputs.push_back(makeAccessSummary(read));
             processAccess(read);
         }
         for (const RenderGraphTextureAccess& write : pass.writes) {
+            compiledPass.outputs.push_back(makeAccessSummary(write));
             processAccess(write);
         }
 
@@ -246,6 +264,65 @@ void RenderGraph::Execute(RenderGraphExecutionContext& executionContext)
     if (!_compiled) {
         Compile(executionContext.device);
     }
+    if (executionContext.passTimings != nullptr) {
+        executionContext.passTimings->clear();
+        executionContext.passTimings->reserve(_compiledPasses.size());
+    }
+
+    std::vector<float> previousGpuMs;
+    RendererFrameContext& frameContext = executionContext.frameContext;
+    const bool useGpuTimestamps = executionContext.gpuTimestampsSupported
+        && frameContext.renderGraphTimestampPool != VK_NULL_HANDLE
+        && executionContext.timestampPeriodNs > 0.0f;
+    if (useGpuTimestamps && frameContext.renderGraphTimestampPending && frameContext.renderGraphTimestampPassCount > 0u) {
+        const uint32_t queryCount = frameContext.renderGraphTimestampPassCount * 2u;
+        std::vector<uint64_t> queryResults(static_cast<size_t>(queryCount) * 2u, 0u);
+        const VkResult result = vkGetQueryPoolResults(executionContext.device.GetDevice(),
+            frameContext.renderGraphTimestampPool,
+            0,
+            queryCount,
+            queryResults.size() * sizeof(uint64_t),
+            queryResults.data(),
+            sizeof(uint64_t) * 2u,
+            VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+        if (result == VK_SUCCESS) {
+            previousGpuMs.resize(frameContext.renderGraphTimestampPassCount, -1.0f);
+            for (uint32_t passIndex = 0; passIndex < frameContext.renderGraphTimestampPassCount; ++passIndex) {
+                const uint32_t beginQuery = passIndex * 2u;
+                const uint32_t endQuery = beginQuery + 1u;
+                const bool beginAvailable = queryResults[static_cast<size_t>(beginQuery) * 2u + 1u] != 0u;
+                const bool endAvailable = queryResults[static_cast<size_t>(endQuery) * 2u + 1u] != 0u;
+                if (!beginAvailable || !endAvailable) {
+                    continue;
+                }
+                const uint64_t beginTimestamp = queryResults[static_cast<size_t>(beginQuery) * 2u];
+                const uint64_t endTimestamp = queryResults[static_cast<size_t>(endQuery) * 2u];
+                if (endTimestamp >= beginTimestamp) {
+                    const double elapsedNs = static_cast<double>(endTimestamp - beginTimestamp) * executionContext.timestampPeriodNs;
+                    previousGpuMs[passIndex] = static_cast<float>(elapsedNs / 1.0e6);
+                }
+            }
+        }
+        frameContext.renderGraphTimestampPending = false;
+    }
+
+    const uint32_t timestampPassCount = useGpuTimestamps
+        ? std::min<uint32_t>(static_cast<uint32_t>(_compiledPasses.size()), kMaxRenderGraphTimestampPasses)
+        : 0u;
+    if (timestampPassCount > 0u) {
+        vkCmdResetQueryPool(executionContext.commandBuffer, frameContext.renderGraphTimestampPool, 0, timestampPassCount * 2u);
+        frameContext.renderGraphTimestampPassNames.clear();
+        frameContext.renderGraphTimestampPassNames.reserve(timestampPassCount);
+        for (uint32_t passIndex = 0; passIndex < timestampPassCount; ++passIndex) {
+            frameContext.renderGraphTimestampPassNames.push_back(std::string(_compiledPasses[passIndex].pass->Name()));
+        }
+        frameContext.renderGraphTimestampPassCount = timestampPassCount;
+        frameContext.renderGraphTimestampPending = true;
+    } else {
+        frameContext.renderGraphTimestampPassCount = 0;
+        frameContext.renderGraphTimestampPassNames.clear();
+        frameContext.renderGraphTimestampPending = false;
+    }
 
     // Transient graph resources become real images here. Imported resources such
     // as the swapchain keep their existing image handles.
@@ -262,7 +339,8 @@ void RenderGraph::Execute(RenderGraphExecutionContext& executionContext)
         executionContext.frameContext.acquiredTransientImages.push_back(handle);
     }
 
-    for (const CompiledPass& compiledPass : _compiledPasses) {
+    for (size_t passIndex = 0; passIndex < _compiledPasses.size(); ++passIndex) {
+        const CompiledPass& compiledPass = _compiledPasses[passIndex];
         std::vector<VkImageMemoryBarrier2> imageBarriers;
         imageBarriers.reserve(compiledPass.barriers.size());
 
@@ -282,7 +360,42 @@ void RenderGraph::Execute(RenderGraphExecutionContext& executionContext)
 
         RenderGraphContext context(
             executionContext.device, resolvedImages, executionContext.commandBuffer, executionContext.device.GetSwapchainExtent());
+        if (passIndex < timestampPassCount) {
+            vkCmdWriteTimestamp2(executionContext.commandBuffer,
+                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                frameContext.renderGraphTimestampPool,
+                static_cast<uint32_t>(passIndex) * 2u);
+        }
+        const auto cpuBegin = std::chrono::steady_clock::now();
         compiledPass.pass->Execute(context);
+        const auto cpuEnd = std::chrono::steady_clock::now();
+        if (passIndex < timestampPassCount) {
+            vkCmdWriteTimestamp2(executionContext.commandBuffer,
+                VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+                frameContext.renderGraphTimestampPool,
+                static_cast<uint32_t>(passIndex) * 2u + 1u);
+        }
+
+        if (executionContext.passTimings != nullptr) {
+            const float cpuMs = std::chrono::duration<float, std::milli>(cpuEnd - cpuBegin).count();
+            float gpuMs = 0.0f;
+            bool gpuTimingValid = false;
+            if (passIndex < previousGpuMs.size() && previousGpuMs[passIndex] >= 0.0f) {
+                gpuMs = previousGpuMs[passIndex];
+                gpuTimingValid = true;
+            }
+            executionContext.passTimings->push_back(RenderGraphPassTiming{
+                .name = std::string(compiledPass.pass->Name()),
+                .readCount = compiledPass.readCount,
+                .writeCount = compiledPass.writeCount,
+                .barrierCount = static_cast<uint32_t>(compiledPass.barriers.size()),
+                .cpuMs = cpuMs,
+                .gpuMs = gpuMs,
+                .gpuTimingValid = gpuTimingValid,
+                .inputs = compiledPass.inputs,
+                .outputs = compiledPass.outputs,
+            });
+        }
     }
 
     std::vector<VkImageMemoryBarrier2> finalImageBarriers;

@@ -69,6 +69,23 @@ void Camera::SetRotationDegrees(glm::vec3 rotationDegrees)
     _movedThisFrame = true;
 }
 
+void Camera::SetLens(float fovDegrees, float nearPlane, float farPlane)
+{
+    fovDegrees = glm::clamp(fovDegrees, 20.0f, 120.0f);
+    nearPlane = glm::clamp(nearPlane, 0.001f, 10.0f);
+    farPlane = glm::max(farPlane, nearPlane + 1.0f);
+    if (std::abs(_fovDegrees - fovDegrees) <= 1.0e-4f
+        && std::abs(_nearPlane - nearPlane) <= 1.0e-5f
+        && std::abs(_farPlane - farPlane) <= 1.0e-3f) {
+        return;
+    }
+
+    _fovDegrees = fovDegrees;
+    _nearPlane = nearPlane;
+    _farPlane = farPlane;
+    _movedThisFrame = true;
+}
+
 void Camera::EnableOrbit(glm::vec3 target, float distance)
 {
     _mode = Mode::Orbit;

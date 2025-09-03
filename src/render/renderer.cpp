@@ -5,8 +5,10 @@
 #include <chrono>
 #include <cmath>
 #include <cctype>
+#include <fstream>
 #include <limits>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <utility>
 
@@ -21,6 +23,7 @@
 #include <vesta/render/passes/gaussian_splat_pass.h>
 #include <vesta/render/passes/official_gaussian_raster_pass.h>
 #include <vesta/render/passes/geometry_raster_pass.h>
+#include <vesta/render/passes/path_denoise_pass.h>
 #include <vesta/render/passes/path_tracer_pass.h>
 #include <vesta/render/vulkan/vk_images.h>
 #include <vesta/render/vulkan/vk_initializers.h>
@@ -105,6 +108,11 @@ bool NeedsPathTracePass(const RendererSettings& settings)
     }
 
     return settings.displayMode == RendererDisplayMode::Composite || settings.displayMode == RendererDisplayMode::PathTrace;
+}
+
+bool NeedsPathDenoisePass(const RendererSettings& settings)
+{
+    return NeedsPathTracePass(settings) && settings.enablePathTraceDenoiser && settings.pathTraceDebugView == PathTraceDebugView::Final;
 }
 
 bool UsesStreamingUpload(const RendererSettings& settings)
@@ -249,6 +257,43 @@ float DefaultOrbitDistance(float currentDistance, float targetRadius)
     return minimumDistance;
 }
 
+bool WriteSwapchainPpm(const std::filesystem::path& path,
+    const void* pixels,
+    VkExtent2D extent,
+    VkFormat format)
+{
+    if (pixels == nullptr || extent.width == 0 || extent.height == 0) {
+        return false;
+    }
+
+    const std::filesystem::path parent = path.parent_path();
+    if (!parent.empty()) {
+        std::error_code errorCode;
+        std::filesystem::create_directories(parent, errorCode);
+    }
+
+    std::ofstream output(path, std::ios::binary);
+    if (!output.is_open()) {
+        return false;
+    }
+
+    output << "P6\n" << extent.width << ' ' << extent.height << "\n255\n";
+    const auto* source = static_cast<const uint8_t*>(pixels);
+    for (uint32_t y = 0; y < extent.height; ++y) {
+        for (uint32_t x = 0; x < extent.width; ++x) {
+            const uint8_t* pixel = source + (static_cast<size_t>(y) * extent.width + x) * 4u;
+            std::array<uint8_t, 3> rgb{};
+            if (format == VK_FORMAT_B8G8R8A8_UNORM || format == VK_FORMAT_B8G8R8A8_SRGB) {
+                rgb = { pixel[2], pixel[1], pixel[0] };
+            } else {
+                rgb = { pixel[0], pixel[1], pixel[2] };
+            }
+            output.write(reinterpret_cast<const char*>(rgb.data()), static_cast<std::streamsize>(rgb.size()));
+        }
+    }
+    return output.good();
+}
+
 void ConfigureGeometryRasterPass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
 {
     auto& rasterPass = static_cast<GeometryRasterPass&>(pass);
@@ -296,6 +341,7 @@ void ConfigureOfficialGaussianPass(Renderer& renderer, IRenderPass& pass, const 
     const bool useDepthInput = renderer.GetSettings().enableRaster && renderer.GetScene().GetSceneKind() == vesta::scene::SceneKind::Mesh;
     gaussianPass.SetDepthInput(useDepthInput ? resources.sceneDepth : GraphTextureHandle{});
     gaussianPass.SetOutputs(resources.gaussianAccum, resources.gaussianReveal);
+    gaussianPass.SetDebugOutput(resources.gaussianDebug);
     gaussianPass.SetScene(&renderer.GetScene());
     gaussianPass.SetCamera(&renderer.GetCamera());
     gaussianPass.SetJobSystem(&renderer.GetJobSystem());
@@ -313,6 +359,7 @@ void ConfigurePathTracerPass(Renderer& renderer, IRenderPass& pass, const Render
 {
     auto& pathTracerPass = static_cast<PathTracerPass&>(pass);
     pathTracerPass.SetOutput(resources.pathTraceOutput);
+    pathTracerPass.SetDenoiserGuides(resources.pathTraceNormalGuide, resources.pathTraceDepthGuide);
     pathTracerPass.SetScene(&renderer.GetScene());
     pathTracerPass.SetCamera(&renderer.GetCamera());
     pathTracerPass.SetFrameIndex(renderer.GetPathTraceFrameIndex());
@@ -320,14 +367,40 @@ void ConfigurePathTracerPass(Renderer& renderer, IRenderPass& pass, const Render
     pathTracerPass.SetEnabled(renderer.GetSettings().enablePathTracing);
     pathTracerPass.SetBackendPreference(renderer.GetSettings().pathTraceBackend);
     pathTracerPass.SetLight(renderer.GetSettings().lightDirectionAndIntensity);
+    pathTracerPass.SetSamplesPerPixel(renderer.GetSettings().pathTraceSamplesPerPixel);
+    pathTracerPass.SetMaxBounces(renderer.GetSettings().pathTraceMaxBounces);
+    pathTracerPass.SetDebugView(renderer.GetSettings().pathTraceDebugView);
+}
+
+void ConfigurePathDenoisePass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
+{
+    auto& denoisePass = static_cast<PathDenoisePass&>(pass);
+    denoisePass.SetInput(resources.pathTraceOutput);
+    denoisePass.SetGuides(resources.pathTraceNormalGuide, resources.pathTraceDepthGuide);
+    denoisePass.SetOutput(resources.pathTraceDenoised);
+    denoisePass.SetStrength(renderer.GetSettings().pathTraceDenoiserStrength);
+    denoisePass.SetTemporalBlend(renderer.GetSettings().pathTraceDenoiserTemporalBlend);
+    denoisePass.SetFrameIndex(renderer.GetPathTraceFrameIndex());
 }
 
 void ConfigureCompositePass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
 {
     auto& compositePass = static_cast<CompositePass&>(pass);
-    compositePass.SetInputs(resources.deferredLighting, resources.pathTraceOutput, resources.gaussianAccum, resources.gaussianReveal);
+    const GraphTextureHandle pathTraceInput = resources.pathTraceDenoised ? resources.pathTraceDenoised : resources.pathTraceOutput;
+    compositePass.SetInputs(resources.deferredLighting, pathTraceInput, resources.gaussianAccum, resources.gaussianReveal, resources.gaussianDebug);
+    compositePass.SetGBufferInputs(resources.gbufferAlbedo, resources.gbufferNormal, resources.gbufferMaterial);
+    uint32_t gaussianTileRangeBufferIndex = kInvalidResourceIndex;
+    if (const auto* officialGaussian = renderer.FindPass<OfficialGaussianRasterPass>("official-gaussian-raster")) {
+        gaussianTileRangeBufferIndex = officialGaussian->GetTileRangeBindlessStorageIndex();
+    }
+    const VkExtent2D extent = renderer.GetRenderDevice().GetSwapchainExtent();
+    compositePass.SetGaussianDebugResources(
+        gaussianTileRangeBufferIndex, (extent.width + 7u) / 8u, (extent.height + 7u) / 8u);
     compositePass.SetOutput(resources.swapchainTarget);
-    compositePass.SetMode(static_cast<uint32_t>(renderer.GetSettings().displayMode), renderer.GetSettings().gaussianMix);
+    compositePass.SetMode(static_cast<uint32_t>(renderer.GetSettings().displayMode),
+        renderer.GetSettings().gaussianMix,
+        static_cast<uint32_t>(renderer.GetSettings().debugView),
+        static_cast<uint32_t>(renderer.GetSettings().gaussianDebugView));
 }
 } // namespace
 
@@ -576,6 +649,7 @@ void Renderer::RenderFrame()
     // Each overlapping frame owns its own fence. Waiting here guarantees the GPU
     // has finished using the command buffer and transient resources we are about to recycle.
     VK_CHECK(vkWaitForFences(_device.GetDevice(), 1, &currentFrame.renderFence, VK_TRUE, std::numeric_limits<uint64_t>::max()));
+    ProcessCompletedFrameReadback(currentFrame);
     ReleaseRetiredScenes();
     ReleaseTransientResources(currentFrame);
 
@@ -611,9 +685,13 @@ void Renderer::RenderFrame()
         .frameContext = currentFrame,
         .transientImagePool = _transientImagePool,
         .commandBuffer = currentFrame.commandBuffer,
+        .passTimings = &_lastRenderGraphTimings,
+        .gpuTimestampsSupported = _renderGraphTimestampsSupported,
+        .timestampPeriodNs = _timestampPeriodNs,
     };
     graph.Execute(executionContext);
     RecordOverlay(currentFrame.commandBuffer, swapchainImageIndex);
+    RecordScreenshotReadback(currentFrame.commandBuffer, currentFrame, swapchainImageIndex);
 
     VK_CHECK(vkEndCommandBuffer(currentFrame.commandBuffer));
 
@@ -821,6 +899,31 @@ void Renderer::SelectDirectionalLight()
     _trackSelectedObjectOrbit = false;
 }
 
+bool Renderer::SelectObject(uint32_t objectIndex)
+{
+    if (objectIndex >= _scene.GetObjects().size()) {
+        return false;
+    }
+
+    _selection = EditorSelection{
+        .kind = SelectionKind::Object,
+        .objectIndex = objectIndex,
+    };
+    _selectionDragging = false;
+    _selectionEditedSinceDragStart = false;
+    return true;
+}
+
+bool Renderer::UpdateMaterial(uint32_t materialIndex, const vesta::scene::SceneMaterial& material)
+{
+    if (!_scene.UpdateMaterial(_device, materialIndex, material)) {
+        return false;
+    }
+
+    ResetAccumulation();
+    return true;
+}
+
 void Renderer::ClearSelection()
 {
     _selection = {};
@@ -869,6 +972,22 @@ bool Renderer::DollyCameraAroundSelection()
     ResetAccumulation();
     _visibilityDirty = true;
     return true;
+}
+
+bool Renderer::EnsureRayTracingScene()
+{
+    if (!_device.IsRayTracingSupported() || _scene.HasRayTracingScene() || _scene.GetIndices().empty() || !_scene.GetVertexBuffer()) {
+        return _scene.HasRayTracingScene();
+    }
+
+    _sceneLoadStatus.lastBlockingWait = "Scene::RebuildRayTracing";
+    _device.SetDebugWaitContext("scene=" + _scene.GetSourcePath().string() + " stage=EnsureRayTracingScene");
+    const bool built = _scene.RebuildRayTracing(_device);
+    _sceneLoadStatus.blasMs = _scene.GetBottomLevelBuildMs();
+    _sceneLoadStatus.tlasMs = _scene.GetTopLevelBuildMs();
+    _sceneLoadStatus.lastBlockingWait.clear();
+    ResetAccumulation();
+    return built;
 }
 
 void Renderer::DollyCameraAroundScene()
@@ -1172,6 +1291,87 @@ const IRenderPass* Renderer::FindPass(std::string_view id) const
     return entry != nullptr ? entry->pass.get() : nullptr;
 }
 
+std::vector<RenderPassDebugInfo> Renderer::GetRenderPassDebugInfo() const
+{
+    std::vector<RenderPassDebugInfo> result;
+    result.reserve(_passRegistry.size());
+    for (const RegisteredPassEntry& entry : _passRegistry) {
+        result.push_back(RenderPassDebugInfo{
+            .id = entry.id,
+            .name = entry.pass ? std::string(entry.pass->Name()) : std::string{},
+            .order = entry.order,
+            .enabled = entry.enabled,
+        });
+    }
+    std::sort(result.begin(), result.end(), [](const RenderPassDebugInfo& lhs, const RenderPassDebugInfo& rhs) {
+        if (lhs.order != rhs.order) {
+            return lhs.order < rhs.order;
+        }
+        return lhs.id < rhs.id;
+    });
+    return result;
+}
+
+bool Renderer::ReloadShaders()
+{
+    if (_device.GetDevice() == VK_NULL_HANDLE) {
+        _lastShaderReloadMessage = "Renderer device is not initialized.";
+        return false;
+    }
+
+    _device.WaitIdle();
+    for (RendererFrameContext& frame : _frames) {
+        ReleaseTransientResources(frame);
+    }
+    _transientImagePool.Purge(_device);
+    _lastRenderGraphTimings.clear();
+
+    bool success = true;
+    std::ostringstream message;
+    for (RegisteredPassEntry& entry : _passRegistry) {
+        if (!entry.pass) {
+            continue;
+        }
+        const bool wasEnabled = entry.enabled;
+        try {
+            entry.pass->Shutdown(_device);
+            entry.pass->Initialize(_device);
+            entry.enabled = wasEnabled;
+        } catch (const std::exception& error) {
+            success = false;
+            entry.enabled = false;
+            message << entry.id << ": " << error.what() << '\n';
+            try {
+                entry.pass->Shutdown(_device);
+            } catch (...) {
+            }
+        } catch (...) {
+            success = false;
+            entry.enabled = false;
+            message << entry.id << ": unknown shader reload failure\n";
+            try {
+                entry.pass->Shutdown(_device);
+            } catch (...) {
+            }
+        }
+    }
+
+    _passExecutionPlanDirty = true;
+    ResetAccumulation();
+    _lastShaderReloadMessage = success ? "All render passes reloaded." : message.str();
+    return success;
+}
+
+bool Renderer::RequestScreenshot(const std::filesystem::path& path)
+{
+    if (_device.GetDevice() == VK_NULL_HANDLE || path.empty()) {
+        return false;
+    }
+
+    _pendingScreenshotPath = path;
+    return true;
+}
+
 void Renderer::InitializeCommands()
 {
     VkCommandPoolCreateInfo poolInfo =
@@ -1190,9 +1390,20 @@ void Renderer::InitializeSyncStructures()
     VkFenceCreateInfo fenceInfo = vkinit::fence_create_info(VK_FENCE_CREATE_SIGNALED_BIT);
     VkSemaphoreCreateInfo semaphoreInfo = vkinit::semaphore_create_info();
 
+    VkPhysicalDeviceProperties properties{};
+    vkGetPhysicalDeviceProperties(_device.GetPhysicalDevice(), &properties);
+    _timestampPeriodNs = properties.limits.timestampPeriod;
+    _renderGraphTimestampsSupported = properties.limits.timestampComputeAndGraphics == VK_TRUE && _timestampPeriodNs > 0.0f;
+
     for (RendererFrameContext& frame : _frames) {
         VK_CHECK(vkCreateFence(_device.GetDevice(), &fenceInfo, nullptr, &frame.renderFence));
         VK_CHECK(vkCreateSemaphore(_device.GetDevice(), &semaphoreInfo, nullptr, &frame.acquireSemaphore));
+        if (_renderGraphTimestampsSupported) {
+            VkQueryPoolCreateInfo queryPoolInfo{ VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO };
+            queryPoolInfo.queryType = VK_QUERY_TYPE_TIMESTAMP;
+            queryPoolInfo.queryCount = kMaxRenderGraphTimestampPasses * 2u;
+            VK_CHECK(vkCreateQueryPool(_device.GetDevice(), &queryPoolInfo, nullptr, &frame.renderGraphTimestampPool));
+        }
     }
 
     _swapchainImageRenderSemaphores.resize(_device.GetSwapchainImageHandles().size(), VK_NULL_HANDLE);
@@ -1252,6 +1463,15 @@ void Renderer::InitializeDefaultPasses()
         .enabled = true,
     });
     RegisterPass(RenderPassRegistrationDesc{
+        .id = "path-denoise",
+        .pass = std::make_unique<PathDenoisePass>(),
+        .configure = [this](IRenderPass& pass, const RendererGraphResources& resources) {
+            ConfigurePathDenoisePass(*this, pass, resources);
+        },
+        .order = 45,
+        .enabled = true,
+    });
+    RegisterPass(RenderPassRegistrationDesc{
         .id = "composite",
         .pass = std::make_unique<CompositePass>(),
         .configure = [this](IRenderPass& pass, const RendererGraphResources& resources) {
@@ -1265,6 +1485,11 @@ void Renderer::InitializeDefaultPasses()
 void Renderer::DestroyFrameResources()
 {
     for (RendererFrameContext& frame : _frames) {
+        if (frame.screenshotReadbackBuffer) {
+            _device.DestroyBuffer(frame.screenshotReadbackBuffer);
+            frame.screenshotReadbackBuffer = {};
+            frame.screenshotPending = false;
+        }
         ReleaseTransientResources(frame);
 
         if (frame.renderFence != VK_NULL_HANDLE) {
@@ -1274,6 +1499,13 @@ void Renderer::DestroyFrameResources()
         if (frame.acquireSemaphore != VK_NULL_HANDLE) {
             vkDestroySemaphore(_device.GetDevice(), frame.acquireSemaphore, nullptr);
             frame.acquireSemaphore = VK_NULL_HANDLE;
+        }
+        if (frame.renderGraphTimestampPool != VK_NULL_HANDLE) {
+            vkDestroyQueryPool(_device.GetDevice(), frame.renderGraphTimestampPool, nullptr);
+            frame.renderGraphTimestampPool = VK_NULL_HANDLE;
+            frame.renderGraphTimestampPending = false;
+            frame.renderGraphTimestampPassCount = 0;
+            frame.renderGraphTimestampPassNames.clear();
         }
         if (frame.commandPool != VK_NULL_HANDLE) {
             vkDestroyCommandPool(_device.GetDevice(), frame.commandPool, nullptr);
@@ -1302,6 +1534,93 @@ void Renderer::ReleaseTransientResources(RendererFrameContext& frameContext)
         _device.DestroyBuffer(handle);
     }
     frameContext.transientBuffers.clear();
+}
+
+void Renderer::ProcessCompletedFrameReadback(RendererFrameContext& frameContext)
+{
+    if (!frameContext.screenshotPending || !frameContext.screenshotReadbackBuffer) {
+        return;
+    }
+
+    const VkDeviceSize byteSize =
+        static_cast<VkDeviceSize>(frameContext.screenshotExtent.width) * frameContext.screenshotExtent.height * 4u;
+    _device.InvalidateBuffer(frameContext.screenshotReadbackBuffer, 0, byteSize);
+    const AllocatedBuffer& buffer = _device.GetBufferResource(frameContext.screenshotReadbackBuffer);
+    const bool written = WriteSwapchainPpm(
+        frameContext.screenshotPath, buffer.allocationInfo.pMappedData, frameContext.screenshotExtent, frameContext.screenshotFormat);
+    if (!written) {
+        fmt::println(stderr, "Failed to write screenshot '{}'", frameContext.screenshotPath.string());
+    }
+
+    _device.DestroyBuffer(frameContext.screenshotReadbackBuffer);
+    frameContext.screenshotReadbackBuffer = {};
+    frameContext.screenshotPath.clear();
+    frameContext.screenshotExtent = {};
+    frameContext.screenshotFormat = VK_FORMAT_UNDEFINED;
+    frameContext.screenshotPending = false;
+}
+
+void Renderer::RecordScreenshotReadback(VkCommandBuffer commandBuffer, RendererFrameContext& frameContext, uint32_t swapchainImageIndex)
+{
+    if (_pendingScreenshotPath.empty()) {
+        return;
+    }
+
+    if (frameContext.screenshotPending && frameContext.screenshotReadbackBuffer) {
+        return;
+    }
+
+    const VkExtent2D extent = _device.GetSwapchainExtent();
+    const VkDeviceSize byteSize = static_cast<VkDeviceSize>(extent.width) * extent.height * 4u;
+    constexpr VmaAllocationCreateFlags kMappedHostFlags =
+        VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+    frameContext.screenshotReadbackBuffer = _device.CreateBuffer(BufferDesc{
+        .size = byteSize,
+        .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+        .allocationFlags = kMappedHostFlags,
+        .debugName = "ScreenshotReadback",
+    });
+    frameContext.screenshotPath = _pendingScreenshotPath;
+    frameContext.screenshotExtent = extent;
+    frameContext.screenshotFormat = _device.GetSwapchainFormat();
+    frameContext.screenshotPending = true;
+    _pendingScreenshotPath.clear();
+
+    VkImage swapchainImage = _device.GetImage(_device.GetSwapchainImageHandle(swapchainImageIndex));
+    const VkImageSubresourceRange colorRange = vkutil::make_image_subresource_range(VK_IMAGE_ASPECT_COLOR_BIT);
+    vkutil::transition_image(commandBuffer,
+        swapchainImage,
+        VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        VK_PIPELINE_STAGE_2_NONE,
+        VK_ACCESS_2_NONE,
+        VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+        VK_ACCESS_2_TRANSFER_READ_BIT,
+        colorRange);
+
+    VkBufferImageCopy copyRegion{};
+    copyRegion.bufferOffset = 0;
+    copyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    copyRegion.imageSubresource.layerCount = 1;
+    copyRegion.imageExtent = VkExtent3D{ extent.width, extent.height, 1 };
+    vkCmdCopyImageToBuffer(commandBuffer,
+        swapchainImage,
+        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        _device.GetBuffer(frameContext.screenshotReadbackBuffer),
+        1,
+        &copyRegion);
+
+    vkutil::transition_image(commandBuffer,
+        swapchainImage,
+        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+        VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+        VK_ACCESS_2_TRANSFER_READ_BIT,
+        VK_PIPELINE_STAGE_2_NONE,
+        VK_ACCESS_2_NONE,
+        colorRange);
 }
 
 void Renderer::RecordOverlay(VkCommandBuffer commandBuffer, uint32_t swapchainImageIndex)
@@ -2043,6 +2362,7 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
     const bool useDeferredPass = NeedsDeferredPass(_settings);
     const bool useGaussianPass = NeedsGaussianPass(_settings);
     const bool usePathTracePass = NeedsPathTracePass(_settings);
+    const bool usePathDenoisePass = NeedsPathDenoisePass(_settings);
     const bool useOfficialGaussianPass = useGaussianPass && _scene.HasTrainedGaussians() && !IsGaussianInteractivePreviewActive();
     const bool useLegacyGaussianPass = useGaussianPass && (!_scene.HasTrainedGaussians() || IsGaussianInteractivePreviewActive());
 
@@ -2091,9 +2411,17 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
     if (usePathTracePass) {
         resources.pathTraceOutput = graph.CreateTexture("PathTraceOutput", pathTraceDesc);
     }
+    if (usePathDenoisePass) {
+        resources.pathTraceNormalGuide = graph.CreateTexture("PathTraceGuide.Normal", pathTraceDesc);
+        resources.pathTraceDepthGuide = graph.CreateTexture("PathTraceGuide.Depth", pathTraceDesc);
+        resources.pathTraceDenoised = graph.CreateTexture("PathTraceDenoised", pathTraceDesc);
+    }
     if (useGaussianPass) {
         resources.gaussianAccum = graph.CreateTexture("GaussianAccum", storageDesc);
         resources.gaussianReveal = graph.CreateTexture("GaussianReveal", storageDesc);
+    }
+    if (useOfficialGaussianPass) {
+        resources.gaussianDebug = graph.CreateTexture("GaussianDebug", storageDesc);
     }
 
     for (RegisteredPassEntry* entry : _passExecutionPlan) {
@@ -2111,6 +2439,9 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
             continue;
         }
         if (id == "path-tracer" && !usePathTracePass) {
+            continue;
+        }
+        if (id == "path-denoise" && !usePathDenoisePass) {
             continue;
         }
 

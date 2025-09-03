@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+
 #include <glm/glm.hpp>
 
 #include <vesta/render/path_trace_backend.h>
@@ -18,6 +20,7 @@ namespace vesta::render {
 class PathTracerPass final : public IRenderPass {
 public:
     void SetOutput(GraphTextureHandle output);
+    void SetDenoiserGuides(GraphTextureHandle normalGuide, GraphTextureHandle depthGuide);
     void SetScene(const vesta::scene::Scene* scene);
     void SetCamera(const Camera* camera);
     void SetFrameIndex(uint32_t frameIndex);
@@ -25,6 +28,9 @@ public:
     void SetEnabled(bool enabled);
     void SetBackendPreference(PathTraceBackend backend);
     void SetLight(glm::vec4 lightDirectionAndIntensity);
+    void SetSamplesPerPixel(uint32_t samplesPerPixel);
+    void SetMaxBounces(uint32_t maxBounces);
+    void SetDebugView(PathTraceDebugView debugView);
     [[nodiscard]] PathTraceBackend GetActiveBackend() const { return _activeBackend; }
 
     [[nodiscard]] std::string_view Name() const override { return "PathTracerPass"; }
@@ -35,6 +41,8 @@ public:
 
 private:
     GraphTextureHandle _output{};
+    GraphTextureHandle _normalGuide{};
+    GraphTextureHandle _depthGuide{};
     const vesta::scene::Scene* _scene{ nullptr };
     const Camera* _camera{ nullptr };
     // _frameIndex controls accumulation. When the camera moves, the renderer
@@ -45,6 +53,12 @@ private:
     PathTraceBackend _backendPreference{ PathTraceBackend::Auto };
     PathTraceBackend _activeBackend{ PathTraceBackend::Compute };
     glm::vec4 _lightDirectionAndIntensity{ -0.4f, -1.0f, -0.3f, 2.0f };
+    uint32_t _samplesPerPixel{ 1 };
+    uint32_t _maxBounces{ 4 };
+    PathTraceDebugView _debugView{ PathTraceDebugView::Final };
+    std::array<ImageHandle, 6> _accumulationImages{};
+    VkExtent3D _accumulationExtent{};
+    bool _accumulationInitialized{ false };
     VkPipelineLayout _pipelineLayout{ VK_NULL_HANDLE };
     VkPipeline _pipeline{ VK_NULL_HANDLE };
     VkShaderModule _computeShader{ VK_NULL_HANDLE };
@@ -61,5 +75,8 @@ private:
     VkStridedDeviceAddressRegionKHR _missSbt{};
     VkStridedDeviceAddressRegionKHR _hitSbt{};
     VkStridedDeviceAddressRegionKHR _callableSbt{};
+
+    void EnsureAccumulationImage(RenderDevice& device, VkExtent3D extent);
+    void DestroyAccumulationImage(RenderDevice& device);
 };
 } // namespace vesta::render

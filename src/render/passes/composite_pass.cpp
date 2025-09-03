@@ -16,17 +16,38 @@ constexpr uint32_t kInvalidImageIndex = kInvalidResourceIndex;
 struct CompositePushConstants {
     glm::uvec4 imageIndices0{ kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex };
     glm::uvec4 imageIndices1{ 0u, 0u, 0u, 0u };
+    glm::uvec4 imageIndices2{ kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex };
+    glm::uvec4 gaussianDebug{ kInvalidImageIndex, 0u, 0u, 8u };
     glm::vec4 params{ 0.25f, 0.0f, 0.0f, 0.0f };
 };
 } // namespace
 
 void CompositePass::SetInputs(
-    GraphTextureHandle deferredLighting, GraphTextureHandle pathTrace, GraphTextureHandle gaussianAccum, GraphTextureHandle gaussianReveal)
+    GraphTextureHandle deferredLighting,
+    GraphTextureHandle pathTrace,
+    GraphTextureHandle gaussianAccum,
+    GraphTextureHandle gaussianReveal,
+    GraphTextureHandle gaussianDebug)
 {
     _deferredLighting = deferredLighting;
     _pathTrace = pathTrace;
     _gaussianAccum = gaussianAccum;
     _gaussianReveal = gaussianReveal;
+    _gaussianDebug = gaussianDebug;
+}
+
+void CompositePass::SetGBufferInputs(GraphTextureHandle albedo, GraphTextureHandle normalRoughness, GraphTextureHandle material)
+{
+    _gbufferAlbedo = albedo;
+    _gbufferNormalRoughness = normalRoughness;
+    _gbufferMaterial = material;
+}
+
+void CompositePass::SetGaussianDebugResources(uint32_t tileRangeBufferIndex, uint32_t tileCountX, uint32_t tileCountY)
+{
+    _gaussianTileRangeBufferIndex = tileRangeBufferIndex;
+    _gaussianTileCountX = tileCountX;
+    _gaussianTileCountY = tileCountY;
 }
 
 void CompositePass::SetOutput(GraphTextureHandle output)
@@ -34,10 +55,12 @@ void CompositePass::SetOutput(GraphTextureHandle output)
     _output = output;
 }
 
-void CompositePass::SetMode(uint32_t mode, float gaussianMix)
+void CompositePass::SetMode(uint32_t mode, float gaussianMix, uint32_t debugView, uint32_t gaussianDebugView)
 {
     _mode = mode;
     _gaussianMix = gaussianMix;
+    _debugView = debugView;
+    _gaussianDebugView = gaussianDebugView;
 }
 
 void CompositePass::Initialize(RenderDevice& device)
@@ -84,6 +107,18 @@ void CompositePass::Setup(RenderGraphBuilder& builder)
     if (_gaussianReveal) {
         builder.Read(_gaussianReveal, ResourceUsage::StorageRead);
     }
+    if (_gaussianDebug) {
+        builder.Read(_gaussianDebug, ResourceUsage::StorageRead);
+    }
+    if (_gbufferAlbedo) {
+        builder.Read(_gbufferAlbedo, ResourceUsage::StorageRead);
+    }
+    if (_gbufferNormalRoughness) {
+        builder.Read(_gbufferNormalRoughness, ResourceUsage::StorageRead);
+    }
+    if (_gbufferMaterial) {
+        builder.Read(_gbufferMaterial, ResourceUsage::StorageRead);
+    }
     builder.Write(_output, ResourceUsage::ColorAttachmentWrite);
 }
 
@@ -95,7 +130,9 @@ void CompositePass::Execute(const RenderGraphContext& context)
 
     CompositePushConstants pushConstants{
         .imageIndices0 = glm::uvec4(kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex),
-        .imageIndices1 = glm::uvec4(_mode, 0u, 0u, 0u),
+        .imageIndices1 = glm::uvec4(_mode, _debugView, _gaussianDebugView, kInvalidImageIndex),
+        .imageIndices2 = glm::uvec4(kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex),
+        .gaussianDebug = glm::uvec4(_gaussianTileRangeBufferIndex, _gaussianTileCountX, _gaussianTileCountY, 8u),
         .params = glm::vec4(_gaussianMix, 0.0f, 0.0f, 0.0f),
     };
 
@@ -114,6 +151,22 @@ void CompositePass::Execute(const RenderGraphContext& context)
     if (_gaussianReveal) {
         const ImageHandle gaussianRevealHandle = context.GetTextureHandle(_gaussianReveal);
         pushConstants.imageIndices0.w = context.GetDevice().GetImageResource(gaussianRevealHandle).bindless.storageImage;
+    }
+    if (_gaussianDebug) {
+        const ImageHandle gaussianDebugHandle = context.GetTextureHandle(_gaussianDebug);
+        pushConstants.imageIndices1.w = context.GetDevice().GetImageResource(gaussianDebugHandle).bindless.storageImage;
+    }
+    if (_gbufferAlbedo) {
+        const ImageHandle handle = context.GetTextureHandle(_gbufferAlbedo);
+        pushConstants.imageIndices2.x = context.GetDevice().GetImageResource(handle).bindless.storageImage;
+    }
+    if (_gbufferNormalRoughness) {
+        const ImageHandle handle = context.GetTextureHandle(_gbufferNormalRoughness);
+        pushConstants.imageIndices2.y = context.GetDevice().GetImageResource(handle).bindless.storageImage;
+    }
+    if (_gbufferMaterial) {
+        const ImageHandle handle = context.GetTextureHandle(_gbufferMaterial);
+        pushConstants.imageIndices2.z = context.GetDevice().GetImageResource(handle).bindless.storageImage;
     }
 
     VkClearValue clearValue{};

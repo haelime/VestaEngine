@@ -21,6 +21,7 @@ class OfficialGaussianRasterPass final : public IRenderPass {
 public:
     void SetDepthInput(GraphTextureHandle depth);
     void SetOutputs(GraphTextureHandle accum, GraphTextureHandle reveal);
+    void SetDebugOutput(GraphTextureHandle debugOutput);
     void SetScene(const vesta::scene::Scene* scene);
     void SetCamera(const Camera* camera);
     void SetJobSystem(vesta::core::JobSystem* jobs);
@@ -62,6 +63,7 @@ private:
 
 public:
     [[nodiscard]] const Statistics& GetStatistics() const { return _statistics; }
+    [[nodiscard]] uint32_t GetTileRangeBindlessStorageIndex() const { return _tileRangeBindlessStorageIndex; }
 
 private:
     void EnsureResources(RenderDevice& device, VkExtent2D extent, size_t projectedCount, size_t duplicateCount, size_t duplicateCapacity, size_t tileCount);
@@ -74,6 +76,7 @@ private:
     GraphTextureHandle _depthInput{};
     GraphTextureHandle _accumOutput{};
     GraphTextureHandle _revealOutput{};
+    GraphTextureHandle _debugOutput{};
     const vesta::scene::Scene* _scene{ nullptr };
     const Camera* _camera{ nullptr };
     float _opacity{ 1.0f };
@@ -119,6 +122,7 @@ private:
     BufferHandle _radixHistogramBuffer{};
     BufferHandle _radixBinBaseBuffer{};
     BufferHandle _tileRangeBuffer{};
+    uint32_t _tileRangeBindlessStorageIndex{ kInvalidResourceIndex };
     size_t _projectedCapacity{ 0 };
     size_t _duplicateCapacity{ 0 };
     size_t _scanBlockCapacity{ 0 };

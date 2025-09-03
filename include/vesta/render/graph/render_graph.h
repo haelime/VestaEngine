@@ -47,6 +47,25 @@ struct RenderGraphPassNode {
     std::vector<RenderGraphTextureAccess> writes;
 };
 
+struct RenderGraphPassTiming {
+    struct ResourceAccess {
+        std::string name;
+        ResourceUsage usage{ ResourceUsage::Undefined };
+        VkFormat format{ VK_FORMAT_UNDEFINED };
+        VkExtent3D extent{ 1, 1, 1 };
+    };
+
+    std::string name;
+    uint32_t readCount{ 0 };
+    uint32_t writeCount{ 0 };
+    uint32_t barrierCount{ 0 };
+    float cpuMs{ 0.0f };
+    float gpuMs{ 0.0f };
+    bool gpuTimingValid{ false };
+    std::vector<ResourceAccess> inputs;
+    std::vector<ResourceAccess> outputs;
+};
+
 struct CompiledBarrier {
     GraphTextureHandle resource{};
     ResourceUsage fromUsage{ ResourceUsage::Undefined };
@@ -69,6 +88,9 @@ struct RenderGraphExecutionContext {
     RendererFrameContext& frameContext;
     TransientImagePool& transientImagePool;
     VkCommandBuffer commandBuffer{ VK_NULL_HANDLE };
+    std::vector<RenderGraphPassTiming>* passTimings{ nullptr };
+    bool gpuTimestampsSupported{ false };
+    float timestampPeriodNs{ 0.0f };
 };
 
 class RenderGraphContext {
@@ -123,7 +145,11 @@ private:
 
     struct CompiledPass {
         IRenderPass* pass{ nullptr };
+        uint32_t readCount{ 0 };
+        uint32_t writeCount{ 0 };
         std::vector<CompiledBarrier> barriers;
+        std::vector<RenderGraphPassTiming::ResourceAccess> inputs;
+        std::vector<RenderGraphPassTiming::ResourceAccess> outputs;
     };
 
     struct FinalUsageRequest {

@@ -10,4 +10,13 @@ enum class PathTraceBackend : uint32_t {
     Compute = 1,
     HardwareRT = 2,
 };
+
+enum class PathTraceDebugView : uint32_t {
+    Final = 0,
+    Albedo = 1,
+    Normal = 2,
+    Depth = 3,
+    Direct = 4,
+    Indirect = 5,
+};
 } // namespace vesta::render

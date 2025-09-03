@@ -84,6 +84,13 @@ struct SceneTriangle {
         render::kInvalidResourceIndex };
 };
 
+struct SceneEmissiveTriangle {
+    uint32_t triangleIndex{ 0 };
+    float areaOverProbability{ 0.0f };
+    float cdf{ 0.0f };
+    float _padding{ 0.0f };
+};
+
 struct SceneSurface {
     uint32_t firstIndex{ 0 };
     uint32_t indexCount{ 0 };
@@ -197,6 +204,7 @@ struct PreparedScene {
     std::vector<GaussianPrimitive> gaussians;
     std::vector<uint32_t> indices;
     std::vector<SceneTriangle> triangles;
+    std::vector<SceneEmissiveTriangle> emissiveTriangles;
     std::vector<SceneMaterial> materials;
     std::vector<SceneSurface> surfaces;
     std::vector<SceneSurfaceBounds> surfaceBounds;
@@ -223,12 +231,14 @@ struct GpuScene {
     render::BufferHandle gaussianBuffer{};
     render::BufferHandle indexBuffer{};
     render::BufferHandle triangleBuffer{};
+    render::BufferHandle emissiveTriangleBuffer{};
     render::BufferHandle materialBuffer{};
     render::BufferHandle bottomLevelBuffer{};
     render::BufferHandle topLevelBuffer{};
     std::vector<SceneVertex> rasterVertices;
     std::vector<GaussianPrimitive> gaussians;
     std::vector<SceneTriangle> triangles;
+    std::vector<SceneEmissiveTriangle> emissiveTriangles;
     std::vector<SceneMaterial> materials;
     std::vector<GpuSceneTexture> textures;
     VkAccelerationStructureKHR bottomLevelAccelerationStructure{ VK_NULL_HANDLE };
@@ -282,6 +292,7 @@ public:
     [[nodiscard]] bool SupportsRealtimeGaussianSorting() const;
     [[nodiscard]] const std::vector<uint32_t>& GetIndices() const { return GetPreparedOrEmpty().indices; }
     [[nodiscard]] const std::vector<SceneTriangle>& GetTriangles() const { return GetPreparedOrEmpty().triangles; }
+    [[nodiscard]] const std::vector<SceneEmissiveTriangle>& GetEmissiveTriangles() const { return GetPreparedOrEmpty().emissiveTriangles; }
     [[nodiscard]] const std::vector<SceneMaterial>& GetMaterials() const { return GetPreparedOrEmpty().materials; }
     [[nodiscard]] const std::vector<SceneSurface>& GetSurfaces() const { return GetPreparedOrEmpty().surfaces; }
     [[nodiscard]] const std::vector<SceneSurfaceBounds>& GetSurfaceBounds() const { return GetPreparedOrEmpty().surfaceBounds; }
@@ -295,6 +306,7 @@ public:
     [[nodiscard]] render::BufferHandle GetGaussianBuffer() const { return GetGpuOrEmpty().gaussianBuffer; }
     [[nodiscard]] render::BufferHandle GetIndexBuffer() const { return GetGpuOrEmpty().indexBuffer; }
     [[nodiscard]] render::BufferHandle GetTriangleBuffer() const { return GetGpuOrEmpty().triangleBuffer; }
+    [[nodiscard]] render::BufferHandle GetEmissiveTriangleBuffer() const { return GetGpuOrEmpty().emissiveTriangleBuffer; }
     [[nodiscard]] render::BufferHandle GetMaterialBuffer() const { return GetGpuOrEmpty().materialBuffer; }
     [[nodiscard]] bool HasRayTracingScene() const { return GetGpuOrEmpty().topLevelAccelerationStructure != VK_NULL_HANDLE; }
     [[nodiscard]] size_t GetResidentTextureCount() const;
@@ -313,6 +325,7 @@ public:
     [[nodiscard]] bool SupportsObjectEditing() const { return !GetPreparedOrEmpty().objects.empty(); }
     [[nodiscard]] std::optional<uint32_t> PickObject(const glm::vec3& rayOrigin, const glm::vec3& rayDirection) const;
     bool TranslateObject(render::RenderDevice& device, uint32_t objectIndex, const glm::vec3& deltaWorld);
+    bool UpdateMaterial(render::RenderDevice& device, uint32_t materialIndex, const SceneMaterial& material);
     bool RebuildRayTracing(render::RenderDevice& device);
     bool ResortGaussians(render::RenderDevice& device, const Camera& camera);
 

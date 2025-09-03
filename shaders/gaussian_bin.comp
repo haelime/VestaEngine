@@ -75,7 +75,7 @@ vec2 projection_scales(mat4 viewProjection, mat4 viewMatrix)
     return vec2(length(projection3x3[0]), length(projection3x3[1]));
 }
 
-vec3 evaluate_sh_color(GaussianPrimitive gaussian, vec3 viewDir)
+vec3 evaluate_sh_color(GaussianPrimitive gaussian, vec3 centerPosition)
 {
     vec3 result = kShC0 * gaussian.shCoefficients[0].rgb;
     uint degree = pc.params1.w;
@@ -84,6 +84,7 @@ vec3 evaluate_sh_color(GaussianPrimitive gaussian, vec3 viewDir)
         return max(result + 0.5, vec3(0.0));
     }
 
+    vec3 viewDir = normalize(pc.cameraPositionAndSceneType.xyz - centerPosition);
     float x = viewDir.x;
     float y = viewDir.y;
     float z = viewDir.z;
@@ -202,7 +203,7 @@ void main()
     projectedGaussian.centerDepthOpacity = vec4(centerPixel, centerClip.z / centerClip.w, radiusPixels);
     projectedGaussian.conicOpacity = vec4(conic, gaussian.positionOpacity.w);
     projectedGaussian.color = vec4(
-        evaluate_sh_color(gaussian, normalize(pc.cameraPositionAndSceneType.xyz - centerPosition)),
+        evaluate_sh_color(gaussian, centerPosition),
         1.0);
     projected[gaussianIndex] = projectedGaussian;
 

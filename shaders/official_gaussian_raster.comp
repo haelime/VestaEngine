@@ -28,6 +28,7 @@ layout(set = 1, binding = 7, std430) readonly buffer TileRangeBuffer {
 
 layout(rgba16f, set = 1, binding = 8) uniform writeonly image2D accumOutput;
 layout(rgba16f, set = 1, binding = 9) uniform writeonly image2D revealOutput;
+layout(rgba16f, set = 1, binding = 12) uniform writeonly image2D debugOutput;
 
 layout(push_constant) uniform GaussianComputePushConstants {
     uvec4 params0;
@@ -62,10 +63,16 @@ void main()
     uint tileIndex = tileCoord.y * pc.params0.x + tileCoord.x;
     uvec2 range = tileRanges[tileIndex];
     if (range.x == INVALID_IMAGE_INDEX || range.y == INVALID_IMAGE_INDEX || range.y <= range.x) {
+        if (pixelValid) {
+            imageStore(accumOutput, pixel, vec4(0.0));
+            imageStore(revealOutput, pixel, vec4(1.0));
+            imageStore(debugOutput, pixel, vec4(1.0, 0.0, 0.0, 1.0));
+        }
         return;
     }
     vec3 color = vec3(0.0);
     float transmittance = 1.0;
+    float nearestDepth = 1.0;
     vec2 samplePoint = vec2(pixel) + vec2(0.5);
     bool done = false;
     uint localIndex = gl_LocalInvocationIndex;
@@ -116,6 +123,7 @@ void main()
                     continue;
                 }
 
+                nearestDepth = min(nearestDepth, depth);
                 float contribution = transmittance * alpha;
                 color += sColor[entryIndex].rgb * contribution;
                 transmittance *= (1.0 - alpha);
@@ -135,4 +143,5 @@ void main()
     float finalAlpha = clamp(1.0 - transmittance, 0.0, 1.0);
     imageStore(accumOutput, pixel, vec4(color, finalAlpha));
     imageStore(revealOutput, pixel, vec4(1.0 - finalAlpha));
+    imageStore(debugOutput, pixel, vec4(nearestDepth, finalAlpha, 0.0, 1.0));
 }

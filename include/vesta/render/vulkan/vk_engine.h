@@ -64,8 +64,19 @@ public:
     bool _imguiInitialized{ false };
     bool _showDebugUi{ true };
     bool _showDetailedStats{ false };
+    bool _showFrameOverview{ true };
+    bool _showRenderGraphPanel{ true };
+    bool _showGpuProfilerPanel{ true };
+    bool _showDebugVisualizationPanel{ true };
+    bool _showSceneInspectorPanel{ true };
+    bool _showResourceInspectorPanel{ true };
+    bool _showLogConsolePanel{ true };
+    bool _vsyncUiPlaceholder{ false };
+    bool _wireframeUiPlaceholder{ false };
+    bool _overdrawUiPlaceholder{ false };
     VkDescriptorPool _imguiDescriptorPool{ VK_NULL_HANDLE };
     std::vector<std::filesystem::path> _recentScenePaths;
+    std::vector<std::string> _logConsoleLines;
 
     static VestaEngine& Get();
 

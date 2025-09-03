@@ -26,6 +26,8 @@ struct SDL_Window;
 union SDL_Event;
 
 namespace vesta::render {
+inline constexpr uint32_t kMaxRenderGraphTimestampPasses = 32;
+
 // High-level view modes exposed to the app and debug UI.
 enum class RendererDisplayMode : uint32_t {
     Composite = 0,
@@ -39,6 +41,24 @@ enum class RendererPreset : uint32_t {
     Performance = 1,
     Balanced = 2,
     Quality = 3,
+};
+
+enum class RendererDebugView : uint32_t {
+    FinalColor = 0,
+    Albedo = 1,
+    Normal = 2,
+    Roughness = 3,
+    Metallic = 4,
+    Emissive = 5,
+};
+
+enum class GaussianDebugView : uint32_t {
+    Final = 0,
+    Alpha = 1,
+    Revealage = 2,
+    OverdrawHeatmap = 3,
+    Depth = 4,
+    TileOccupancy = 5,
 };
 
 enum class SceneLoadState : uint32_t {
@@ -146,9 +166,11 @@ struct RendererSettings {
     bool textureStreamingEnabled{ true };
     bool useDeviceLocalTextures{ true };
     bool deferOldSceneDestruction{ true };
-    bool autoFocusSceneOnLoad{ true };
+    bool autoFocusSceneOnLoad{ false };
     bool frameTimingCapture{ false };
     bool benchmarkOverlay{ false };
+    bool enableFpsLimit{ false };
+    uint32_t fpsLimit{ 60 };
     bool enableFrustumCulling{ true };
     bool enableDistanceCulling{ true };
     bool useIndirectDraw{ false };
@@ -163,6 +185,14 @@ struct RendererSettings {
     bool gaussianAntialiasing{ true };
     bool gaussianFastCulling{ true };
     float pathTraceResolutionScale{ 0.5f };
+    uint32_t pathTraceSamplesPerPixel{ 1 };
+    uint32_t pathTraceMaxBounces{ 4 };
+    PathTraceDebugView pathTraceDebugView{ PathTraceDebugView::Final };
+    RendererDebugView debugView{ RendererDebugView::FinalColor };
+    GaussianDebugView gaussianDebugView{ GaussianDebugView::Final };
+    bool enablePathTraceDenoiser{ true };
+    float pathTraceDenoiserStrength{ 0.65f };
+    float pathTraceDenoiserTemporalBlend{ 0.88f };
     glm::vec4 lightDirectionAndIntensity{ -0.4f, -1.0f, -0.3f, 2.0f };
     PathTraceBackend pathTraceBackend{ PathTraceBackend::Auto };
 };
@@ -174,8 +204,17 @@ struct RendererFrameContext {
     VkCommandBuffer commandBuffer{ VK_NULL_HANDLE };
     VkSemaphore acquireSemaphore{ VK_NULL_HANDLE };
     VkFence renderFence{ VK_NULL_HANDLE };
+    VkQueryPool renderGraphTimestampPool{ VK_NULL_HANDLE };
+    bool renderGraphTimestampPending{ false };
+    uint32_t renderGraphTimestampPassCount{ 0 };
+    std::vector<std::string> renderGraphTimestampPassNames;
     std::vector<ImageHandle> acquiredTransientImages;
     std::vector<BufferHandle> transientBuffers;
+    BufferHandle screenshotReadbackBuffer{};
+    std::filesystem::path screenshotPath;
+    VkExtent2D screenshotExtent{};
+    VkFormat screenshotFormat{ VK_FORMAT_UNDEFINED };
+    bool screenshotPending{ false };
 };
 
 // These are the logical edges between passes in the frame graph.
@@ -187,8 +226,12 @@ struct RendererGraphResources {
     GraphTextureHandle sceneDepth{};
     GraphTextureHandle deferredLighting{};
     GraphTextureHandle pathTraceOutput{};
+    GraphTextureHandle pathTraceNormalGuide{};
+    GraphTextureHandle pathTraceDepthGuide{};
+    GraphTextureHandle pathTraceDenoised{};
     GraphTextureHandle gaussianAccum{};
     GraphTextureHandle gaussianReveal{};
+    GraphTextureHandle gaussianDebug{};
 };
 
 struct VisibleSet {
@@ -221,6 +264,13 @@ struct RenderPassRegistrationDesc {
     RenderPassConfigureFn configure;
     uint32_t order{ 0 };
     bool enabled{ true };
+};
+
+struct RenderPassDebugInfo {
+    std::string id;
+    std::string name;
+    uint32_t order{ 0 };
+    bool enabled{ false };
 };
 
 struct TransientImageKey {
@@ -287,8 +337,11 @@ public:
     [[nodiscard]] float GetSmoothedFrameTimeMs() const { return _smoothedFrameTimeMs; }
     [[nodiscard]] const std::array<float, 240>& GetFrameTimeHistoryMs() const { return _frameTimeHistoryMs; }
     [[nodiscard]] size_t GetFrameTimeHistoryCount() const { return _frameTimeHistoryCount; }
+    [[nodiscard]] const std::vector<RenderGraphPassTiming>& GetLastRenderGraphTimings() const { return _lastRenderGraphTimings; }
     [[nodiscard]] uint32_t GetVisibleSurfaceCount() const { return static_cast<uint32_t>(_visibleSurfaceIndices.size()); }
     [[nodiscard]] const std::vector<uint32_t>& GetVisibleSurfaceIndices() const { return _visibleSurfaceIndices; }
+    [[nodiscard]] std::vector<RenderPassDebugInfo> GetRenderPassDebugInfo() const;
+    [[nodiscard]] const std::string& GetLastShaderReloadMessage() const { return _lastShaderReloadMessage; }
     [[nodiscard]] bool HasValidVisibilitySet() const { return _visibleSceneToken != nullptr && _visibleSceneToken == _scene.GetPreparedScene(); }
     [[nodiscard]] uint32_t GetResidentTextureCount() const { return static_cast<uint32_t>(_scene.GetResidentTextureCount()); }
     [[nodiscard]] size_t GetRetiredSceneCount() const { return _retiredScenes.size(); }
@@ -322,12 +375,17 @@ public:
     [[nodiscard]] std::string GetSelectionLabel() const;
 
     void ResetAccumulation() { _pathTraceFrameIndex = 0; }
+    bool ReloadShaders();
+    bool RequestScreenshot(const std::filesystem::path& path);
     void ApplyPreset(RendererPreset preset);
     bool LoadScene(const std::filesystem::path& path);
     bool LoadSceneAsync(const std::filesystem::path& path);
     bool ReloadSceneAsync();
+    bool EnsureRayTracingScene();
     void SetStartupSafeModeActive(bool active) { _startupSafeModeActive = active; }
     void SelectDirectionalLight();
+    bool SelectObject(uint32_t objectIndex);
+    bool UpdateMaterial(uint32_t materialIndex, const vesta::scene::SceneMaterial& material);
     void ClearSelection();
     bool OrbitCameraAroundSelection();
     void OrbitCameraAroundScene();
@@ -421,6 +479,8 @@ private:
     void InitializeDefaultPasses();
     void DestroyFrameResources();
     void ReleaseTransientResources(RendererFrameContext& frameContext);
+    void ProcessCompletedFrameReadback(RendererFrameContext& frameContext);
+    void RecordScreenshotReadback(VkCommandBuffer commandBuffer, RendererFrameContext& frameContext, uint32_t swapchainImageIndex);
     void RecordOverlay(VkCommandBuffer commandBuffer, uint32_t swapchainImageIndex);
     void RecreateSwapchain();
     void ClearPassRegistry();
@@ -452,6 +512,8 @@ private:
     std::vector<RegisteredPassEntry> _passRegistry;
     std::vector<RegisteredPassEntry*> _passExecutionPlan;
     bool _passExecutionPlanDirty{ true };
+    bool _renderGraphTimestampsSupported{ false };
+    float _timestampPeriodNs{ 0.0f };
     TransientImagePool _transientImagePool;
     SDL_Window* _window{ nullptr };
     vesta::scene::Scene _scene;
@@ -463,6 +525,8 @@ private:
     std::array<float, 240> _frameTimeHistoryMs{};
     size_t _frameTimeHistoryHead{ 0 };
     size_t _frameTimeHistoryCount{ 0 };
+    std::vector<RenderGraphPassTiming> _lastRenderGraphTimings;
+    std::string _lastShaderReloadMessage;
     std::future<AsyncSceneLoadResult> _sceneLoadFuture;
     std::future<VisibilityCullResult> _visibilityFuture;
     SceneLoadStatus _sceneLoadStatus;
@@ -481,6 +545,7 @@ private:
     bool _selectionDragging{ false };
     bool _selectionEditedSinceDragStart{ false };
     bool _trackSelectedObjectOrbit{ false };
+    std::filesystem::path _pendingScreenshotPath;
     glm::vec2 _lastDragMousePosition{ 0.0f };
     glm::vec3 _dragPlaneOrigin{ 0.0f };
     glm::vec3 _dragPlaneNormal{ 0.0f, 1.0f, 0.0f };

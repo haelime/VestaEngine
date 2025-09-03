@@ -133,17 +133,25 @@ glm::vec3 EvaluateShColor(const vesta::scene::GaussianPrimitive& gaussian, uint3
     return glm::max(result + 0.5f, glm::vec3(0.0f));
 }
 
-void ClearStorageOutput(const RenderGraphContext& context, GraphTextureHandle accumOutput, GraphTextureHandle revealOutput)
+void ClearStorageOutput(const RenderGraphContext& context, GraphTextureHandle accumOutput, GraphTextureHandle revealOutput, GraphTextureHandle debugOutput)
 {
     VkClearColorValue accumClear{};
     VkClearColorValue revealClear{};
+    VkClearColorValue debugClear{};
     revealClear.float32[0] = 1.0f;
     revealClear.float32[1] = 1.0f;
     revealClear.float32[2] = 1.0f;
     revealClear.float32[3] = 1.0f;
+    debugClear.float32[0] = 1.0f;
+    debugClear.float32[1] = 1.0f;
+    debugClear.float32[2] = 1.0f;
+    debugClear.float32[3] = 1.0f;
     const VkImageSubresourceRange range = vkinit::image_subresource_range(VK_IMAGE_ASPECT_COLOR_BIT);
     vkCmdClearColorImage(context.GetCommandBuffer(), context.GetDevice().GetImage(context.GetTextureHandle(accumOutput)), VK_IMAGE_LAYOUT_GENERAL, &accumClear, 1, &range);
     vkCmdClearColorImage(context.GetCommandBuffer(), context.GetDevice().GetImage(context.GetTextureHandle(revealOutput)), VK_IMAGE_LAYOUT_GENERAL, &revealClear, 1, &range);
+    if (debugOutput) {
+        vkCmdClearColorImage(context.GetCommandBuffer(), context.GetDevice().GetImage(context.GetTextureHandle(debugOutput)), VK_IMAGE_LAYOUT_GENERAL, &debugClear, 1, &range);
+    }
 
     VkMemoryBarrier2 barrier{ VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
     barrier.srcStageMask = VK_PIPELINE_STAGE_2_TRANSFER_BIT;
@@ -176,6 +184,7 @@ void OfficialGaussianRasterPass::SetOutputs(GraphTextureHandle accum, GraphTextu
     _accumOutput = accum;
     _revealOutput = reveal;
 }
+void OfficialGaussianRasterPass::SetDebugOutput(GraphTextureHandle debugOutput) { _debugOutput = debugOutput; }
 void OfficialGaussianRasterPass::SetScene(const vesta::scene::Scene* scene) { _scene = scene; }
 void OfficialGaussianRasterPass::SetCamera(const Camera* camera) { _camera = camera; }
 void OfficialGaussianRasterPass::SetJobSystem(vesta::core::JobSystem* jobs) { _jobs = jobs; }
@@ -204,7 +213,7 @@ void OfficialGaussianRasterPass::Initialize(RenderDevice& device)
 
     std::array<VkDescriptorPoolSize, 2> poolSizes{
         VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 10u * kFrameSlots },
-        VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2u * kFrameSlots },
+        VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 3u * kFrameSlots },
     };
     VkDescriptorPoolCreateInfo poolInfo{ VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO };
     poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
@@ -213,7 +222,7 @@ void OfficialGaussianRasterPass::Initialize(RenderDevice& device)
     poolInfo.pPoolSizes = poolSizes.data();
     VK_CHECK(vkCreateDescriptorPool(vkDevice, &poolInfo, nullptr, &_descriptorPool));
 
-    std::array<VkDescriptorSetLayoutBinding, 12> bindings{
+    std::array<VkDescriptorSetLayoutBinding, 13> bindings{
         vkinit::descriptorset_layout_binding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT, 0),
         vkinit::descriptorset_layout_binding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT, 1),
         vkinit::descriptorset_layout_binding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT, 2),
@@ -226,13 +235,15 @@ void OfficialGaussianRasterPass::Initialize(RenderDevice& device)
         vkinit::descriptorset_layout_binding(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_SHADER_STAGE_COMPUTE_BIT, 9),
         vkinit::descriptorset_layout_binding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT, 10),
         vkinit::descriptorset_layout_binding(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, VK_SHADER_STAGE_COMPUTE_BIT, 11),
+        vkinit::descriptorset_layout_binding(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_SHADER_STAGE_COMPUTE_BIT, 12),
     };
-    std::array<VkDescriptorBindingFlags, 12> bindingFlags{
+    std::array<VkDescriptorBindingFlags, 13> bindingFlags{
         VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT, VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT, VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
         VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
         VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT, VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
         VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT, VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
         VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT, VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
+        VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
         VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
         VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
     };
@@ -284,6 +295,9 @@ void OfficialGaussianRasterPass::Setup(RenderGraphBuilder& builder)
     }
     builder.Write(_accumOutput, ResourceUsage::StorageWrite);
     builder.Write(_revealOutput, ResourceUsage::StorageWrite);
+    if (_debugOutput) {
+        builder.Write(_debugOutput, ResourceUsage::StorageWrite);
+    }
 }
 
 bool OfficialGaussianRasterPass::NeedsFrameDataRebuild(VkExtent2D extent) const
@@ -422,8 +436,10 @@ void OfficialGaussianRasterPass::EnsureResources(
             .size = sizeof(glm::uvec2) * tileCount,
             .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
             .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+            .registerBindlessStorage = true,
             .debugName = "OfficialGaussianTileRanges",
         });
+        _tileRangeBindlessStorageIndex = device.GetBufferResource(_tileRangeBuffer).bindless.storageBuffer;
         _tileCapacity = tileCount;
     }
 
@@ -482,6 +498,7 @@ void OfficialGaussianRasterPass::DestroyResources(RenderDevice& device)
         device.DestroyBuffer(_tileRangeBuffer);
         _tileRangeBuffer = {};
     }
+    _tileRangeBindlessStorageIndex = kInvalidResourceIndex;
     _projectedCapacity = 0;
     _duplicateCapacity = 0;
     _scanBlockCapacity = 0;
@@ -595,12 +612,12 @@ void OfficialGaussianRasterPass::ReadCountReadback(RenderDevice& device, uint32_
 void OfficialGaussianRasterPass::Execute(const RenderGraphContext& context)
 {
     if (_scene == nullptr || _camera == nullptr || !_scene->HasTrainedGaussians() || !_scene->HasGaussianSplats()) {
-        ClearStorageOutput(context, _accumOutput, _revealOutput);
+        ClearStorageOutput(context, _accumOutput, _revealOutput, _debugOutput);
         return;
     }
     const uint32_t sourceGaussianCount = _scene->GetGaussianCount();
     if (sourceGaussianCount == 0u || !_scene->GetGaussianBuffer()) {
-        ClearStorageOutput(context, _accumOutput, _revealOutput);
+        ClearStorageOutput(context, _accumOutput, _revealOutput, _debugOutput);
         return;
     }
 
@@ -611,7 +628,7 @@ void OfficialGaussianRasterPass::Execute(const RenderGraphContext& context)
     const uint32_t tileCountY = std::max(1u, (context.GetRenderExtent().height + kTileSize - 1u) / kTileSize);
     const size_t tileCount = static_cast<size_t>(tileCountX) * tileCountY;
     if (_statistics.projectedCount == 0u || tileCount == 0) {
-        ClearStorageOutput(context, _accumOutput, _revealOutput);
+        ClearStorageOutput(context, _accumOutput, _revealOutput, _debugOutput);
         return;
     }
 
@@ -625,7 +642,7 @@ void OfficialGaussianRasterPass::Execute(const RenderGraphContext& context)
     if (!_projectedBuffer || !_duplicateKeyBuffer || !_duplicateValueBuffer || !_duplicateScratchKeyBuffer || !_duplicateScratchValueBuffer
         || !_scanBlockSumBuffer || !_duplicateCountBuffer
         || !_radixHistogramBuffer || !_radixBinBaseBuffer || !_tileRangeBuffer) {
-        ClearStorageOutput(context, _accumOutput, _revealOutput);
+        ClearStorageOutput(context, _accumOutput, _revealOutput, _debugOutput);
         return;
     }
 
@@ -645,9 +662,12 @@ void OfficialGaussianRasterPass::Execute(const RenderGraphContext& context)
     VkDescriptorImageInfo revealInfo{};
     revealInfo.imageView = context.GetTextureView(_revealOutput);
     revealInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+    VkDescriptorImageInfo debugInfo{};
+    debugInfo.imageView = _debugOutput ? context.GetTextureView(_debugOutput) : context.GetTextureView(_revealOutput);
+    debugInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
 
     const VkDescriptorSet frameDescriptorSet = _descriptorSets[_frameSlot];
-    std::array<VkWriteDescriptorSet, 12> writes{
+    std::array<VkWriteDescriptorSet, 13> writes{
         vkinit::write_descriptor_buffer(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frameDescriptorSet, &projectedInfo, 0),
         vkinit::write_descriptor_buffer(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frameDescriptorSet, &duplicateKeyInfo, 1),
         vkinit::write_descriptor_buffer(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frameDescriptorSet, &duplicateValueInfo, 2),
@@ -660,10 +680,11 @@ void OfficialGaussianRasterPass::Execute(const RenderGraphContext& context)
         vkinit::write_descriptor_image(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, frameDescriptorSet, &revealInfo, 9),
         vkinit::write_descriptor_buffer(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frameDescriptorSet, &scanBlockSumInfo, 10),
         vkinit::write_descriptor_buffer(VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, frameDescriptorSet, &duplicateCountInfo, 11),
+        vkinit::write_descriptor_image(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, frameDescriptorSet, &debugInfo, 12),
     };
     vkUpdateDescriptorSets(device.GetDevice(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 
-    ClearStorageOutput(context, _accumOutput, _revealOutput);
+    ClearStorageOutput(context, _accumOutput, _revealOutput, _debugOutput);
 
     const uint32_t depthImageIndex =
         _depthInput ? device.GetImageResource(context.GetTextureHandle(_depthInput)).bindless.sampledImage : kInvalidImageIndex;
@@ -853,6 +874,11 @@ void OfficialGaussianRasterPass::Execute(const RenderGraphContext& context)
     pushConstants.params2 = glm::vec4(1.0f, kGaussianAlphaThreshold, kGaussianRevealThreshold, 0.0f);
     vkCmdPushConstants(commandBuffer, _pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pushConstants), &pushConstants);
     vkCmdDispatch(commandBuffer, tileCountX, tileCountY, 1);
+    InsertMemoryBarrier(commandBuffer,
+        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+        VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+        VK_ACCESS_2_SHADER_STORAGE_READ_BIT);
     writeTimestamp(kTimestampRasterEnd);
 }
 

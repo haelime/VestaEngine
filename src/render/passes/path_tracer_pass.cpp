@@ -37,7 +37,15 @@ struct HardwarePathTracePushConstants {
     uint32_t triangleBufferIndex{ 0 };
     uint32_t triangleCount{ 0 };
     uint32_t frameIndex{ 0 };
-    uint32_t reserved{ 0 };
+    uint32_t emissiveTriangleBufferIndex{ kInvalidResourceIndex };
+    uint32_t emissiveTriangleCount{ 0 };
+    uint32_t reserved0{ 0 };
+    uint32_t reserved1{ 0 };
+    glm::uvec4 accumulationImageIndices0{ kInvalidResourceIndex };
+    glm::uvec4 accumulationImageIndices1{ kInvalidResourceIndex };
+    glm::uvec4 pathTraceParams{ 0u, 1u, 4u, 0u }; // debug view, spp, max bounces, reserved
+    glm::uvec4 guideImageIndices{ kInvalidResourceIndex };
+    uint32_t reserved2{ 0 };
 };
 
 uint32_t AlignUp(uint32_t value, uint32_t alignment)
@@ -64,6 +72,12 @@ void ClearOutput(const RenderGraphContext& context, GraphTextureHandle output)
 void PathTracerPass::SetOutput(GraphTextureHandle output)
 {
     _output = output;
+}
+
+void PathTracerPass::SetDenoiserGuides(GraphTextureHandle normalGuide, GraphTextureHandle depthGuide)
+{
+    _normalGuide = normalGuide;
+    _depthGuide = depthGuide;
 }
 
 void PathTracerPass::SetScene(const vesta::scene::Scene* scene)
@@ -99,6 +113,70 @@ void PathTracerPass::SetBackendPreference(PathTraceBackend backend)
 void PathTracerPass::SetLight(glm::vec4 lightDirectionAndIntensity)
 {
     _lightDirectionAndIntensity = lightDirectionAndIntensity;
+}
+
+void PathTracerPass::SetSamplesPerPixel(uint32_t samplesPerPixel)
+{
+    _samplesPerPixel = std::clamp(samplesPerPixel, 1u, 16u);
+}
+
+void PathTracerPass::SetMaxBounces(uint32_t maxBounces)
+{
+    _maxBounces = std::clamp(maxBounces, 1u, 12u);
+}
+
+void PathTracerPass::SetDebugView(PathTraceDebugView debugView)
+{
+    _debugView = debugView;
+}
+
+void PathTracerPass::EnsureAccumulationImage(RenderDevice& device, VkExtent3D extent)
+{
+    if (_accumulationImages[0] && _accumulationExtent.width == extent.width && _accumulationExtent.height == extent.height
+        && _accumulationExtent.depth == extent.depth) {
+        return;
+    }
+
+    DestroyAccumulationImage(device);
+    constexpr std::array<const char*, 6> kDebugNames{
+        "PathTraceAccum.Final",
+        "PathTraceAccum.Albedo",
+        "PathTraceAccum.Normal",
+        "PathTraceAccum.Depth",
+        "PathTraceAccum.Direct",
+        "PathTraceAccum.Indirect",
+    };
+    for (size_t imageIndex = 0; imageIndex < _accumulationImages.size(); ++imageIndex) {
+        _accumulationImages[imageIndex] = device.CreateImage(ImageDesc{
+            .extent = extent,
+            .format = VK_FORMAT_R16G16B16A16_SFLOAT,
+            .usage = VK_IMAGE_USAGE_STORAGE_BIT,
+            .aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT,
+            .registerBindlessStorage = true,
+            .debugName = kDebugNames[imageIndex],
+        });
+    }
+    _accumulationExtent = extent;
+    _accumulationInitialized = false;
+}
+
+void PathTracerPass::DestroyAccumulationImage(RenderDevice& device)
+{
+    bool hasImage = false;
+    for (ImageHandle image : _accumulationImages) {
+        hasImage = hasImage || static_cast<bool>(image);
+    }
+    if (hasImage) {
+        device.WaitIdle();
+        for (ImageHandle& image : _accumulationImages) {
+            if (image) {
+                device.DestroyImage(image);
+                image = {};
+            }
+        }
+    }
+    _accumulationExtent = {};
+    _accumulationInitialized = false;
 }
 
 void PathTracerPass::Initialize(RenderDevice& device)
@@ -260,6 +338,12 @@ void PathTracerPass::Initialize(RenderDevice& device)
 void PathTracerPass::Setup(RenderGraphBuilder& builder)
 {
     builder.Write(_output, ResourceUsage::StorageWrite);
+    if (_normalGuide) {
+        builder.Write(_normalGuide, ResourceUsage::StorageWrite);
+    }
+    if (_depthGuide) {
+        builder.Write(_depthGuide, ResourceUsage::StorageWrite);
+    }
 }
 
 void PathTracerPass::Execute(const RenderGraphContext& context)
@@ -280,6 +364,26 @@ void PathTracerPass::Execute(const RenderGraphContext& context)
     if (canUseHardwareRt) {
         _activeBackend = PathTraceBackend::HardwareRT;
         const RayTracingFunctions& rt = context.GetDevice().GetRayTracingFunctions();
+        const VkExtent3D outputExtent = context.GetTextureExtent(_output);
+        EnsureAccumulationImage(context.GetDevice(), outputExtent);
+        const VkImageSubresourceRange colorRange = vkutil::make_image_subresource_range(VK_IMAGE_ASPECT_COLOR_BIT);
+        for (ImageHandle accumulationImageHandle : _accumulationImages) {
+            const AllocatedImage& accumulationImage = context.GetDevice().GetImageResource(accumulationImageHandle);
+            vkutil::transition_image(context.GetCommandBuffer(),
+                accumulationImage.image,
+                _accumulationInitialized ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED,
+                VK_IMAGE_LAYOUT_GENERAL,
+                _accumulationInitialized ? VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR : VK_PIPELINE_STAGE_2_NONE,
+                _accumulationInitialized ? VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT : VK_ACCESS_2_NONE,
+                VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+                VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                colorRange);
+        }
+        _accumulationInitialized = true;
+
+        const auto accumulationIndex = [&](size_t imageIndex) {
+            return context.GetDevice().GetImageResource(_accumulationImages[imageIndex]).bindless.storageImage;
+        };
 
         const HardwarePathTracePushConstants pushConstants{
             .inverseViewProjection = _camera->GetInverseViewProjection(),
@@ -288,6 +392,19 @@ void PathTracerPass::Execute(const RenderGraphContext& context)
             .triangleBufferIndex = context.GetDevice().GetBufferResource(_scene->GetTriangleBuffer()).bindless.storageBuffer,
             .triangleCount = static_cast<uint32_t>(_scene->GetTriangles().size()),
             .frameIndex = _frameIndex,
+            .emissiveTriangleBufferIndex = _scene->GetEmissiveTriangleBuffer()
+                ? context.GetDevice().GetBufferResource(_scene->GetEmissiveTriangleBuffer()).bindless.storageBuffer
+                : kInvalidResourceIndex,
+            .emissiveTriangleCount = static_cast<uint32_t>(_scene->GetEmissiveTriangles().size()),
+            .accumulationImageIndices0 = glm::uvec4(
+                accumulationIndex(0), accumulationIndex(1), accumulationIndex(2), accumulationIndex(3)),
+            .accumulationImageIndices1 = glm::uvec4(accumulationIndex(4), accumulationIndex(5), kInvalidResourceIndex, kInvalidResourceIndex),
+            .pathTraceParams = glm::uvec4(static_cast<uint32_t>(_debugView), _samplesPerPixel, _maxBounces, 0u),
+            .guideImageIndices = glm::uvec4(
+                _normalGuide ? context.GetDevice().GetImageResource(context.GetTextureHandle(_normalGuide)).bindless.storageImage : kInvalidResourceIndex,
+                _depthGuide ? context.GetDevice().GetImageResource(context.GetTextureHandle(_depthGuide)).bindless.storageImage : kInvalidResourceIndex,
+                kInvalidResourceIndex,
+                kInvalidResourceIndex),
         };
 
         const VkAccelerationStructureKHR topLevelAccelerationStructure = _scene->GetTopLevelAccelerationStructure();
@@ -337,7 +454,6 @@ void PathTracerPass::Execute(const RenderGraphContext& context)
             sizeof(HardwarePathTracePushConstants),
             &pushConstants);
 
-        const VkExtent3D outputExtent = context.GetTextureExtent(_output);
         rt.vkCmdTraceRaysKHR(
             commandBuffer, &_raygenSbt, &_missSbt, &_hitSbt, &_callableSbt, outputExtent.width, outputExtent.height, 1);
         return;
@@ -345,12 +461,25 @@ void PathTracerPass::Execute(const RenderGraphContext& context)
 
     if (_pipeline == VK_NULL_HANDLE) {
         ClearOutput(context, _output);
+        if (_normalGuide) {
+            ClearOutput(context, _normalGuide);
+        }
+        if (_depthGuide) {
+            ClearOutput(context, _depthGuide);
+        }
         return;
     }
 
     const ImageHandle outputHandle = context.GetTextureHandle(_output);
     const uint32_t outputImageIndex = context.GetDevice().GetImageResource(outputHandle).bindless.storageImage;
     const uint32_t triangleBufferIndex = context.GetDevice().GetBufferResource(_scene->GetTriangleBuffer()).bindless.storageBuffer;
+
+    if (_normalGuide) {
+        ClearOutput(context, _normalGuide);
+    }
+    if (_depthGuide) {
+        ClearOutput(context, _depthGuide);
+    }
 
     ComputePathTracePushConstants pushConstants{
         .inverseViewProjection = _camera->GetInverseViewProjection(),
@@ -382,6 +511,8 @@ void PathTracerPass::Shutdown(RenderDevice& device)
     if (vkDevice == VK_NULL_HANDLE) {
         return;
     }
+
+    DestroyAccumulationImage(device);
 
     if (_shaderBindingTable) {
         device.DestroyBuffer(_shaderBindingTable);

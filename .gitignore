@@ -22,8 +22,8 @@
 /*.VC.db
 /*.VC.opendb
 
-# Local Gaussian investigation notes and scratch outputs
-/docs/gaussian-*.md
+# Local Gaussian investigation scratch outputs
+/docs/gaussian-*.scratch.md
 /altdebug/
 /altdebug3/
 /altdebug4/

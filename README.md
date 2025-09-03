@@ -12,7 +12,7 @@ VestaEngine는 `Vulkan/C++` 기반의 개인 렌더링 엔진 프로젝트다.
 
 - 멀티패스 프레임 구조: `Geometry -> Deferred Lighting -> Gaussian -> Path Tracing -> Composite`
 - 공식 3DGS 스타일 Gaussian 데이터 로드와 compute 기반 tile raster 경로 구현
-- glTF/GLB scene loading, async parse/prepare, streaming GPU upload
+- glTF/GLB/FBX scene loading, async parse/prepare, streaming GPU upload
 - ImGui 기반 runtime tuning, benchmark overlay, recent scene UX
 - Path tracing backend `Auto / Compute / Hardware RT`
 
@@ -87,6 +87,12 @@ Open [VestaEngine.sln](VestaEngine.sln) or [VestaEngine.vcxproj](VestaEngine.vcx
 
 ```powershell
 .\x64\Debug\VestaEngine.exe --scene assets\structure.glb --preset balanced --mode composite
+```
+
+FBX mesh files are also accepted, for example:
+
+```powershell
+.\x64\Debug\VestaEngine.exe --scene assets\demo\Sofa.fbx --preset balanced --mode composite
 ```
 
 ### Automated benchmark

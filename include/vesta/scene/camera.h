@@ -14,6 +14,7 @@ public:
     void Focus(glm::vec3 center, float radius);
     void SetPosition(glm::vec3 position);
     void SetRotationDegrees(glm::vec3 rotationDegrees);
+    void SetLens(float fovDegrees, float nearPlane, float farPlane);
     void EnableOrbit(glm::vec3 target, float distance = 0.0f);
     void EnableDollyOrbit(glm::vec3 target, float radius = 0.0f, float angularSpeedDegrees = 20.0f);
     void DisableOrbit();
@@ -30,10 +31,14 @@ public:
     [[nodiscard]] glm::mat4 GetInverseViewProjection() const;
     [[nodiscard]] glm::vec3 GetPosition() const { return _position; }
     [[nodiscard]] glm::vec3 GetRotationDegrees() const { return { _yawDegrees, _pitchDegrees, _rollDegrees }; }
+    [[nodiscard]] float GetFovDegrees() const { return _fovDegrees; }
+    [[nodiscard]] float GetNearPlane() const { return _nearPlane; }
+    [[nodiscard]] float GetFarPlane() const { return _farPlane; }
     [[nodiscard]] glm::vec3 GetForward() const;
     [[nodiscard]] glm::vec3 GetUp() const { return _up; }
     [[nodiscard]] bool IsOrbitEnabled() const { return _mode == Mode::Orbit || _mode == Mode::DollyOrbit; }
     [[nodiscard]] bool IsDollyOrbitEnabled() const { return _mode == Mode::DollyOrbit; }
+    [[nodiscard]] bool IsMouseLookActive() const { return _rightMouseDown; }
     [[nodiscard]] glm::vec3 GetOrbitTarget() const { return _orbitTarget; }
     [[nodiscard]] float GetOrbitDistance() const { return _orbitDistance; }
     [[nodiscard]] float GetOrbitRadius() const { return _orbitDistance; }
@@ -49,10 +54,10 @@ private:
     void UpdateOrientationFromAngles();
     void UpdatePositionFromOrbit();
 
-    glm::vec3 _position{ 0.0f, 1.5f, 5.0f };
-    glm::vec3 _forward{ 0.0f, 0.0f, -1.0f };
+    glm::vec3 _position{ 0.0f, 0.0f, 0.0f };
+    glm::vec3 _forward{ 1.0f, 0.0f, 0.0f };
     glm::vec3 _up{ 0.0f, 1.0f, 0.0f };
-    float _yawDegrees{ -90.0f };
+    float _yawDegrees{ 0.0f };
     float _pitchDegrees{ 0.0f };
     float _rollDegrees{ 0.0f };
     float _fovDegrees{ 60.0f };
