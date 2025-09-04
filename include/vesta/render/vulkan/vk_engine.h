@@ -74,6 +74,11 @@ public:
     bool _vsyncUiPlaceholder{ false };
     bool _wireframeUiPlaceholder{ false };
     bool _overdrawUiPlaceholder{ false };
+    int _lastCpuFrameWarningFrame{ -100000 };
+    int _lastGpuFrameWarningFrame{ -100000 };
+    int _lastPassWarningFrame{ -100000 };
+    int _lastResourceWarningFrame{ -100000 };
+    int _lastValidationWarningFrame{ -100000 };
     VkDescriptorPool _imguiDescriptorPool{ VK_NULL_HANDLE };
     std::vector<std::filesystem::path> _recentScenePaths;
     std::vector<std::string> _logConsoleLines;
@@ -100,6 +105,7 @@ private:
     [[nodiscard]] std::optional<std::filesystem::path> open_scene_with_system_dialog() const;
     [[nodiscard]] std::optional<std::filesystem::path> open_gaussian_model_with_system_dialog() const;
     void log_startup_event(std::string_view message);
+    void update_runtime_warnings();
     void update_startup_state();
     void update_benchmark(float deltaSeconds);
     void finish_benchmark();

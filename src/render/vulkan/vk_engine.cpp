@@ -258,6 +258,25 @@ float TotalGpuMs(const std::vector<vesta::render::RenderGraphPassTiming>& timing
     return total;
 }
 
+const vesta::render::RenderGraphPassTiming* SlowestGpuPass(const std::vector<vesta::render::RenderGraphPassTiming>& timings)
+{
+    const vesta::render::RenderGraphPassTiming* slowest = nullptr;
+    for (const auto& timing : timings) {
+        if (!timing.gpuTimingValid) {
+            continue;
+        }
+        if (slowest == nullptr || timing.gpuMs > slowest->gpuMs) {
+            slowest = &timing;
+        }
+    }
+    return slowest;
+}
+
+bool RuntimeWarningCooldownElapsed(int frameNumber, int lastWarningFrame, int cooldownFrames)
+{
+    return frameNumber - lastWarningFrame >= cooldownFrames;
+}
+
 void DrawRenderGraphResourceList(const char* label,
     const std::vector<vesta::render::RenderGraphPassTiming::ResourceAccess>& accesses)
 {
@@ -615,6 +634,7 @@ void VestaEngine::draw(float deltaSeconds)
     }
     _renderer.RenderFrame();
     update_startup_state();
+    update_runtime_warnings();
     _frameNumber++;
 }
 
@@ -727,6 +747,57 @@ void VestaEngine::log_startup_event(std::string_view message)
         return;
     }
     output << line << '\n';
+}
+
+void VestaEngine::update_runtime_warnings()
+{
+    if (_frameNumber < 30) {
+        return;
+    }
+
+    const int warningCooldownFrames = 180;
+    const auto& settings = _renderer.GetSettings();
+    const auto& scene = _renderer.GetScene();
+    const auto& graphTimings = _renderer.GetLastRenderGraphTimings();
+    const float cpuFrameMs = _renderer.GetSmoothedFrameTimeMs();
+    const float gpuFrameMs = TotalGpuMs(graphTimings);
+
+    if (cpuFrameMs > 33.3f
+        && RuntimeWarningCooldownElapsed(_frameNumber, _lastCpuFrameWarningFrame, warningCooldownFrames)) {
+        log_startup_event(fmt::format("[PERF] CPU frame time high: {:.2f} ms", cpuFrameMs));
+        _lastCpuFrameWarningFrame = _frameNumber;
+    }
+
+    if (gpuFrameMs > 20.0f
+        && RuntimeWarningCooldownElapsed(_frameNumber, _lastGpuFrameWarningFrame, warningCooldownFrames)) {
+        log_startup_event(fmt::format("[PERF] GPU frame time high: {:.2f} ms", gpuFrameMs));
+        _lastGpuFrameWarningFrame = _frameNumber;
+    }
+
+    if (const auto* slowest = SlowestGpuPass(graphTimings);
+        slowest != nullptr && slowest->gpuMs > 5.0f
+        && RuntimeWarningCooldownElapsed(_frameNumber, _lastPassWarningFrame, warningCooldownFrames)) {
+        log_startup_event(fmt::format("[PERF] Slow render pass: {} {:.2f} ms", slowest->name, slowest->gpuMs));
+        _lastPassWarningFrame = _frameNumber;
+    }
+
+    if (settings.pathTraceBackend == vesta::render::PathTraceBackend::HardwareRT
+        && settings.enablePathTracing
+        && !scene.HasRayTracingScene()
+        && RuntimeWarningCooldownElapsed(_frameNumber, _lastValidationWarningFrame, warningCooldownFrames)) {
+        log_startup_event("[VALIDATION] Hardware RT path selected but TLAS is not resident");
+        _lastValidationWarningFrame = _frameNumber;
+    }
+
+    if (!scene.GetTextures().empty()
+        && scene.GetResidentTextureCount() < scene.GetTextures().size()
+        && !_renderer.IsSceneLoadInProgress()
+        && RuntimeWarningCooldownElapsed(_frameNumber, _lastResourceWarningFrame, warningCooldownFrames)) {
+        log_startup_event(fmt::format("[RESOURCE] Texture residency incomplete: {}/{} resident",
+            scene.GetResidentTextureCount(),
+            scene.GetTextures().size()));
+        _lastResourceWarningFrame = _frameNumber;
+    }
 }
 
 void VestaEngine::update_startup_state()
@@ -2062,6 +2133,28 @@ void VestaEngine::build_debug_ui()
                         camera.GetRotationDegrees().z);
                     ImGui::EndTabItem();
                 }
+                if (ImGui::BeginTabItem("Transform")) {
+                    const auto& selection = _renderer.GetSelection();
+                    const auto& objects = scene.GetObjects();
+                    if (selection.kind == vesta::render::SelectionKind::Object && selection.objectIndex < objects.size()) {
+                        const auto& object = objects[selection.objectIndex];
+                        glm::vec3 position = object.GetTranslation();
+                        ImGui::Text("Object %u", selection.objectIndex);
+                        ImGui::TextUnformatted(object.name.empty() ? "(unnamed)" : object.name.c_str());
+                        if (ImGui::DragFloat3("Position", &position.x, 0.01f, -10000.0f, 10000.0f, "%.3f")) {
+                            _renderer.SetSelectedObjectPosition(position);
+                        }
+                        ImGui::Text("Bounds Center %.3f %.3f %.3f",
+                            object.bounds.center.x,
+                            object.bounds.center.y,
+                            object.bounds.center.z);
+                        ImGui::Text("Radius %.3f", object.bounds.radius);
+                        ImGui::Text("Vertices %u  Triangles %u", object.vertexCount, object.triangleCount);
+                    } else {
+                        ImGui::TextUnformatted("No object selected");
+                    }
+                    ImGui::EndTabItem();
+                }
                 if (ImGui::BeginTabItem("Light")) {
                     float lightDirection[3] = {
                         settings.lightDirectionAndIntensity.x,
@@ -2209,6 +2302,22 @@ void VestaEngine::build_debug_ui()
         ImGui::SetNextWindowPos(ImVec2(18.0f, 612.0f), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(560.0f, 300.0f), ImGuiCond_FirstUseEver);
         if (ImGui::Begin("Log / Validation / Error Console", &_showLogConsolePanel, ImGuiWindowFlags_NoSavedSettings)) {
+            int perfWarnings = 0;
+            int validationWarnings = 0;
+            int resourceWarnings = 0;
+            int errors = 0;
+            for (const std::string& line : _logConsoleLines) {
+                perfWarnings += line.find("[PERF]") != std::string::npos ? 1 : 0;
+                validationWarnings += line.find("[VALIDATION]") != std::string::npos ? 1 : 0;
+                resourceWarnings += line.find("[RESOURCE]") != std::string::npos ? 1 : 0;
+                errors += line.find("failed") != std::string::npos || line.find("[ERROR]") != std::string::npos ? 1 : 0;
+            }
+            ImGui::Text("Perf %d  Validation %d  Resource %d  Errors %d",
+                perfWarnings,
+                validationWarnings,
+                resourceWarnings,
+                errors);
+            ImGui::Separator();
             if (ImGui::Button("Clear")) {
                 _logConsoleLines.clear();
             }
@@ -2217,10 +2326,29 @@ void VestaEngine::build_debug_ui()
                 const bool reloaded = _renderer.ReloadShaders();
                 log_startup_event(reloaded ? "Shader hot reload complete" : "Shader hot reload failed: " + _renderer.GetLastShaderReloadMessage());
             }
+            ImGui::SameLine();
+            if (ImGui::Button("Perf Snapshot")) {
+                const auto& timings = _renderer.GetLastRenderGraphTimings();
+                const float snapshotGpuMs = TotalGpuMs(timings);
+                const auto* slowest = SlowestGpuPass(timings);
+                log_startup_event(fmt::format("[PERF] Snapshot CPU {:.2f} ms GPU {:.2f} ms Passes {}{}",
+                    _renderer.GetSmoothedFrameTimeMs(),
+                    snapshotGpuMs,
+                    timings.size(),
+                    slowest != nullptr ? fmt::format(" Slowest {} {:.2f} ms", slowest->name, slowest->gpuMs) : std::string{}));
+            }
             ImGui::Separator();
             ImGui::BeginChild("LogScroll", ImVec2(0.0f, 0.0f), true);
             for (const std::string& line : _logConsoleLines) {
-                ImGui::TextUnformatted(line.c_str());
+                if (line.find("[PERF]") != std::string::npos) {
+                    ImGui::TextColored(ImVec4(1.0f, 0.78f, 0.28f, 1.0f), "%s", line.c_str());
+                } else if (line.find("[VALIDATION]") != std::string::npos || line.find("[RESOURCE]") != std::string::npos) {
+                    ImGui::TextColored(ImVec4(0.45f, 0.74f, 1.0f, 1.0f), "%s", line.c_str());
+                } else if (line.find("failed") != std::string::npos || line.find("[ERROR]") != std::string::npos) {
+                    ImGui::TextColored(ImVec4(1.0f, 0.36f, 0.32f, 1.0f), "%s", line.c_str());
+                } else {
+                    ImGui::TextUnformatted(line.c_str());
+                }
             }
             if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY()) {
                 ImGui::SetScrollHereY(1.0f);

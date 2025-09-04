@@ -385,6 +385,7 @@ public:
     void SetStartupSafeModeActive(bool active) { _startupSafeModeActive = active; }
     void SelectDirectionalLight();
     bool SelectObject(uint32_t objectIndex);
+    bool SetSelectedObjectPosition(glm::vec3 position);
     bool UpdateMaterial(uint32_t materialIndex, const vesta::scene::SceneMaterial& material);
     void ClearSelection();
     bool OrbitCameraAroundSelection();

@@ -914,6 +914,24 @@ bool Renderer::SelectObject(uint32_t objectIndex)
     return true;
 }
 
+bool Renderer::SetSelectedObjectPosition(glm::vec3 position)
+{
+    const auto& objects = _scene.GetObjects();
+    if (_selection.kind != SelectionKind::Object || _selection.objectIndex >= objects.size()) {
+        return false;
+    }
+
+    const glm::vec3 delta = position - objects[_selection.objectIndex].GetTranslation();
+    if (!_scene.TranslateObject(_device, _selection.objectIndex, delta)) {
+        return false;
+    }
+
+    const bool rebuildRayTracing = _scene.HasRayTracingScene() && _settings.enablePathTracing
+        && GetActivePathTraceBackend() == PathTraceBackend::HardwareRT;
+    OnSceneEdited(rebuildRayTracing);
+    return true;
+}
+
 bool Renderer::UpdateMaterial(uint32_t materialIndex, const vesta::scene::SceneMaterial& material)
 {
     if (!_scene.UpdateMaterial(_device, materialIndex, material)) {
