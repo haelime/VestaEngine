@@ -277,6 +277,46 @@ bool RuntimeWarningCooldownElapsed(int frameNumber, int lastWarningFrame, int co
     return frameNumber - lastWarningFrame >= cooldownFrames;
 }
 
+double MiB(uint64_t bytes)
+{
+    return static_cast<double>(bytes) / (1024.0 * 1024.0);
+}
+
+uint64_t BufferSizeBytes(const vesta::render::RenderDevice& device, vesta::render::BufferHandle handle)
+{
+    return handle ? static_cast<uint64_t>(device.GetBufferResource(handle).desc.size) : 0ull;
+}
+
+uint64_t TextureAssetBytes(const vesta::scene::SceneTextureAsset& texture)
+{
+    return static_cast<uint64_t>(texture.width) * texture.height * 4ull;
+}
+
+std::string BufferUsageLabel(VkBufferUsageFlags usage)
+{
+    std::string label;
+    auto append = [&](VkBufferUsageFlagBits flag, std::string_view name) {
+        if ((usage & flag) == 0) {
+            return;
+        }
+        if (!label.empty()) {
+            label += " | ";
+        }
+        label += name;
+    };
+    append(VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, "Vertex");
+    append(VK_BUFFER_USAGE_INDEX_BUFFER_BIT, "Index");
+    append(VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "Storage");
+    append(VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, "Uniform");
+    append(VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT, "Indirect");
+    append(VK_BUFFER_USAGE_TRANSFER_SRC_BIT, "CopySrc");
+    append(VK_BUFFER_USAGE_TRANSFER_DST_BIT, "CopyDst");
+    append(VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT, "DeviceAddress");
+    append(VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, "AS");
+    append(VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, "ASInput");
+    return label.empty() ? "Unknown" : label;
+}
+
 void DrawRenderGraphResourceList(const char* label,
     const std::vector<vesta::render::RenderGraphPassTiming::ResourceAccess>& accesses)
 {
@@ -309,7 +349,10 @@ void DrawRenderGraphResourceList(const char* label,
     ImGui::TreePop();
 }
 
-void DrawBufferResourceRow(const char* name, const vesta::render::RenderDevice& device, vesta::render::BufferHandle handle)
+void DrawBufferResourceRow(const char* name,
+    const vesta::render::RenderDevice& device,
+    vesta::render::BufferHandle handle,
+    uint64_t logicalBytes = 0)
 {
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
@@ -319,11 +362,35 @@ void DrawBufferResourceRow(const char* name, const vesta::render::RenderDevice& 
     ImGui::TableSetColumnIndex(2);
     if (handle) {
         const auto& buffer = device.GetBufferResource(handle);
-        ImGui::Text("%.2f MiB", static_cast<double>(buffer.desc.size) / (1024.0 * 1024.0));
+        ImGui::Text("%.2f MiB", MiB(static_cast<uint64_t>(buffer.desc.size)));
     } else {
         ImGui::TextUnformatted("-");
     }
     ImGui::TableSetColumnIndex(3);
+    if (logicalBytes > 0) {
+        ImGui::Text("%.2f MiB", MiB(logicalBytes));
+    } else {
+        ImGui::TextUnformatted("-");
+    }
+    ImGui::TableSetColumnIndex(4);
+    if (handle) {
+        const auto& buffer = device.GetBufferResource(handle);
+        ImGui::TextUnformatted(BufferUsageLabel(buffer.desc.usage).c_str());
+    } else {
+        ImGui::TextUnformatted("-");
+    }
+    ImGui::TableSetColumnIndex(5);
+    if (handle) {
+        const auto& buffer = device.GetBufferResource(handle);
+        if (buffer.bindless.storageBuffer != vesta::render::kInvalidResourceIndex) {
+            ImGui::Text("%u", buffer.bindless.storageBuffer);
+        } else {
+            ImGui::TextUnformatted("-");
+        }
+    } else {
+        ImGui::TextUnformatted("-");
+    }
+    ImGui::TableSetColumnIndex(6);
     if (handle) {
         ImGui::Text("%u", handle.index);
     } else {
@@ -2230,14 +2297,68 @@ void VestaEngine::build_debug_ui()
         ImGui::SetNextWindowPos(ImVec2(590.0f, 552.0f), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(520.0f, 360.0f), ImGuiCond_FirstUseEver);
         if (ImGui::Begin("Resource Inspector", &_showResourceInspectorPanel, ImGuiWindowFlags_NoSavedSettings)) {
+            const uint64_t vertexBytes = static_cast<uint64_t>(scene.GetVertices().size()) * sizeof(vesta::scene::SceneVertex);
+            const uint64_t indexBytes = static_cast<uint64_t>(scene.GetIndices().size()) * sizeof(uint32_t);
+            const uint64_t materialBytes = static_cast<uint64_t>(scene.GetMaterials().size()) * sizeof(vesta::scene::SceneMaterial);
+            const uint64_t triangleBytes = static_cast<uint64_t>(scene.GetTriangles().size()) * sizeof(vesta::scene::SceneTriangle);
+            const uint64_t emissiveBytes =
+                static_cast<uint64_t>(scene.GetEmissiveTriangles().size()) * sizeof(vesta::scene::SceneEmissiveTriangle);
+            const uint64_t gaussianBytes =
+                static_cast<uint64_t>(scene.GetGaussians().size()) * sizeof(vesta::scene::GaussianPrimitive);
+            uint64_t textureBytes = 0;
+            uint64_t residentTextureBytes = 0;
+            for (size_t textureIndex = 0; textureIndex < scene.GetTextures().size(); ++textureIndex) {
+                const uint64_t bytes = TextureAssetBytes(scene.GetTextures()[textureIndex]);
+                textureBytes += bytes;
+                if (scene.HasResidentTexture(textureIndex)) {
+                    residentTextureBytes += bytes;
+                }
+            }
+            const uint64_t sceneBufferBytes = BufferSizeBytes(device, scene.GetVertexBuffer())
+                + BufferSizeBytes(device, scene.GetIndexBuffer())
+                + BufferSizeBytes(device, scene.GetMaterialBuffer())
+                + BufferSizeBytes(device, scene.GetTriangleBuffer())
+                + BufferSizeBytes(device, scene.GetEmissiveTriangleBuffer())
+                + BufferSizeBytes(device, scene.GetGaussianBuffer());
+            const uint64_t accelerationBytes =
+                BufferSizeBytes(device, scene.GetBottomLevelBuffer()) + BufferSizeBytes(device, scene.GetTopLevelBuffer());
+
             if (ImGui::BeginTabBar("ResourceTabs")) {
+                if (ImGui::BeginTabItem("Summary")) {
+                    if (ImGui::BeginTable("ResourceSummaryTable", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+                        ImGui::TableSetupColumn("Category");
+                        ImGui::TableSetupColumn("Memory", ImGuiTableColumnFlags_WidthFixed, 120.0f);
+                        ImGui::TableHeadersRow();
+                        auto row = [](const char* label, double mib) {
+                            ImGui::TableNextRow();
+                            ImGui::TableSetColumnIndex(0);
+                            ImGui::TextUnformatted(label);
+                            ImGui::TableSetColumnIndex(1);
+                            ImGui::Text("%.2f MiB", mib);
+                        };
+                        row("Scene Buffers", MiB(sceneBufferBytes));
+                        row("Textures Resident", MiB(residentTextureBytes));
+                        row("Textures CPU/Source", MiB(textureBytes));
+                        row("Acceleration Structures", MiB(accelerationBytes));
+                        row("Total GPU Tracked", MiB(sceneBufferBytes + residentTextureBytes + accelerationBytes));
+                        ImGui::EndTable();
+                    }
+                    ImGui::Text("Textures %u / %zu resident", scene.GetResidentTextureCount(), scene.GetTextures().size());
+                    ImGui::Text("Dedicated VRAM %u MiB", device.GetDedicatedVideoMemoryMiB());
+                    ImGui::Text("Upload Last %.2f MiB  Pending %.2f MiB",
+                        MiB(static_cast<uint64_t>(device.GetUploadBatchStats().lastSubmittedBytes)),
+                        MiB(static_cast<uint64_t>(device.GetUploadBatchStats().pendingBytes)));
+                    ImGui::EndTabItem();
+                }
                 if (ImGui::BeginTabItem("Textures")) {
-                    if (ImGui::BeginTable("TextureTable", 6, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+                    if (ImGui::BeginTable("TextureTable", 8, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
                         ImGui::TableSetupColumn("Name");
                         ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 82.0f);
                         ImGui::TableSetupColumn("Format", ImGuiTableColumnFlags_WidthFixed, 70.0f);
                         ImGui::TableSetupColumn("Mips", ImGuiTableColumnFlags_WidthFixed, 44.0f);
                         ImGui::TableSetupColumn("Usage", ImGuiTableColumnFlags_WidthFixed, 72.0f);
+                        ImGui::TableSetupColumn("Memory", ImGuiTableColumnFlags_WidthFixed, 78.0f);
+                        ImGui::TableSetupColumn("Bindless", ImGuiTableColumnFlags_WidthFixed, 68.0f);
                         ImGui::TableSetupColumn("GPU", ImGuiTableColumnFlags_WidthFixed, 52.0f);
                         ImGui::TableHeadersRow();
                         const auto& textures = scene.GetTextures();
@@ -2255,6 +2376,14 @@ void VestaEngine::build_debug_ui()
                             ImGui::TableSetColumnIndex(4);
                             ImGui::TextUnformatted("Sampled");
                             ImGui::TableSetColumnIndex(5);
+                            ImGui::Text("%.2f MiB", MiB(TextureAssetBytes(texture)));
+                            ImGui::TableSetColumnIndex(6);
+                            if (scene.HasResidentTexture(textureIndex)) {
+                                ImGui::Text("%u", scene.GetTextureBindlessIndex(textureIndex));
+                            } else {
+                                ImGui::TextUnformatted("-");
+                            }
+                            ImGui::TableSetColumnIndex(7);
                             ImGui::Text("%s", scene.HasResidentTexture(textureIndex) ? "Yes" : "No");
                         }
                         ImGui::EndTable();
@@ -2262,17 +2391,21 @@ void VestaEngine::build_debug_ui()
                     ImGui::EndTabItem();
                 }
                 if (ImGui::BeginTabItem("Buffers")) {
-                    if (ImGui::BeginTable("BufferTable", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+                    if (ImGui::BeginTable("BufferTable", 7, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
                         ImGui::TableSetupColumn("Name");
                         ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 74.0f);
-                        ImGui::TableSetupColumn("GPU Memory", ImGuiTableColumnFlags_WidthFixed, 88.0f);
+                        ImGui::TableSetupColumn("GPU", ImGuiTableColumnFlags_WidthFixed, 78.0f);
+                        ImGui::TableSetupColumn("Logical", ImGuiTableColumnFlags_WidthFixed, 78.0f);
+                        ImGui::TableSetupColumn("Usage");
+                        ImGui::TableSetupColumn("Bindless", ImGuiTableColumnFlags_WidthFixed, 68.0f);
                         ImGui::TableSetupColumn("Handle", ImGuiTableColumnFlags_WidthFixed, 58.0f);
                         ImGui::TableHeadersRow();
-                        DrawBufferResourceRow("Vertex Buffer", device, scene.GetVertexBuffer());
-                        DrawBufferResourceRow("Index Buffer", device, scene.GetIndexBuffer());
-                        DrawBufferResourceRow("Material Buffer", device, scene.GetMaterialBuffer());
-                        DrawBufferResourceRow("Triangle Buffer", device, scene.GetTriangleBuffer());
-                        DrawBufferResourceRow("Gaussian Position/Covariance/SH", device, scene.GetGaussianBuffer());
+                        DrawBufferResourceRow("Vertex Buffer", device, scene.GetVertexBuffer(), vertexBytes);
+                        DrawBufferResourceRow("Index Buffer", device, scene.GetIndexBuffer(), indexBytes);
+                        DrawBufferResourceRow("Material Buffer", device, scene.GetMaterialBuffer(), materialBytes);
+                        DrawBufferResourceRow("Triangle Buffer", device, scene.GetTriangleBuffer(), triangleBytes);
+                        DrawBufferResourceRow("Emissive Triangle Buffer", device, scene.GetEmissiveTriangleBuffer(), emissiveBytes);
+                        DrawBufferResourceRow("Gaussian Position/Covariance/SH", device, scene.GetGaussianBuffer(), gaussianBytes);
                         ImGui::EndTable();
                     }
                     ImGui::EndTabItem();
@@ -2282,6 +2415,20 @@ void VestaEngine::build_debug_ui()
                     ImGui::Text("BLAS Build %.3f ms", scene.GetBottomLevelBuildMs());
                     ImGui::Text("TLAS Build %.3f ms", scene.GetTopLevelBuildMs());
                     ImGui::Text("Instances %zu", scene.GetObjects().size());
+                    ImGui::Separator();
+                    if (ImGui::BeginTable("AccelerationTable", 7, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+                        ImGui::TableSetupColumn("Name");
+                        ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 74.0f);
+                        ImGui::TableSetupColumn("GPU", ImGuiTableColumnFlags_WidthFixed, 78.0f);
+                        ImGui::TableSetupColumn("Logical", ImGuiTableColumnFlags_WidthFixed, 78.0f);
+                        ImGui::TableSetupColumn("Usage");
+                        ImGui::TableSetupColumn("Bindless", ImGuiTableColumnFlags_WidthFixed, 68.0f);
+                        ImGui::TableSetupColumn("Handle", ImGuiTableColumnFlags_WidthFixed, 58.0f);
+                        ImGui::TableHeadersRow();
+                        DrawBufferResourceRow("BLAS Buffer", device, scene.GetBottomLevelBuffer());
+                        DrawBufferResourceRow("TLAS Buffer", device, scene.GetTopLevelBuffer());
+                        ImGui::EndTable();
+                    }
                     ImGui::EndTabItem();
                 }
                 if (ImGui::BeginTabItem("Gaussian")) {

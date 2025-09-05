@@ -308,6 +308,8 @@ public:
     [[nodiscard]] render::BufferHandle GetTriangleBuffer() const { return GetGpuOrEmpty().triangleBuffer; }
     [[nodiscard]] render::BufferHandle GetEmissiveTriangleBuffer() const { return GetGpuOrEmpty().emissiveTriangleBuffer; }
     [[nodiscard]] render::BufferHandle GetMaterialBuffer() const { return GetGpuOrEmpty().materialBuffer; }
+    [[nodiscard]] render::BufferHandle GetBottomLevelBuffer() const { return GetGpuOrEmpty().bottomLevelBuffer; }
+    [[nodiscard]] render::BufferHandle GetTopLevelBuffer() const { return GetGpuOrEmpty().topLevelBuffer; }
     [[nodiscard]] bool HasRayTracingScene() const { return GetGpuOrEmpty().topLevelAccelerationStructure != VK_NULL_HANDLE; }
     [[nodiscard]] size_t GetResidentTextureCount() const;
     [[nodiscard]] bool HasResidentTexture(size_t textureIndex) const;
