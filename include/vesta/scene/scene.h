@@ -314,6 +314,7 @@ public:
     [[nodiscard]] size_t GetResidentTextureCount() const;
     [[nodiscard]] bool HasResidentTexture(size_t textureIndex) const;
     [[nodiscard]] uint32_t GetTextureBindlessIndex(size_t textureIndex) const;
+    [[nodiscard]] render::ImageHandle GetTextureImage(size_t textureIndex) const;
     [[nodiscard]] float GetGeometryUploadMs() const { return GetGpuOrEmpty().geometryUploadMs; }
     [[nodiscard]] float GetTextureUploadMs() const { return GetGpuOrEmpty().textureUploadMs; }
     [[nodiscard]] VkAccelerationStructureKHR GetTopLevelAccelerationStructure() const

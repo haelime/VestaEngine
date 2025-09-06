@@ -2307,6 +2307,11 @@ void VestaEngine::build_debug_ui()
                 static_cast<uint64_t>(scene.GetGaussians().size()) * sizeof(vesta::scene::GaussianPrimitive);
             uint64_t textureBytes = 0;
             uint64_t residentTextureBytes = 0;
+            if (_texturePreviewSceneVersion != scene.GetContentVersion()
+                || _texturePreviewDescriptors.size() != scene.GetTextures().size()) {
+                _texturePreviewDescriptors.assign(scene.GetTextures().size(), VK_NULL_HANDLE);
+                _texturePreviewSceneVersion = scene.GetContentVersion();
+            }
             for (size_t textureIndex = 0; textureIndex < scene.GetTextures().size(); ++textureIndex) {
                 const uint64_t bytes = TextureAssetBytes(scene.GetTextures()[textureIndex]);
                 textureBytes += bytes;
@@ -2351,8 +2356,9 @@ void VestaEngine::build_debug_ui()
                     ImGui::EndTabItem();
                 }
                 if (ImGui::BeginTabItem("Textures")) {
-                    if (ImGui::BeginTable("TextureTable", 8, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+                    if (ImGui::BeginTable("TextureTable", 9, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
                         ImGui::TableSetupColumn("Name");
+                        ImGui::TableSetupColumn("Preview", ImGuiTableColumnFlags_WidthFixed, 72.0f);
                         ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 82.0f);
                         ImGui::TableSetupColumn("Format", ImGuiTableColumnFlags_WidthFixed, 70.0f);
                         ImGui::TableSetupColumn("Mips", ImGuiTableColumnFlags_WidthFixed, 44.0f);
@@ -2368,22 +2374,41 @@ void VestaEngine::build_debug_ui()
                             ImGui::TableSetColumnIndex(0);
                             ImGui::TextUnformatted(texture.name.empty() ? "(texture)" : texture.name.c_str());
                             ImGui::TableSetColumnIndex(1);
-                            ImGui::Text("%ux%u", texture.width, texture.height);
+                            if (scene.HasResidentTexture(textureIndex)) {
+                                if (_texturePreviewDescriptors[textureIndex] == VK_NULL_HANDLE) {
+                                    const vesta::render::ImageHandle image = scene.GetTextureImage(textureIndex);
+                                    if (image) {
+                                        _texturePreviewDescriptors[textureIndex] = ImGui_ImplVulkan_AddTexture(device.GetDefaultSampler(),
+                                            device.GetImageView(image),
+                                            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                                    }
+                                }
+                                if (_texturePreviewDescriptors[textureIndex] != VK_NULL_HANDLE) {
+                                    ImGui::Image(reinterpret_cast<ImTextureID>(_texturePreviewDescriptors[textureIndex]),
+                                        ImVec2(48.0f, 48.0f));
+                                } else {
+                                    ImGui::TextUnformatted("-");
+                                }
+                            } else {
+                                ImGui::TextUnformatted("streaming");
+                            }
                             ImGui::TableSetColumnIndex(2);
-                            ImGui::TextUnformatted(texture.srgb ? "RGBA8_sRGB" : "RGBA8");
+                            ImGui::Text("%ux%u", texture.width, texture.height);
                             ImGui::TableSetColumnIndex(3);
-                            ImGui::TextUnformatted("1");
+                            ImGui::TextUnformatted(texture.srgb ? "RGBA8_sRGB" : "RGBA8");
                             ImGui::TableSetColumnIndex(4);
-                            ImGui::TextUnformatted("Sampled");
+                            ImGui::TextUnformatted("1");
                             ImGui::TableSetColumnIndex(5);
-                            ImGui::Text("%.2f MiB", MiB(TextureAssetBytes(texture)));
+                            ImGui::TextUnformatted("Sampled");
                             ImGui::TableSetColumnIndex(6);
+                            ImGui::Text("%.2f MiB", MiB(TextureAssetBytes(texture)));
+                            ImGui::TableSetColumnIndex(7);
                             if (scene.HasResidentTexture(textureIndex)) {
                                 ImGui::Text("%u", scene.GetTextureBindlessIndex(textureIndex));
                             } else {
                                 ImGui::TextUnformatted("-");
                             }
-                            ImGui::TableSetColumnIndex(7);
+                            ImGui::TableSetColumnIndex(8);
                             ImGui::Text("%s", scene.HasResidentTexture(textureIndex) ? "Yes" : "No");
                         }
                         ImGui::EndTable();

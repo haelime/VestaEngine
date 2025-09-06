@@ -166,6 +166,7 @@ public:
     [[nodiscard]] VkExtent3D GetImageExtent(ImageHandle handle) const;
     [[nodiscard]] VkImageAspectFlags GetImageAspectFlags(ImageHandle handle) const;
     [[nodiscard]] VkDeviceAddress GetBufferDeviceAddress(BufferHandle handle) const;
+    [[nodiscard]] VkSampler GetDefaultSampler() const { return _defaultSampler; }
 
     [[nodiscard]] const AllocatedImage& GetImageResource(ImageHandle handle) const;
     [[nodiscard]] const AllocatedBuffer& GetBufferResource(BufferHandle handle) const;

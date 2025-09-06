@@ -3080,6 +3080,15 @@ uint32_t Scene::GetTextureBindlessIndex(size_t textureIndex) const
     return gpu.textures[textureIndex].bindlessSampledImage;
 }
 
+render::ImageHandle Scene::GetTextureImage(size_t textureIndex) const
+{
+    const GpuScene& gpu = GetGpuOrEmpty();
+    if (textureIndex >= gpu.textures.size() || !gpu.textures[textureIndex].resident) {
+        return {};
+    }
+    return gpu.textures[textureIndex].image;
+}
+
 std::optional<uint32_t> Scene::PickObject(const glm::vec3& rayOrigin, const glm::vec3& rayDirection) const
 {
     const PreparedScene& prepared = GetPreparedOrEmpty();

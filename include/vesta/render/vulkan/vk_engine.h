@@ -82,6 +82,8 @@ public:
     VkDescriptorPool _imguiDescriptorPool{ VK_NULL_HANDLE };
     std::vector<std::filesystem::path> _recentScenePaths;
     std::vector<std::string> _logConsoleLines;
+    std::vector<VkDescriptorSet> _texturePreviewDescriptors;
+    uint64_t _texturePreviewSceneVersion{ 0 };
 
     static VestaEngine& Get();
 
