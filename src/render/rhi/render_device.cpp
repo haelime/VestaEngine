@@ -25,6 +25,35 @@ constexpr VkDeviceSize kDefaultUploadStagingCapacity = 32ull * 1024ull * 1024ull
 constexpr VmaAllocationCreateFlags kHostUploadFlags =
     VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
+const char* ValidationSeverityLabel(VkDebugUtilsMessageSeverityFlagBitsEXT severity)
+{
+    if ((severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) != 0) {
+        return "ERROR";
+    }
+    if ((severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) != 0) {
+        return "WARNING";
+    }
+    if ((severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT) != 0) {
+        return "INFO";
+    }
+    return "VERBOSE";
+}
+
+VKAPI_ATTR VkBool32 VKAPI_CALL RenderDeviceDebugCallback(VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
+    VkDebugUtilsMessageTypeFlagsEXT,
+    const VkDebugUtilsMessengerCallbackDataEXT* callbackData,
+    void* userData)
+{
+    auto* device = static_cast<RenderDevice*>(userData);
+    if (device == nullptr || callbackData == nullptr || callbackData->pMessage == nullptr) {
+        return VK_FALSE;
+    }
+
+    device->PushValidationMessage(
+        fmt::format("[VALIDATION][{}] {}", ValidationSeverityLabel(messageSeverity), callbackData->pMessage));
+    return VK_FALSE;
+}
+
 uint32_t CalculateDedicatedVideoMemoryMiB(VkPhysicalDevice physicalDevice)
 {
     // On most discrete GPUs the largest DEVICE_LOCAL heap is a good proxy for
@@ -505,6 +534,24 @@ void RenderDevice::SetDebugWaitContext(std::string_view context)
     _debugWaitContext.assign(context.begin(), context.end());
 }
 
+void RenderDevice::PushValidationMessage(std::string message)
+{
+    std::scoped_lock lock(_validationMessageMutex);
+    _validationMessages.push_back(std::move(message));
+    if (_validationMessages.size() > 128) {
+        _validationMessages.erase(_validationMessages.begin(),
+            _validationMessages.begin() + static_cast<std::ptrdiff_t>(_validationMessages.size() - 128));
+    }
+}
+
+std::vector<std::string> RenderDevice::ConsumeValidationMessages()
+{
+    std::scoped_lock lock(_validationMessageMutex);
+    std::vector<std::string> messages = std::move(_validationMessages);
+    _validationMessages.clear();
+    return messages;
+}
+
 void RenderDevice::WaitForFenceOrAssert(VkFence fence, std::string_view waitLabel)
 {
     if (_device == VK_NULL_HANDLE || fence == VK_NULL_HANDLE) {
@@ -712,7 +759,10 @@ void RenderDevice::CreateInstanceAndDevice(const RenderDeviceDesc& desc)
     auto instanceResult = builder.set_app_name(desc.appName)
         .set_engine_name(desc.engineName)
         .request_validation_layers(desc.enableValidation)
-        .use_default_debug_messenger()
+        .set_debug_callback(RenderDeviceDebugCallback)
+        .set_debug_callback_user_data_pointer(this)
+        .set_debug_messenger_severity(VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT
+            | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)
         .require_api_version(kRequiredVulkanMajor, kRequiredVulkanMinor, kRequiredVulkanPatch)
         .build();
 

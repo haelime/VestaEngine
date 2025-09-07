@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <mutex>
 #include <span>
 #include <string>
 #include <vector>
@@ -158,6 +159,7 @@ public:
     void FlushBuffer(BufferHandle handle, VkDeviceSize offset, VkDeviceSize size);
     void InvalidateBuffer(BufferHandle handle, VkDeviceSize offset, VkDeviceSize size);
     void SetDebugWaitContext(std::string_view context);
+    void PushValidationMessage(std::string message);
 
     [[nodiscard]] VkBuffer GetBuffer(BufferHandle handle) const;
     [[nodiscard]] VkImage GetImage(ImageHandle handle) const;
@@ -177,6 +179,7 @@ public:
     [[nodiscard]] uint32_t GetDedicatedVideoMemoryMiB() const { return _dedicatedVideoMemoryMiB; }
     [[nodiscard]] const UploadBatchStats& GetUploadBatchStats() const { return _uploadBatchStats; }
     [[nodiscard]] bool HasTransferQueue() const { return _transferQueue != VK_NULL_HANDLE; }
+    [[nodiscard]] std::vector<std::string> ConsumeValidationMessages();
 
     [[nodiscard]] VkInstance GetInstance() const { return _instance; }
     [[nodiscard]] VkPhysicalDevice GetPhysicalDevice() const { return _physicalDevice; }
@@ -267,6 +270,8 @@ private:
     UploadBatchStats _uploadBatchStats;
     std::string _debugWaitContext;
     std::string _gpuName;
+    std::mutex _validationMessageMutex;
+    std::vector<std::string> _validationMessages;
     uint32_t _dedicatedVideoMemoryMiB{ 0 };
 };
 } // namespace vesta::render

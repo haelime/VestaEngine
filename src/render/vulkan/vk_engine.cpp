@@ -829,6 +829,10 @@ void VestaEngine::update_runtime_warnings()
     const float cpuFrameMs = _renderer.GetSmoothedFrameTimeMs();
     const float gpuFrameMs = TotalGpuMs(graphTimings);
 
+    for (const std::string& message : _renderer.GetRenderDevice().ConsumeValidationMessages()) {
+        log_startup_event(message);
+    }
+
     if (cpuFrameMs > 33.3f
         && RuntimeWarningCooldownElapsed(_frameNumber, _lastCpuFrameWarningFrame, warningCooldownFrames)) {
         log_startup_event(fmt::format("[PERF] CPU frame time high: {:.2f} ms", cpuFrameMs));
