@@ -747,7 +747,7 @@ void VestaEngine::run()
                 continue;
             }
             if (e.type == SDL_KEYDOWN && e.key.repeat == 0 && e.key.keysym.sym == SDLK_F12) {
-                const std::filesystem::path path = MakeTimestampedCapturePath("screenshot", ".ppm");
+                const std::filesystem::path path = MakeTimestampedCapturePath("screenshot", ".png");
                 log_startup_event(_renderer.RequestScreenshot(path) ? "Screenshot queued: " + path.string() : "Screenshot failed");
                 continue;
             }
@@ -978,9 +978,19 @@ void VestaEngine::update_benchmark(float deltaSeconds)
         _benchmarkState.capturing = true;
         _benchmarkState.captureElapsed = 0.0f;
         _benchmarkState.frameTimesMs.clear();
+        _benchmarkState.screenshotQueued = false;
         fmt::println(
             "Capturing benchmark for {:.1f}s -> {}", benchmark.captureSeconds, benchmark.csvOutputPath.string());
         return;
+    }
+
+    if (!_benchmarkState.screenshotQueued && !benchmark.screenshotOutputPath.empty()) {
+        _benchmarkState.screenshotQueued = true;
+        if (_renderer.RequestScreenshot(benchmark.screenshotOutputPath)) {
+            log_startup_event("Benchmark screenshot queued: " + benchmark.screenshotOutputPath.string());
+        } else {
+            log_startup_event("Benchmark screenshot failed");
+        }
     }
 
     _benchmarkState.frameTimesMs.push_back(_renderer.GetFrameTimeMs());
@@ -1504,7 +1514,7 @@ void VestaEngine::build_main_menu_bar()
                 log_startup_event(reloaded ? "Shader hot reload complete" : "Shader hot reload failed: " + _renderer.GetLastShaderReloadMessage());
             }
             if (ImGui::MenuItem("Capture Frame")) {
-                const std::filesystem::path path = MakeTimestampedCapturePath("frame", ".ppm");
+                const std::filesystem::path path = MakeTimestampedCapturePath("frame", ".png");
                 log_startup_event(_renderer.RequestScreenshot(path) ? "Frame capture queued: " + path.string() : "Frame capture failed");
             }
             ImGui::EndMenu();
@@ -1621,12 +1631,12 @@ void VestaEngine::build_debug_ui()
             }
             ImGui::SameLine();
             if (ImGui::Button("Capture")) {
-                const std::filesystem::path path = MakeTimestampedCapturePath("frame", ".ppm");
+                const std::filesystem::path path = MakeTimestampedCapturePath("frame", ".png");
                 log_startup_event(_renderer.RequestScreenshot(path) ? "Frame capture queued: " + path.string() : "Frame capture failed");
             }
             ImGui::SameLine();
             if (ImGui::Button("Screenshot")) {
-                const std::filesystem::path path = MakeTimestampedCapturePath("screenshot", ".ppm");
+                const std::filesystem::path path = MakeTimestampedCapturePath("screenshot", ".png");
                 log_startup_event(_renderer.RequestScreenshot(path) ? "Screenshot queued: " + path.string() : "Screenshot failed");
             }
             ImGui::SameLine();

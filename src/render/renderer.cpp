@@ -257,6 +257,139 @@ float DefaultOrbitDistance(float currentDistance, float targetRadius)
     return minimumDistance;
 }
 
+void EnsureParentDirectory(const std::filesystem::path& path)
+{
+    const std::filesystem::path parent = path.parent_path();
+    if (!parent.empty()) {
+        std::error_code errorCode;
+        std::filesystem::create_directories(parent, errorCode);
+    }
+}
+
+std::array<uint8_t, 3> ReadSwapchainRgb(const uint8_t* source, VkFormat format)
+{
+    if (format == VK_FORMAT_B8G8R8A8_UNORM || format == VK_FORMAT_B8G8R8A8_SRGB) {
+        return { source[2], source[1], source[0] };
+    }
+    return { source[0], source[1], source[2] };
+}
+
+void AppendU32Be(std::vector<uint8_t>& bytes, uint32_t value)
+{
+    bytes.push_back(static_cast<uint8_t>((value >> 24) & 0xFFu));
+    bytes.push_back(static_cast<uint8_t>((value >> 16) & 0xFFu));
+    bytes.push_back(static_cast<uint8_t>((value >> 8) & 0xFFu));
+    bytes.push_back(static_cast<uint8_t>(value & 0xFFu));
+}
+
+void AppendU16Le(std::vector<uint8_t>& bytes, uint16_t value)
+{
+    bytes.push_back(static_cast<uint8_t>(value & 0xFFu));
+    bytes.push_back(static_cast<uint8_t>((value >> 8) & 0xFFu));
+}
+
+uint32_t Crc32(std::span<const uint8_t> bytes)
+{
+    uint32_t crc = 0xFFFFFFFFu;
+    for (uint8_t byte : bytes) {
+        crc ^= byte;
+        for (int bit = 0; bit < 8; ++bit) {
+            crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1u)));
+        }
+    }
+    return crc ^ 0xFFFFFFFFu;
+}
+
+uint32_t Adler32(std::span<const uint8_t> bytes)
+{
+    constexpr uint32_t kModAdler = 65521u;
+    uint32_t a = 1u;
+    uint32_t b = 0u;
+    for (uint8_t byte : bytes) {
+        a = (a + byte) % kModAdler;
+        b = (b + a) % kModAdler;
+    }
+    return (b << 16) | a;
+}
+
+void AppendPngChunk(std::vector<uint8_t>& png, std::string_view type, std::span<const uint8_t> payload)
+{
+    AppendU32Be(png, static_cast<uint32_t>(payload.size()));
+    const size_t chunkStart = png.size();
+    png.insert(png.end(), type.begin(), type.end());
+    png.insert(png.end(), payload.begin(), payload.end());
+    AppendU32Be(png, Crc32(std::span<const uint8_t>(png.data() + chunkStart, png.size() - chunkStart)));
+}
+
+std::vector<uint8_t> DeflateStore(std::span<const uint8_t> bytes)
+{
+    std::vector<uint8_t> output;
+    output.reserve(bytes.size() + bytes.size() / 65535u * 5u + 8u);
+    output.push_back(0x78);
+    output.push_back(0x01);
+
+    size_t offset = 0;
+    while (offset < bytes.size()) {
+        const size_t chunkSize = std::min<size_t>(65535u, bytes.size() - offset);
+        const bool finalBlock = offset + chunkSize == bytes.size();
+        output.push_back(finalBlock ? 0x01 : 0x00);
+        AppendU16Le(output, static_cast<uint16_t>(chunkSize));
+        AppendU16Le(output, static_cast<uint16_t>(~static_cast<uint16_t>(chunkSize)));
+        output.insert(output.end(), bytes.begin() + static_cast<std::ptrdiff_t>(offset),
+            bytes.begin() + static_cast<std::ptrdiff_t>(offset + chunkSize));
+        offset += chunkSize;
+    }
+
+    AppendU32Be(output, Adler32(bytes));
+    return output;
+}
+
+bool WriteSwapchainPng(const std::filesystem::path& path,
+    const void* pixels,
+    VkExtent2D extent,
+    VkFormat format)
+{
+    if (pixels == nullptr || extent.width == 0 || extent.height == 0) {
+        return false;
+    }
+
+    EnsureParentDirectory(path);
+
+    std::vector<uint8_t> scanlines;
+    scanlines.reserve(static_cast<size_t>(extent.height) * (1u + static_cast<size_t>(extent.width) * 3u));
+    const auto* source = static_cast<const uint8_t*>(pixels);
+    for (uint32_t y = 0; y < extent.height; ++y) {
+        scanlines.push_back(0);
+        for (uint32_t x = 0; x < extent.width; ++x) {
+            const uint8_t* pixel = source + (static_cast<size_t>(y) * extent.width + x) * 4u;
+            const std::array<uint8_t, 3> rgb = ReadSwapchainRgb(pixel, format);
+            scanlines.insert(scanlines.end(), rgb.begin(), rgb.end());
+        }
+    }
+
+    std::vector<uint8_t> png{ 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n' };
+    std::vector<uint8_t> ihdr;
+    ihdr.reserve(13);
+    AppendU32Be(ihdr, extent.width);
+    AppendU32Be(ihdr, extent.height);
+    ihdr.push_back(8); // bit depth
+    ihdr.push_back(2); // truecolor RGB
+    ihdr.push_back(0); // deflate
+    ihdr.push_back(0); // adaptive filters
+    ihdr.push_back(0); // no interlace
+    AppendPngChunk(png, "IHDR", ihdr);
+    const std::vector<uint8_t> idat = DeflateStore(scanlines);
+    AppendPngChunk(png, "IDAT", idat);
+    AppendPngChunk(png, "IEND", {});
+
+    std::ofstream output(path, std::ios::binary);
+    if (!output.is_open()) {
+        return false;
+    }
+    output.write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
+    return output.good();
+}
+
 bool WriteSwapchainPpm(const std::filesystem::path& path,
     const void* pixels,
     VkExtent2D extent,
@@ -266,11 +399,7 @@ bool WriteSwapchainPpm(const std::filesystem::path& path,
         return false;
     }
 
-    const std::filesystem::path parent = path.parent_path();
-    if (!parent.empty()) {
-        std::error_code errorCode;
-        std::filesystem::create_directories(parent, errorCode);
-    }
+    EnsureParentDirectory(path);
 
     std::ofstream output(path, std::ios::binary);
     if (!output.is_open()) {
@@ -282,12 +411,7 @@ bool WriteSwapchainPpm(const std::filesystem::path& path,
     for (uint32_t y = 0; y < extent.height; ++y) {
         for (uint32_t x = 0; x < extent.width; ++x) {
             const uint8_t* pixel = source + (static_cast<size_t>(y) * extent.width + x) * 4u;
-            std::array<uint8_t, 3> rgb{};
-            if (format == VK_FORMAT_B8G8R8A8_UNORM || format == VK_FORMAT_B8G8R8A8_SRGB) {
-                rgb = { pixel[2], pixel[1], pixel[0] };
-            } else {
-                rgb = { pixel[0], pixel[1], pixel[2] };
-            }
+            const std::array<uint8_t, 3> rgb = ReadSwapchainRgb(pixel, format);
             output.write(reinterpret_cast<const char*>(rgb.data()), static_cast<std::streamsize>(rgb.size()));
         }
     }
@@ -1564,8 +1688,22 @@ void Renderer::ProcessCompletedFrameReadback(RendererFrameContext& frameContext)
         static_cast<VkDeviceSize>(frameContext.screenshotExtent.width) * frameContext.screenshotExtent.height * 4u;
     _device.InvalidateBuffer(frameContext.screenshotReadbackBuffer, 0, byteSize);
     const AllocatedBuffer& buffer = _device.GetBufferResource(frameContext.screenshotReadbackBuffer);
-    const bool written = WriteSwapchainPpm(
-        frameContext.screenshotPath, buffer.allocationInfo.pMappedData, frameContext.screenshotExtent, frameContext.screenshotFormat);
+    const std::string extension = [&]() {
+        std::string value = frameContext.screenshotPath.extension().string();
+        std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        return value;
+    }();
+    const bool written = extension == ".png"
+        ? WriteSwapchainPng(frameContext.screenshotPath,
+            buffer.allocationInfo.pMappedData,
+            frameContext.screenshotExtent,
+            frameContext.screenshotFormat)
+        : WriteSwapchainPpm(frameContext.screenshotPath,
+            buffer.allocationInfo.pMappedData,
+            frameContext.screenshotExtent,
+            frameContext.screenshotFormat);
     if (!written) {
         fmt::println(stderr, "Failed to write screenshot '{}'", frameContext.screenshotPath.string());
     }

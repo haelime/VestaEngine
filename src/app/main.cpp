@@ -16,6 +16,7 @@ void PrintUsage()
         << "  --pt-backend <auto|compute|hardwarert>\n"
         << "  --pt-scale <0.25-1.0>\n"
         << "  --benchmark <csv-path>        Run a timed benchmark and exit.\n"
+        << "  --screenshot <png-path>       Save a PNG capture during benchmark.\n"
         << "  --benchmark-seconds <value>   Benchmark capture duration.\n"
         << "  --warmup-seconds <value>      Benchmark warmup duration.\n"
         << "  --show-ui                     Force ImGui UI on.\n"
@@ -168,6 +169,17 @@ int main(int argc, char* argv[])
             BenchmarkConfig benchmark;
             benchmark.csvOutputPath = value;
             options.benchmark = benchmark;
+            continue;
+        }
+        if (argument == "--screenshot") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            if (!options.benchmark.has_value()) {
+                options.benchmark = BenchmarkConfig{};
+            }
+            options.benchmark->screenshotOutputPath = value;
             continue;
         }
         if (argument == "--benchmark-seconds") {

@@ -13,6 +13,7 @@
 
 struct BenchmarkConfig {
     std::filesystem::path csvOutputPath;
+    std::filesystem::path screenshotOutputPath;
     float warmupSeconds{ 2.0f };
     float captureSeconds{ 10.0f };
 };
@@ -123,6 +124,7 @@ private:
         float captureElapsed{ 0.0f };
         uint64_t lastGaussianRebuildCount{ 0 };
         uint32_t stableGaussianFrames{ 0 };
+        bool screenshotQueued{ false };
         std::vector<float> frameTimesMs;
     } _benchmarkState;
     struct StartupState {
