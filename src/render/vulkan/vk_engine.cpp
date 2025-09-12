@@ -1237,6 +1237,7 @@ void VestaEngine::shutdown_imgui()
 
     _renderer.ClearOverlayCallbacks();
     ImGui::SetCurrentContext(_imguiContext);
+    clear_texture_preview_descriptors();
     ImGui_ImplVulkan_Shutdown();
     ImGui_ImplSDL2_Shutdown();
     ImGui::DestroyContext(_imguiContext);
@@ -1246,6 +1247,24 @@ void VestaEngine::shutdown_imgui()
     }
     _imguiContext = nullptr;
     _imguiInitialized = false;
+}
+
+void VestaEngine::clear_texture_preview_descriptors()
+{
+    if (!_imguiInitialized) {
+        _texturePreviewDescriptors.clear();
+        _texturePreviewSceneVersion = 0;
+        return;
+    }
+
+    ImGui::SetCurrentContext(_imguiContext);
+    for (VkDescriptorSet descriptor : _texturePreviewDescriptors) {
+        if (descriptor != VK_NULL_HANDLE) {
+            ImGui_ImplVulkan_RemoveTexture(descriptor);
+        }
+    }
+    _texturePreviewDescriptors.clear();
+    _texturePreviewSceneVersion = 0;
 }
 
 void VestaEngine::begin_imgui_frame(float deltaSeconds)
@@ -2323,6 +2342,7 @@ void VestaEngine::build_debug_ui()
             uint64_t residentTextureBytes = 0;
             if (_texturePreviewSceneVersion != scene.GetContentVersion()
                 || _texturePreviewDescriptors.size() != scene.GetTextures().size()) {
+                clear_texture_preview_descriptors();
                 _texturePreviewDescriptors.assign(scene.GetTextures().size(), VK_NULL_HANDLE);
                 _texturePreviewSceneVersion = scene.GetContentVersion();
             }

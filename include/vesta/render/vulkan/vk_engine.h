@@ -101,6 +101,7 @@ private:
     void init_renderer();
     void init_imgui();
     void shutdown_imgui();
+    void clear_texture_preview_descriptors();
     void begin_imgui_frame(float deltaSeconds);
     void build_main_menu_bar();
     void build_debug_ui();
