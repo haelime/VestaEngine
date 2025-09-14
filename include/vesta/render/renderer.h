@@ -386,6 +386,8 @@ public:
     void SelectDirectionalLight();
     bool SelectObject(uint32_t objectIndex);
     bool SetSelectedObjectPosition(glm::vec3 position);
+    bool RotateSelectedObject(glm::vec3 eulerDeltaDegrees);
+    bool ScaleSelectedObject(float uniformScale);
     bool UpdateMaterial(uint32_t materialIndex, const vesta::scene::SceneMaterial& material);
     void ClearSelection();
     bool OrbitCameraAroundSelection();

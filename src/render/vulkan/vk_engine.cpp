@@ -2244,6 +2244,29 @@ void VestaEngine::build_debug_ui()
                         if (ImGui::DragFloat3("Position", &position.x, 0.01f, -10000.0f, 10000.0f, "%.3f")) {
                             _renderer.SetSelectedObjectPosition(position);
                         }
+                        static float rotationDelta[3] = { 0.0f, 0.0f, 0.0f };
+                        ImGui::InputFloat3("Rotate Delta", rotationDelta, "%.2f deg");
+                        if (ImGui::Button("Apply Rotation")) {
+                            if (_renderer.RotateSelectedObject(glm::vec3(rotationDelta[0], rotationDelta[1], rotationDelta[2]))) {
+                                rotationDelta[0] = 0.0f;
+                                rotationDelta[1] = 0.0f;
+                                rotationDelta[2] = 0.0f;
+                            }
+                        }
+                        ImGui::SameLine();
+                        if (ImGui::Button("Reset Delta")) {
+                            rotationDelta[0] = 0.0f;
+                            rotationDelta[1] = 0.0f;
+                            rotationDelta[2] = 0.0f;
+                        }
+                        static float uniformScale = 1.0f;
+                        ImGui::InputFloat("Uniform Scale", &uniformScale, 0.05f, 0.25f, "%.3f");
+                        ImGui::SameLine();
+                        if (ImGui::Button("Apply Scale")) {
+                            if (_renderer.ScaleSelectedObject(uniformScale)) {
+                                uniformScale = 1.0f;
+                            }
+                        }
                         ImGui::Text("Bounds Center %.3f %.3f %.3f",
                             object.bounds.center.x,
                             object.bounds.center.y,

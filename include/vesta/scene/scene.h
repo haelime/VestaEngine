@@ -328,6 +328,8 @@ public:
     [[nodiscard]] bool SupportsObjectEditing() const { return !GetPreparedOrEmpty().objects.empty(); }
     [[nodiscard]] std::optional<uint32_t> PickObject(const glm::vec3& rayOrigin, const glm::vec3& rayDirection) const;
     bool TranslateObject(render::RenderDevice& device, uint32_t objectIndex, const glm::vec3& deltaWorld);
+    bool RotateObject(render::RenderDevice& device, uint32_t objectIndex, const glm::quat& rotationDelta);
+    bool ScaleObject(render::RenderDevice& device, uint32_t objectIndex, float uniformScale);
     bool UpdateMaterial(render::RenderDevice& device, uint32_t materialIndex, const SceneMaterial& material);
     bool RebuildRayTracing(render::RenderDevice& device);
     bool ResortGaussians(render::RenderDevice& device, const Camera& camera);

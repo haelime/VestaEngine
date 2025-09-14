@@ -3213,6 +3213,247 @@ bool Scene::TranslateObject(render::RenderDevice& device, uint32_t objectIndex, 
     return true;
 }
 
+bool Scene::RotateObject(render::RenderDevice& device, uint32_t objectIndex, const glm::quat& rotationDelta)
+{
+    if (glm::length(rotationDelta) <= 1.0e-5f) {
+        return true;
+    }
+
+    const std::shared_ptr<PreparedScene> prepared = _prepared;
+    const std::shared_ptr<ParsedScene> parsed = _parsed;
+    if (!prepared || objectIndex >= prepared->objects.size()) {
+        return false;
+    }
+
+    SceneObject& object = prepared->objects[objectIndex];
+    const glm::vec3 center = object.bounds.center;
+    const glm::mat3 rotation = glm::mat3_cast(glm::normalize(rotationDelta));
+    auto rotatePoint = [&](glm::vec3 position) {
+        return center + rotation * (position - center);
+    };
+    auto rotateDirection = [&](glm::vec3 direction) {
+        const glm::vec3 rotated = rotation * direction;
+        return glm::length(rotated) > 1.0e-5f ? glm::normalize(rotated) : direction;
+    };
+
+    object.worldTransform = glm::translate(glm::mat4(1.0f), center) * glm::mat4(rotation)
+        * glm::translate(glm::mat4(1.0f), -center) * object.worldTransform;
+
+    if (parsed && objectIndex < parsed->objects.size()) {
+        ParsedSceneObject& parsedObject = parsed->objects[objectIndex];
+        parsedObject.worldTransform = glm::translate(glm::mat4(1.0f), center) * glm::mat4(rotation)
+            * glm::translate(glm::mat4(1.0f), -center) * parsedObject.worldTransform;
+        const uint32_t primitiveEnd = parsedObject.firstPrimitive + parsedObject.primitiveCount;
+        for (uint32_t primitiveIndex = parsedObject.firstPrimitive; primitiveIndex < primitiveEnd; ++primitiveIndex) {
+            parsed->primitives[primitiveIndex].worldTransform = glm::translate(glm::mat4(1.0f), center) * glm::mat4(rotation)
+                * glm::translate(glm::mat4(1.0f), -center) * parsed->primitives[primitiveIndex].worldTransform;
+        }
+    }
+
+    const uint32_t vertexEnd = std::min<uint32_t>(object.firstVertex + object.vertexCount, static_cast<uint32_t>(prepared->vertices.size()));
+    for (uint32_t vertexIndex = object.firstVertex; vertexIndex < vertexEnd; ++vertexIndex) {
+        SceneVertex& vertex = prepared->vertices[vertexIndex];
+        vertex.position = rotatePoint(vertex.position);
+        vertex.normal = rotateDirection(vertex.normal);
+        vertex.tangent = glm::vec4(rotateDirection(glm::vec3(vertex.tangent)), vertex.tangent.w);
+    }
+    if (prepared->sceneKind == SceneKind::Gaussian || prepared->sceneKind == SceneKind::PointCloud) {
+        for (GaussianPrimitive& gaussian : prepared->gaussians) {
+            gaussian.positionOpacity = glm::vec4(rotatePoint(glm::vec3(gaussian.positionOpacity)), gaussian.positionOpacity.w);
+            const glm::quat currentRotation(gaussian.rotation.w, gaussian.rotation.x, gaussian.rotation.y, gaussian.rotation.z);
+            const glm::quat rotated = glm::normalize(rotationDelta * currentRotation);
+            gaussian.rotation = glm::vec4(rotated.x, rotated.y, rotated.z, rotated.w);
+        }
+    }
+
+    const uint32_t surfaceEnd =
+        std::min<uint32_t>(object.firstSurface + object.surfaceCount, static_cast<uint32_t>(prepared->surfaceBounds.size()));
+    for (uint32_t surfaceIndex = object.firstSurface; surfaceIndex < surfaceEnd; ++surfaceIndex) {
+        prepared->surfaceBounds[surfaceIndex].center = rotatePoint(prepared->surfaceBounds[surfaceIndex].center);
+    }
+
+    const uint32_t triangleEnd =
+        std::min<uint32_t>(object.firstTriangle + object.triangleCount, static_cast<uint32_t>(prepared->triangles.size()));
+    for (uint32_t triangleIndex = object.firstTriangle; triangleIndex < triangleEnd; ++triangleIndex) {
+        SceneTriangle& triangle = prepared->triangles[triangleIndex];
+        triangle.p0 = glm::vec4(rotatePoint(glm::vec3(triangle.p0)), triangle.p0.w);
+        triangle.p1 = glm::vec4(rotatePoint(glm::vec3(triangle.p1)), triangle.p1.w);
+        triangle.p2 = glm::vec4(rotatePoint(glm::vec3(triangle.p2)), triangle.p2.w);
+        triangle.n0 = glm::vec4(rotateDirection(glm::vec3(triangle.n0)), triangle.n0.w);
+        triangle.n1 = glm::vec4(rotateDirection(glm::vec3(triangle.n1)), triangle.n1.w);
+        triangle.n2 = glm::vec4(rotateDirection(glm::vec3(triangle.n2)), triangle.n2.w);
+    }
+
+    object.bounds = ComputeVertexRangeBounds(prepared->vertices, object.firstVertex, object.vertexCount);
+    FinalizeBounds(prepared->bounds, prepared->vertices);
+
+    if (_gpu == nullptr) {
+        ++_contentVersion;
+        return true;
+    }
+
+    GpuScene& gpu = *_gpu;
+    const uint32_t gpuVertexEnd =
+        std::min<uint32_t>(object.firstVertex + object.vertexCount, static_cast<uint32_t>(gpu.rasterVertices.size()));
+    for (uint32_t vertexIndex = object.firstVertex; vertexIndex < gpuVertexEnd; ++vertexIndex) {
+        SceneVertex& vertex = gpu.rasterVertices[vertexIndex];
+        vertex.position = rotatePoint(vertex.position);
+        vertex.normal = rotateDirection(vertex.normal);
+        vertex.tangent = glm::vec4(rotateDirection(glm::vec3(vertex.tangent)), vertex.tangent.w);
+    }
+    if (prepared->sceneKind == SceneKind::Gaussian || prepared->sceneKind == SceneKind::PointCloud) {
+        for (GaussianPrimitive& gaussian : gpu.gaussians) {
+            gaussian.positionOpacity = glm::vec4(rotatePoint(glm::vec3(gaussian.positionOpacity)), gaussian.positionOpacity.w);
+            const glm::quat currentRotation(gaussian.rotation.w, gaussian.rotation.x, gaussian.rotation.y, gaussian.rotation.z);
+            const glm::quat rotated = glm::normalize(rotationDelta * currentRotation);
+            gaussian.rotation = glm::vec4(rotated.x, rotated.y, rotated.z, rotated.w);
+        }
+    }
+    const uint32_t gpuTriangleEnd =
+        std::min<uint32_t>(object.firstTriangle + object.triangleCount, static_cast<uint32_t>(gpu.triangles.size()));
+    for (uint32_t triangleIndex = object.firstTriangle; triangleIndex < gpuTriangleEnd; ++triangleIndex) {
+        SceneTriangle& triangle = gpu.triangles[triangleIndex];
+        triangle.p0 = glm::vec4(rotatePoint(glm::vec3(triangle.p0)), triangle.p0.w);
+        triangle.p1 = glm::vec4(rotatePoint(glm::vec3(triangle.p1)), triangle.p1.w);
+        triangle.p2 = glm::vec4(rotatePoint(glm::vec3(triangle.p2)), triangle.p2.w);
+        triangle.n0 = glm::vec4(rotateDirection(glm::vec3(triangle.n0)), triangle.n0.w);
+        triangle.n1 = glm::vec4(rotateDirection(glm::vec3(triangle.n1)), triangle.n1.w);
+        triangle.n2 = glm::vec4(rotateDirection(glm::vec3(triangle.n2)), triangle.n2.w);
+    }
+
+    if (gpu.vertexBuffer && object.vertexCount > 0) {
+        const std::span<const std::byte> vertexBytes = AsBytes(std::span<const SceneVertex>(gpu.rasterVertices));
+        const size_t offsetBytes = static_cast<size_t>(object.firstVertex) * sizeof(SceneVertex);
+        const size_t sizeBytes = static_cast<size_t>(object.vertexCount) * sizeof(SceneVertex);
+        device.UploadBufferData(gpu.vertexBuffer, offsetBytes, vertexBytes.subspan(offsetBytes, sizeBytes));
+    }
+    if (gpu.triangleBuffer && object.triangleCount > 0) {
+        const std::span<const std::byte> triangleBytes = AsBytes(std::span<const SceneTriangle>(gpu.triangles));
+        const size_t offsetBytes = static_cast<size_t>(object.firstTriangle) * sizeof(SceneTriangle);
+        const size_t sizeBytes = static_cast<size_t>(object.triangleCount) * sizeof(SceneTriangle);
+        device.UploadBufferData(gpu.triangleBuffer, offsetBytes, triangleBytes.subspan(offsetBytes, sizeBytes));
+    }
+    if (gpu.gaussianBuffer && !gpu.gaussians.empty()) {
+        const std::span<const std::byte> gaussianBytes = AsBytes(std::span<const GaussianPrimitive>(gpu.gaussians));
+        device.UploadBufferData(gpu.gaussianBuffer, 0, gaussianBytes);
+    }
+    device.FlushUploadBatch();
+    ++_contentVersion;
+    return true;
+}
+
+bool Scene::ScaleObject(render::RenderDevice& device, uint32_t objectIndex, float uniformScale)
+{
+    if (!std::isfinite(uniformScale) || uniformScale <= 0.0f) {
+        return false;
+    }
+    if (std::abs(uniformScale - 1.0f) <= 1.0e-5f) {
+        return true;
+    }
+
+    const std::shared_ptr<PreparedScene> prepared = _prepared;
+    const std::shared_ptr<ParsedScene> parsed = _parsed;
+    if (!prepared || objectIndex >= prepared->objects.size()) {
+        return false;
+    }
+
+    SceneObject& object = prepared->objects[objectIndex];
+    const glm::vec3 center = object.bounds.center;
+    auto scalePoint = [&](glm::vec3 position) {
+        return center + (position - center) * uniformScale;
+    };
+
+    object.worldTransform = glm::translate(glm::mat4(1.0f), center) * glm::scale(glm::mat4(1.0f), glm::vec3(uniformScale))
+        * glm::translate(glm::mat4(1.0f), -center) * object.worldTransform;
+    if (parsed && objectIndex < parsed->objects.size()) {
+        ParsedSceneObject& parsedObject = parsed->objects[objectIndex];
+        parsedObject.worldTransform = glm::translate(glm::mat4(1.0f), center) * glm::scale(glm::mat4(1.0f), glm::vec3(uniformScale))
+            * glm::translate(glm::mat4(1.0f), -center) * parsedObject.worldTransform;
+        const uint32_t primitiveEnd = parsedObject.firstPrimitive + parsedObject.primitiveCount;
+        for (uint32_t primitiveIndex = parsedObject.firstPrimitive; primitiveIndex < primitiveEnd; ++primitiveIndex) {
+            parsed->primitives[primitiveIndex].worldTransform =
+                glm::translate(glm::mat4(1.0f), center) * glm::scale(glm::mat4(1.0f), glm::vec3(uniformScale))
+                * glm::translate(glm::mat4(1.0f), -center) * parsed->primitives[primitiveIndex].worldTransform;
+        }
+    }
+
+    const uint32_t vertexEnd = std::min<uint32_t>(object.firstVertex + object.vertexCount, static_cast<uint32_t>(prepared->vertices.size()));
+    for (uint32_t vertexIndex = object.firstVertex; vertexIndex < vertexEnd; ++vertexIndex) {
+        prepared->vertices[vertexIndex].position = scalePoint(prepared->vertices[vertexIndex].position);
+    }
+    if (prepared->sceneKind == SceneKind::Gaussian || prepared->sceneKind == SceneKind::PointCloud) {
+        for (GaussianPrimitive& gaussian : prepared->gaussians) {
+            gaussian.positionOpacity = glm::vec4(scalePoint(glm::vec3(gaussian.positionOpacity)), gaussian.positionOpacity.w);
+            gaussian.scale *= glm::vec4(glm::vec3(uniformScale), 1.0f);
+        }
+    }
+
+    const uint32_t surfaceEnd =
+        std::min<uint32_t>(object.firstSurface + object.surfaceCount, static_cast<uint32_t>(prepared->surfaceBounds.size()));
+    for (uint32_t surfaceIndex = object.firstSurface; surfaceIndex < surfaceEnd; ++surfaceIndex) {
+        prepared->surfaceBounds[surfaceIndex].center = scalePoint(prepared->surfaceBounds[surfaceIndex].center);
+        prepared->surfaceBounds[surfaceIndex].radius *= uniformScale;
+    }
+
+    const uint32_t triangleEnd =
+        std::min<uint32_t>(object.firstTriangle + object.triangleCount, static_cast<uint32_t>(prepared->triangles.size()));
+    for (uint32_t triangleIndex = object.firstTriangle; triangleIndex < triangleEnd; ++triangleIndex) {
+        SceneTriangle& triangle = prepared->triangles[triangleIndex];
+        triangle.p0 = glm::vec4(scalePoint(glm::vec3(triangle.p0)), triangle.p0.w);
+        triangle.p1 = glm::vec4(scalePoint(glm::vec3(triangle.p1)), triangle.p1.w);
+        triangle.p2 = glm::vec4(scalePoint(glm::vec3(triangle.p2)), triangle.p2.w);
+    }
+
+    object.bounds = ComputeVertexRangeBounds(prepared->vertices, object.firstVertex, object.vertexCount);
+    FinalizeBounds(prepared->bounds, prepared->vertices);
+
+    if (_gpu == nullptr) {
+        ++_contentVersion;
+        return true;
+    }
+
+    GpuScene& gpu = *_gpu;
+    const uint32_t gpuVertexEnd =
+        std::min<uint32_t>(object.firstVertex + object.vertexCount, static_cast<uint32_t>(gpu.rasterVertices.size()));
+    for (uint32_t vertexIndex = object.firstVertex; vertexIndex < gpuVertexEnd; ++vertexIndex) {
+        gpu.rasterVertices[vertexIndex].position = scalePoint(gpu.rasterVertices[vertexIndex].position);
+    }
+    if (prepared->sceneKind == SceneKind::Gaussian || prepared->sceneKind == SceneKind::PointCloud) {
+        for (GaussianPrimitive& gaussian : gpu.gaussians) {
+            gaussian.positionOpacity = glm::vec4(scalePoint(glm::vec3(gaussian.positionOpacity)), gaussian.positionOpacity.w);
+            gaussian.scale *= glm::vec4(glm::vec3(uniformScale), 1.0f);
+        }
+    }
+    const uint32_t gpuTriangleEnd =
+        std::min<uint32_t>(object.firstTriangle + object.triangleCount, static_cast<uint32_t>(gpu.triangles.size()));
+    for (uint32_t triangleIndex = object.firstTriangle; triangleIndex < gpuTriangleEnd; ++triangleIndex) {
+        SceneTriangle& triangle = gpu.triangles[triangleIndex];
+        triangle.p0 = glm::vec4(scalePoint(glm::vec3(triangle.p0)), triangle.p0.w);
+        triangle.p1 = glm::vec4(scalePoint(glm::vec3(triangle.p1)), triangle.p1.w);
+        triangle.p2 = glm::vec4(scalePoint(glm::vec3(triangle.p2)), triangle.p2.w);
+    }
+
+    if (gpu.vertexBuffer && object.vertexCount > 0) {
+        const std::span<const std::byte> vertexBytes = AsBytes(std::span<const SceneVertex>(gpu.rasterVertices));
+        const size_t offsetBytes = static_cast<size_t>(object.firstVertex) * sizeof(SceneVertex);
+        const size_t sizeBytes = static_cast<size_t>(object.vertexCount) * sizeof(SceneVertex);
+        device.UploadBufferData(gpu.vertexBuffer, offsetBytes, vertexBytes.subspan(offsetBytes, sizeBytes));
+    }
+    if (gpu.triangleBuffer && object.triangleCount > 0) {
+        const std::span<const std::byte> triangleBytes = AsBytes(std::span<const SceneTriangle>(gpu.triangles));
+        const size_t offsetBytes = static_cast<size_t>(object.firstTriangle) * sizeof(SceneTriangle);
+        const size_t sizeBytes = static_cast<size_t>(object.triangleCount) * sizeof(SceneTriangle);
+        device.UploadBufferData(gpu.triangleBuffer, offsetBytes, triangleBytes.subspan(offsetBytes, sizeBytes));
+    }
+    if (gpu.gaussianBuffer && !gpu.gaussians.empty()) {
+        const std::span<const std::byte> gaussianBytes = AsBytes(std::span<const GaussianPrimitive>(gpu.gaussians));
+        device.UploadBufferData(gpu.gaussianBuffer, 0, gaussianBytes);
+    }
+    device.FlushUploadBatch();
+    ++_contentVersion;
+    return true;
+}
+
 bool Scene::RebuildRayTracing(render::RenderDevice& device)
 {
     if (_gpu == nullptr || !device.IsRayTracingSupported() || GetPreparedOrEmpty().indices.empty()) {

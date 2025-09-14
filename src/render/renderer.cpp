@@ -16,6 +16,7 @@
 #include <SDL_vulkan.h>
 #include <fmt/format.h>
 #include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 #include <vesta/core/debug.h>
 #include <vesta/render/passes/composite_pass.h>
@@ -1047,6 +1048,43 @@ bool Renderer::SetSelectedObjectPosition(glm::vec3 position)
 
     const glm::vec3 delta = position - objects[_selection.objectIndex].GetTranslation();
     if (!_scene.TranslateObject(_device, _selection.objectIndex, delta)) {
+        return false;
+    }
+
+    const bool rebuildRayTracing = _scene.HasRayTracingScene() && _settings.enablePathTracing
+        && GetActivePathTraceBackend() == PathTraceBackend::HardwareRT;
+    OnSceneEdited(rebuildRayTracing);
+    return true;
+}
+
+bool Renderer::RotateSelectedObject(glm::vec3 eulerDeltaDegrees)
+{
+    const auto& objects = _scene.GetObjects();
+    if (_selection.kind != SelectionKind::Object || _selection.objectIndex >= objects.size()) {
+        return false;
+    }
+    if (glm::dot(eulerDeltaDegrees, eulerDeltaDegrees) <= 1.0e-8f) {
+        return true;
+    }
+
+    const glm::quat rotationDelta(glm::radians(eulerDeltaDegrees));
+    if (!_scene.RotateObject(_device, _selection.objectIndex, rotationDelta)) {
+        return false;
+    }
+
+    const bool rebuildRayTracing = _scene.HasRayTracingScene() && _settings.enablePathTracing
+        && GetActivePathTraceBackend() == PathTraceBackend::HardwareRT;
+    OnSceneEdited(rebuildRayTracing);
+    return true;
+}
+
+bool Renderer::ScaleSelectedObject(float uniformScale)
+{
+    const auto& objects = _scene.GetObjects();
+    if (_selection.kind != SelectionKind::Object || _selection.objectIndex >= objects.size()) {
+        return false;
+    }
+    if (!_scene.ScaleObject(_device, _selection.objectIndex, uniformScale)) {
         return false;
     }
 
