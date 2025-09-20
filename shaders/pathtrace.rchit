@@ -41,6 +41,7 @@ layout(push_constant) uniform PathTracePushConstants {
     mat4 inverseViewProjection;
     vec4 cameraPositionAndFrame;
     vec4 lightDirectionAndIntensity;
+    vec4 environmentParams;
     uint triangleBufferIndex;
     uint triangleCount;
     uint frameIndex;

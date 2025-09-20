@@ -435,9 +435,11 @@ void ConfigureGeometryRasterPass(Renderer& renderer, IRenderPass& pass, const Re
 void ConfigureDeferredLightingPass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
 {
     auto& lightingPass = static_cast<DeferredLightingPass&>(pass);
+    const auto& settings = renderer.GetSettings();
     lightingPass.SetInputs(resources.gbufferAlbedo, resources.gbufferNormal, resources.gbufferMaterial, resources.sceneDepth);
     lightingPass.SetCamera(&renderer.GetCamera());
-    lightingPass.SetLight(renderer.GetSettings().lightDirectionAndIntensity);
+    lightingPass.SetLight(settings.lightDirectionAndIntensity);
+    lightingPass.SetEnvironment(glm::vec4(settings.environmentIntensity, glm::radians(settings.environmentRotationDegrees), 0.0f, 0.0f));
     lightingPass.SetOutput(resources.deferredLighting);
 }
 
@@ -483,18 +485,20 @@ void ConfigureOfficialGaussianPass(Renderer& renderer, IRenderPass& pass, const 
 void ConfigurePathTracerPass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
 {
     auto& pathTracerPass = static_cast<PathTracerPass&>(pass);
+    const auto& settings = renderer.GetSettings();
     pathTracerPass.SetOutput(resources.pathTraceOutput);
     pathTracerPass.SetDenoiserGuides(resources.pathTraceNormalGuide, resources.pathTraceDepthGuide);
     pathTracerPass.SetScene(&renderer.GetScene());
     pathTracerPass.SetCamera(&renderer.GetCamera());
     pathTracerPass.SetFrameIndex(renderer.GetPathTraceFrameIndex());
     pathTracerPass.SetFrameSlot(renderer.GetFrameSlot());
-    pathTracerPass.SetEnabled(renderer.GetSettings().enablePathTracing);
-    pathTracerPass.SetBackendPreference(renderer.GetSettings().pathTraceBackend);
-    pathTracerPass.SetLight(renderer.GetSettings().lightDirectionAndIntensity);
-    pathTracerPass.SetSamplesPerPixel(renderer.GetSettings().pathTraceSamplesPerPixel);
-    pathTracerPass.SetMaxBounces(renderer.GetSettings().pathTraceMaxBounces);
-    pathTracerPass.SetDebugView(renderer.GetSettings().pathTraceDebugView);
+    pathTracerPass.SetEnabled(settings.enablePathTracing);
+    pathTracerPass.SetBackendPreference(settings.pathTraceBackend);
+    pathTracerPass.SetLight(settings.lightDirectionAndIntensity);
+    pathTracerPass.SetEnvironment(glm::vec4(settings.environmentIntensity, glm::radians(settings.environmentRotationDegrees), 0.0f, 0.0f));
+    pathTracerPass.SetSamplesPerPixel(settings.pathTraceSamplesPerPixel);
+    pathTracerPass.SetMaxBounces(settings.pathTraceMaxBounces);
+    pathTracerPass.SetDebugView(settings.pathTraceDebugView);
 }
 
 void ConfigurePathDenoisePass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)

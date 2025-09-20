@@ -1507,6 +1507,13 @@ void VestaEngine::build_main_menu_bar()
                 if (ImGui::SliderFloat("Intensity", &settings.lightDirectionAndIntensity.w, 0.0f, 8.0f, "%.2f")) {
                     _renderer.ResetAccumulation();
                 }
+                ImGui::SeparatorText("Environment");
+                if (ImGui::SliderFloat("Env Intensity", &settings.environmentIntensity, 0.0f, 4.0f, "%.2f")) {
+                    _renderer.ResetAccumulation();
+                }
+                if (ImGui::SliderFloat("Env Rotation", &settings.environmentRotationDegrees, 0.0f, 360.0f, "%.1f deg")) {
+                    _renderer.ResetAccumulation();
+                }
                 if (ImGui::MenuItem("Select For Drag")) {
                     _renderer.SelectDirectionalLight();
                 }
@@ -2295,7 +2302,14 @@ void VestaEngine::build_debug_ui()
                     if (ImGui::SliderFloat("Intensity", &settings.lightDirectionAndIntensity.w, 0.0f, 8.0f, "%.2f")) {
                         _renderer.ResetAccumulation();
                     }
-                    ImGui::Text("Environment HDRI %s", "not loaded");
+                    ImGui::SeparatorText("Environment");
+                    if (ImGui::SliderFloat("Env Intensity", &settings.environmentIntensity, 0.0f, 4.0f, "%.2f")) {
+                        _renderer.ResetAccumulation();
+                    }
+                    if (ImGui::SliderFloat("Env Rotation", &settings.environmentRotationDegrees, 0.0f, 360.0f, "%.1f deg")) {
+                        _renderer.ResetAccumulation();
+                    }
+                    ImGui::TextUnformatted("Source Procedural Sky");
                     ImGui::EndTabItem();
                 }
                 if (ImGui::BeginTabItem("Materials")) {

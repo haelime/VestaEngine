@@ -24,6 +24,7 @@ struct DeferredLightingPushConstants {
     glm::mat4 inverseViewProjection{ 1.0f };
     glm::vec4 cameraPosition{ 0.0f };
     glm::vec4 lightDirectionAndIntensity{ -0.4f, -1.0f, -0.3f, 2.0f };
+    glm::vec4 environmentParams{ 1.0f, 0.0f, 0.0f, 0.0f };
 };
 } // namespace
 
@@ -48,6 +49,11 @@ void DeferredLightingPass::SetCamera(const Camera* camera)
 void DeferredLightingPass::SetLight(glm::vec4 lightDirectionAndIntensity)
 {
     _lightDirectionAndIntensity = lightDirectionAndIntensity;
+}
+
+void DeferredLightingPass::SetEnvironment(glm::vec4 environmentParams)
+{
+    _environmentParams = environmentParams;
 }
 
 void DeferredLightingPass::Initialize(RenderDevice& device)
@@ -105,6 +111,7 @@ void DeferredLightingPass::Execute(const RenderGraphContext& context)
         .inverseViewProjection = _camera->GetInverseViewProjection(),
         .cameraPosition = glm::vec4(_camera->GetPosition(), 1.0f),
         .lightDirectionAndIntensity = _lightDirectionAndIntensity,
+        .environmentParams = _environmentParams,
     };
 
     VkCommandBuffer commandBuffer = context.GetCommandBuffer();
