@@ -25,6 +25,8 @@ struct ComputePathTracePushConstants {
     glm::vec4 cameraPositionAndFrame{ 0.0f };
     glm::vec4 lightDirectionAndIntensity{ -0.4f, -1.0f, -0.3f, 2.0f };
     glm::vec4 environmentParams{ 1.0f, 0.0f, 0.0f, 0.0f };
+    glm::vec4 cameraRightAperture{ 1.0f, 0.0f, 0.0f, 0.0f };
+    glm::vec4 cameraUpFocalDistance{ 0.0f, 1.0f, 0.0f, 5.0f };
     uint32_t outputImageIndex{ 0 };
     uint32_t triangleBufferIndex{ 0 };
     uint32_t triangleCount{ 0 };
@@ -36,6 +38,8 @@ struct HardwarePathTracePushConstants {
     glm::vec4 cameraPositionAndFrame{ 0.0f };
     glm::vec4 lightDirectionAndIntensity{ -0.4f, -1.0f, -0.3f, 2.0f };
     glm::vec4 environmentParams{ 1.0f, 0.0f, 0.0f, 0.0f };
+    glm::vec4 cameraRightAperture{ 1.0f, 0.0f, 0.0f, 0.0f };
+    glm::vec4 cameraUpFocalDistance{ 0.0f, 1.0f, 0.0f, 5.0f };
     uint32_t triangleBufferIndex{ 0 };
     uint32_t triangleCount{ 0 };
     uint32_t frameIndex{ 0 };
@@ -120,6 +124,12 @@ void PathTracerPass::SetLight(glm::vec4 lightDirectionAndIntensity)
 void PathTracerPass::SetEnvironment(glm::vec4 environmentParams)
 {
     _environmentParams = environmentParams;
+}
+
+void PathTracerPass::SetLens(glm::vec4 cameraRightAperture, glm::vec4 cameraUpFocalDistance)
+{
+    _cameraRightAperture = cameraRightAperture;
+    _cameraUpFocalDistance = cameraUpFocalDistance;
 }
 
 void PathTracerPass::SetSamplesPerPixel(uint32_t samplesPerPixel)
@@ -397,6 +407,8 @@ void PathTracerPass::Execute(const RenderGraphContext& context)
             .cameraPositionAndFrame = glm::vec4(_camera->GetPosition(), static_cast<float>(_frameIndex)),
             .lightDirectionAndIntensity = _lightDirectionAndIntensity,
             .environmentParams = _environmentParams,
+            .cameraRightAperture = _cameraRightAperture,
+            .cameraUpFocalDistance = _cameraUpFocalDistance,
             .triangleBufferIndex = context.GetDevice().GetBufferResource(_scene->GetTriangleBuffer()).bindless.storageBuffer,
             .triangleCount = static_cast<uint32_t>(_scene->GetTriangles().size()),
             .frameIndex = _frameIndex,
@@ -494,6 +506,8 @@ void PathTracerPass::Execute(const RenderGraphContext& context)
         .cameraPositionAndFrame = glm::vec4(_camera->GetPosition(), static_cast<float>(_frameIndex)),
         .lightDirectionAndIntensity = _lightDirectionAndIntensity,
         .environmentParams = _environmentParams,
+        .cameraRightAperture = _cameraRightAperture,
+        .cameraUpFocalDistance = _cameraUpFocalDistance,
         .outputImageIndex = outputImageIndex,
         .triangleBufferIndex = triangleBufferIndex,
         .triangleCount = static_cast<uint32_t>(_scene->GetTriangles().size()),

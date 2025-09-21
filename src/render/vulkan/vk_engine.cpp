@@ -2234,6 +2234,11 @@ void VestaEngine::build_debug_ui()
                         _renderer.ResetAccumulation();
                     }
                     ImGui::SliderFloat("Exposure", &settings.cameraExposureEv, -6.0f, 6.0f, "%.2f EV");
+                    bool dofChanged = ImGui::SliderFloat("Aperture Radius", &settings.cameraApertureRadius, 0.0f, 0.25f, "%.3f");
+                    dofChanged |= ImGui::SliderFloat("Focal Distance", &settings.cameraFocalDistance, 0.05f, 100.0f, "%.2f");
+                    if (dofChanged) {
+                        _renderer.ResetAccumulation();
+                    }
                     ImGui::Text("Position %.3f %.3f %.3f", camera.GetPosition().x, camera.GetPosition().y, camera.GetPosition().z);
                     ImGui::Text("Rotation %.2f %.2f %.2f",
                         camera.GetRotationDegrees().x,

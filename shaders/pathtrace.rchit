@@ -42,6 +42,8 @@ layout(push_constant) uniform PathTracePushConstants {
     vec4 cameraPositionAndFrame;
     vec4 lightDirectionAndIntensity;
     vec4 environmentParams;
+    vec4 cameraRightAperture;
+    vec4 cameraUpFocalDistance;
     uint triangleBufferIndex;
     uint triangleCount;
     uint frameIndex;

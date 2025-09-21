@@ -55,6 +55,8 @@ layout(push_constant) uniform PathTracePushConstants {
     vec4 cameraPositionAndFrame;
     vec4 lightDirectionAndIntensity;
     vec4 environmentParams;
+    vec4 cameraRightAperture;
+    vec4 cameraUpFocalDistance;
     uint triangleBufferIndex;
     uint triangleCount;
     uint frameIndex;
@@ -152,6 +154,13 @@ vec3 sampleGGXReflection(vec3 normal, vec3 viewDir, float roughness, inout uint 
         reflected = cosineHemisphere(normal, rng);
     }
     return reflected;
+}
+
+vec2 sampleDisk(inout uint rng)
+{
+    float angle = 2.0 * PI * rand(rng);
+    float radius = sqrt(rand(rng));
+    return vec2(cos(angle), sin(angle)) * radius;
 }
 
 float luminance(vec3 value)
@@ -436,6 +445,12 @@ void main() {
 
         vec3 rayOrigin = pc.cameraPositionAndFrame.xyz;
         vec3 rayDirection = normalize(farPoint.xyz - nearPoint.xyz);
+        if (pc.cameraRightAperture.w > 0.0 && pc.cameraUpFocalDistance.w > 0.0) {
+            vec3 focalPoint = rayOrigin + rayDirection * pc.cameraUpFocalDistance.w;
+            vec2 lensSample = sampleDisk(rng) * pc.cameraRightAperture.w;
+            rayOrigin += pc.cameraRightAperture.xyz * lensSample.x + pc.cameraUpFocalDistance.xyz * lensSample.y;
+            rayDirection = normalize(focalPoint - rayOrigin);
+        }
         vec3 albedo;
         vec3 normal;
         float depth;

@@ -197,6 +197,8 @@ struct RendererSettings {
     float environmentIntensity{ 1.0f };
     float environmentRotationDegrees{ 0.0f };
     float cameraExposureEv{ 0.0f };
+    float cameraApertureRadius{ 0.0f };
+    float cameraFocalDistance{ 5.0f };
     PathTraceBackend pathTraceBackend{ PathTraceBackend::Auto };
 };
 

@@ -496,6 +496,9 @@ void ConfigurePathTracerPass(Renderer& renderer, IRenderPass& pass, const Render
     pathTracerPass.SetBackendPreference(settings.pathTraceBackend);
     pathTracerPass.SetLight(settings.lightDirectionAndIntensity);
     pathTracerPass.SetEnvironment(glm::vec4(settings.environmentIntensity, glm::radians(settings.environmentRotationDegrees), 0.0f, 0.0f));
+    const glm::vec3 cameraRight = glm::normalize(glm::cross(renderer.GetCamera().GetForward(), renderer.GetCamera().GetUp()));
+    pathTracerPass.SetLens(glm::vec4(cameraRight, settings.cameraApertureRadius),
+        glm::vec4(renderer.GetCamera().GetUp(), settings.cameraFocalDistance));
     pathTracerPass.SetSamplesPerPixel(settings.pathTraceSamplesPerPixel);
     pathTracerPass.SetMaxBounces(settings.pathTraceMaxBounces);
     pathTracerPass.SetDebugView(settings.pathTraceDebugView);
