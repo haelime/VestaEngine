@@ -11,8 +11,8 @@ namespace vesta::render {
 namespace {
 constexpr uint32_t kInvalidImageIndex = kInvalidResourceIndex;
 
-// mode selects which intermediate result to visualize. params.x is currently
-// used for gaussian blending strength in composite mode.
+// mode selects which intermediate result to visualize. params.x controls
+// gaussian blending strength and params.y is camera exposure in EV stops.
 struct CompositePushConstants {
     glm::uvec4 imageIndices0{ kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex };
     glm::uvec4 imageIndices1{ 0u, 0u, 0u, 0u };
@@ -61,6 +61,11 @@ void CompositePass::SetMode(uint32_t mode, float gaussianMix, uint32_t debugView
     _gaussianMix = gaussianMix;
     _debugView = debugView;
     _gaussianDebugView = gaussianDebugView;
+}
+
+void CompositePass::SetExposure(float exposureEv)
+{
+    _exposureEv = exposureEv;
 }
 
 void CompositePass::Initialize(RenderDevice& device)
@@ -133,7 +138,7 @@ void CompositePass::Execute(const RenderGraphContext& context)
         .imageIndices1 = glm::uvec4(_mode, _debugView, _gaussianDebugView, kInvalidImageIndex),
         .imageIndices2 = glm::uvec4(kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex),
         .gaussianDebug = glm::uvec4(_gaussianTileRangeBufferIndex, _gaussianTileCountX, _gaussianTileCountY, 8u),
-        .params = glm::vec4(_gaussianMix, 0.0f, 0.0f, 0.0f),
+        .params = glm::vec4(_gaussianMix, _exposureEv, 0.0f, 0.0f),
     };
 
     if (_deferredLighting) {

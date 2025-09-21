@@ -530,6 +530,7 @@ void ConfigureCompositePass(Renderer& renderer, IRenderPass& pass, const Rendere
         renderer.GetSettings().gaussianMix,
         static_cast<uint32_t>(renderer.GetSettings().debugView),
         static_cast<uint32_t>(renderer.GetSettings().gaussianDebugView));
+    compositePass.SetExposure(renderer.GetSettings().cameraExposureEv);
 }
 } // namespace
 

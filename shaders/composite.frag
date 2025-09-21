@@ -213,6 +213,7 @@ void main() {
     }
 
     if (pc.imageIndices1.x != 2u) {
+        composite *= exp2(pc.params.y);
         composite = tonemap(composite);
         composite = pow(composite, vec3(1.0 / 2.2));
     }

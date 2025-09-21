@@ -2233,6 +2233,7 @@ void VestaEngine::build_debug_ui()
                         camera.SetLens(fov, nearPlane, farPlane);
                         _renderer.ResetAccumulation();
                     }
+                    ImGui::SliderFloat("Exposure", &settings.cameraExposureEv, -6.0f, 6.0f, "%.2f EV");
                     ImGui::Text("Position %.3f %.3f %.3f", camera.GetPosition().x, camera.GetPosition().y, camera.GetPosition().z);
                     ImGui::Text("Rotation %.2f %.2f %.2f",
                         camera.GetRotationDegrees().x,
