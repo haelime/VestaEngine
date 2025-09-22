@@ -1051,7 +1051,8 @@ void VestaEngine::finish_benchmark()
                << "gaussian,path_tracing,texture_streaming,indirect_draw,frustum_culling,distance_culling,"
                << "gaussian_trained,gaussian_count,gaussian_sh_degree,gaussian_view_dependent_color,gaussian_antialiasing,"
                << "gaussian_fast_culling,gaussian_opacity,gaussian_mix,gaussian_interactive_preview,"
-               << "pt_scale,avg_frame_ms,p95_frame_ms,min_frame_ms,max_frame_ms,avg_fps,frame_count,"
+               << "pt_scale,environment_intensity,environment_rotation_deg,exposure_ev,aperture_radius,focal_distance,"
+               << "avg_frame_ms,p95_frame_ms,min_frame_ms,max_frame_ms,avg_fps,frame_count,"
                << "vertices,triangles,surfaces,textures_total,textures_resident,parse_ms,prepare_ms,"
                << "geometry_upload_ms,texture_upload_ms,blas_ms,tlas_ms,"
                << "gaussian_projected,gaussian_duplicates,gaussian_padded_duplicates,gaussian_tiles,gaussian_avg_tiles_touched,gaussian_rebuilds,"
@@ -1100,6 +1101,11 @@ void VestaEngine::finish_benchmark()
            << settings.gaussianMix << ','
            << (_renderer.IsGaussianInteractivePreviewActive() ? "true" : "false") << ','
            << settings.pathTraceResolutionScale << ','
+           << settings.environmentIntensity << ','
+           << settings.environmentRotationDegrees << ','
+           << settings.cameraExposureEv << ','
+           << settings.cameraApertureRadius << ','
+           << settings.cameraFocalDistance << ','
            << averageFrameMs << ','
            << p95FrameMs << ','
            << minFrameMs << ','
@@ -1641,6 +1647,19 @@ void VestaEngine::build_debug_ui()
                 ImGui::TextUnformatted("Frame Index");
                 ImGui::TableSetColumnIndex(3);
                 ImGui::Text("%d / PT %u", _frameNumber, _renderer.GetPathTraceFrameIndex());
+
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextUnformatted("Environment");
+                ImGui::TableSetColumnIndex(1);
+                ImGui::Text("%.2fx / %.1f deg", settings.environmentIntensity, settings.environmentRotationDegrees);
+                ImGui::TableSetColumnIndex(2);
+                ImGui::TextUnformatted("Camera Look");
+                ImGui::TableSetColumnIndex(3);
+                ImGui::Text("%.2f EV / A %.3f / F %.2f",
+                    settings.cameraExposureEv,
+                    settings.cameraApertureRadius,
+                    settings.cameraFocalDistance);
                 ImGui::EndTable();
             }
 
