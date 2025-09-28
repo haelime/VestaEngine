@@ -43,6 +43,15 @@ VestaEngine& VestaEngine::Get() { return *loadedEngine; }
 
 namespace {
 constexpr size_t kMaxRecentScenePaths = 5;
+constexpr std::array<std::string_view, 7> kBenchmarkPassNames{
+    "GeometryRasterPass",
+    "DeferredLightingPass",
+    "GaussianSplatPass",
+    "OfficialGaussianRasterPass",
+    "PathTracerPass",
+    "PathDenoisePass",
+    "CompositePass",
+};
 
 #if defined(NDEBUG)
 constexpr bool bUseValidationLayers = false;
@@ -134,6 +143,16 @@ const char* PathTraceDebugViewLabel(vesta::render::PathTraceDebugView view)
     default:
         return "Final";
     }
+}
+
+std::optional<size_t> BenchmarkPassIndex(std::string_view passName)
+{
+    for (size_t index = 0; index < kBenchmarkPassNames.size(); ++index) {
+        if (kBenchmarkPassNames[index] == passName) {
+            return index;
+        }
+    }
+    return std::nullopt;
 }
 
 const char* SceneLoadStateLabel(vesta::render::SceneLoadState state)
@@ -978,6 +997,8 @@ void VestaEngine::update_benchmark(float deltaSeconds)
         _benchmarkState.capturing = true;
         _benchmarkState.captureElapsed = 0.0f;
         _benchmarkState.frameTimesMs.clear();
+        _benchmarkState.passGpuMsSums.fill(0.0f);
+        _benchmarkState.passGpuSampleCounts.fill(0u);
         _benchmarkState.screenshotQueued = false;
         fmt::println(
             "Capturing benchmark for {:.1f}s -> {}", benchmark.captureSeconds, benchmark.csvOutputPath.string());
@@ -994,6 +1015,14 @@ void VestaEngine::update_benchmark(float deltaSeconds)
     }
 
     _benchmarkState.frameTimesMs.push_back(_renderer.GetFrameTimeMs());
+    for (const auto& timing : _renderer.GetLastRenderGraphTimings()) {
+        const std::optional<size_t> passIndex = BenchmarkPassIndex(timing.name);
+        if (!passIndex.has_value() || !timing.gpuTimingValid) {
+            continue;
+        }
+        _benchmarkState.passGpuMsSums[*passIndex] += timing.gpuMs;
+        ++_benchmarkState.passGpuSampleCounts[*passIndex];
+    }
     _benchmarkState.captureElapsed += deltaSeconds;
     if (_benchmarkState.captureElapsed < benchmark.captureSeconds) {
         return;
@@ -1057,7 +1086,9 @@ void VestaEngine::finish_benchmark()
                << "geometry_upload_ms,texture_upload_ms,blas_ms,tlas_ms,"
                << "gaussian_projected,gaussian_duplicates,gaussian_padded_duplicates,gaussian_tiles,gaussian_avg_tiles_touched,gaussian_rebuilds,"
                << "gaussian_preprocess_ms,gaussian_scan_ms,gaussian_duplicate_ms,gaussian_sort_ms,gaussian_range_ms,"
-               << "gaussian_raster_ms,gaussian_total_build_ms\n";
+               << "gaussian_raster_ms,gaussian_total_build_ms,"
+               << "geometry_pass_gpu_ms,deferred_pass_gpu_ms,legacy_gaussian_pass_gpu_ms,official_gaussian_pass_gpu_ms,"
+               << "path_trace_pass_gpu_ms,path_denoise_pass_gpu_ms,composite_pass_gpu_ms\n";
     }
 
     const auto now = std::chrono::system_clock::now();
@@ -1075,6 +1106,10 @@ void VestaEngine::finish_benchmark()
     const auto& scene = _renderer.GetScene();
     const auto& status = _renderer.GetSceneLoadStatus();
     const auto extent = _renderer.GetRenderDevice().GetSwapchainExtent();
+    const auto averagePassGpuMs = [&](size_t passIndex) {
+        const uint32_t sampleCount = _benchmarkState.passGpuSampleCounts[passIndex];
+        return sampleCount > 0u ? _benchmarkState.passGpuMsSums[passIndex] / static_cast<float>(sampleCount) : 0.0f;
+    };
 
     output << CsvEscape(timestampStream.str()) << ','
            << CsvEscape(scene.GetSourcePath().string()) << ','
@@ -1135,7 +1170,14 @@ void VestaEngine::finish_benchmark()
            << _renderer.GetOfficialGaussianSortMs() << ','
            << _renderer.GetOfficialGaussianRangeMs() << ','
            << _renderer.GetOfficialGaussianRasterMs() << ','
-           << _renderer.GetOfficialGaussianTotalBuildMs() << '\n';
+           << _renderer.GetOfficialGaussianTotalBuildMs() << ','
+           << averagePassGpuMs(0) << ','
+           << averagePassGpuMs(1) << ','
+           << averagePassGpuMs(2) << ','
+           << averagePassGpuMs(3) << ','
+           << averagePassGpuMs(4) << ','
+           << averagePassGpuMs(5) << ','
+           << averagePassGpuMs(6) << '\n';
 
     fmt::println("Benchmark written to {}", outputPath.string());
 }

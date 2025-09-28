@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <array>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -127,6 +128,8 @@ private:
         uint32_t stableGaussianFrames{ 0 };
         bool screenshotQueued{ false };
         std::vector<float> frameTimesMs;
+        std::array<float, 7> passGpuMsSums{};
+        std::array<uint32_t, 7> passGpuSampleCounts{};
     } _benchmarkState;
     struct StartupState {
         bool safeOverridesActive{ false };
