@@ -47,9 +47,10 @@ enum class RendererDebugView : uint32_t {
     FinalColor = 0,
     Albedo = 1,
     Normal = 2,
-    Roughness = 3,
-    Metallic = 4,
-    Emissive = 5,
+    Depth = 3,
+    Roughness = 4,
+    Metallic = 5,
+    Emissive = 6,
 };
 
 enum class GaussianDebugView : uint32_t {

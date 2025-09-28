@@ -5,6 +5,7 @@
 // portfolio view shown in Composite mode.
 
 layout(rgba16f, set = 0, binding = 1) uniform readonly image2D storageImages[];
+layout(set = 0, binding = 0) uniform sampler2D sampledImages[];
 layout(set = 0, binding = 2, std430) readonly buffer StorageBufferUvec2 {
     uvec2 values[];
 } storageBuffersUvec2[];
@@ -81,16 +82,26 @@ vec3 resolveDebugView(ivec2 pixel)
         return loadStorage(pc.imageIndices2.y, pixel).rgb;
     }
     if (debugView == 3u) {
+        if (!hasImage(pc.imageIndices2.w)) { return vec3(-1.0); }
+        ivec2 size = textureSize(sampledImages[nonuniformEXT(int(pc.imageIndices2.w))], 0);
+        ivec2 clampedPixel = clamp(pixel, ivec2(0), size - ivec2(1));
+        float depth = texelFetch(sampledImages[nonuniformEXT(int(pc.imageIndices2.w))], clampedPixel, 0).r;
+        float nearPlane = max(pc.params.z, 0.0001);
+        float farPlane = max(pc.params.w, nearPlane + 0.0001);
+        float linearDepth = (nearPlane * farPlane) / max(farPlane + depth * (nearPlane - farPlane), 0.0001);
+        return vec3(clamp(linearDepth / farPlane, 0.0, 1.0));
+    }
+    if (debugView == 4u) {
         if (!hasImage(pc.imageIndices2.y)) { return vec3(-1.0); }
         vec4 normalRoughness = loadStorage(pc.imageIndices2.y, pixel);
         return vec3(normalRoughness.a);
     }
-    if (debugView == 4u) {
+    if (debugView == 5u) {
         if (!hasImage(pc.imageIndices2.z)) { return vec3(-1.0); }
         vec4 material = loadStorage(pc.imageIndices2.z, pixel);
         return vec3(material.a);
     }
-    if (debugView == 5u) {
+    if (debugView == 6u) {
         if (!hasImage(pc.imageIndices2.z)) { return vec3(-1.0); }
         return loadStorage(pc.imageIndices2.z, pixel).rgb;
     }

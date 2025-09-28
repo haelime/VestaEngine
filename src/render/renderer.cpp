@@ -520,7 +520,7 @@ void ConfigureCompositePass(Renderer& renderer, IRenderPass& pass, const Rendere
     auto& compositePass = static_cast<CompositePass&>(pass);
     const GraphTextureHandle pathTraceInput = resources.pathTraceDenoised ? resources.pathTraceDenoised : resources.pathTraceOutput;
     compositePass.SetInputs(resources.deferredLighting, pathTraceInput, resources.gaussianAccum, resources.gaussianReveal, resources.gaussianDebug);
-    compositePass.SetGBufferInputs(resources.gbufferAlbedo, resources.gbufferNormal, resources.gbufferMaterial);
+    compositePass.SetGBufferInputs(resources.gbufferAlbedo, resources.gbufferNormal, resources.gbufferMaterial, resources.sceneDepth);
     uint32_t gaussianTileRangeBufferIndex = kInvalidResourceIndex;
     if (const auto* officialGaussian = renderer.FindPass<OfficialGaussianRasterPass>("official-gaussian-raster")) {
         gaussianTileRangeBufferIndex = officialGaussian->GetTileRangeBindlessStorageIndex();
@@ -534,6 +534,7 @@ void ConfigureCompositePass(Renderer& renderer, IRenderPass& pass, const Rendere
         static_cast<uint32_t>(renderer.GetSettings().debugView),
         static_cast<uint32_t>(renderer.GetSettings().gaussianDebugView));
     compositePass.SetExposure(renderer.GetSettings().cameraExposureEv);
+    compositePass.SetDepthRange(renderer.GetCamera().GetNearPlane(), renderer.GetCamera().GetFarPlane());
 }
 } // namespace
 

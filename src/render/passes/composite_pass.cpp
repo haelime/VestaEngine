@@ -11,8 +11,8 @@ namespace vesta::render {
 namespace {
 constexpr uint32_t kInvalidImageIndex = kInvalidResourceIndex;
 
-// mode selects which intermediate result to visualize. params.x controls
-// gaussian blending strength and params.y is camera exposure in EV stops.
+// mode selects which intermediate result to visualize. params holds gaussian
+// blend strength, exposure EV, and near/far planes for linear depth debug.
 struct CompositePushConstants {
     glm::uvec4 imageIndices0{ kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex };
     glm::uvec4 imageIndices1{ 0u, 0u, 0u, 0u };
@@ -36,11 +36,13 @@ void CompositePass::SetInputs(
     _gaussianDebug = gaussianDebug;
 }
 
-void CompositePass::SetGBufferInputs(GraphTextureHandle albedo, GraphTextureHandle normalRoughness, GraphTextureHandle material)
+void CompositePass::SetGBufferInputs(
+    GraphTextureHandle albedo, GraphTextureHandle normalRoughness, GraphTextureHandle material, GraphTextureHandle depth)
 {
     _gbufferAlbedo = albedo;
     _gbufferNormalRoughness = normalRoughness;
     _gbufferMaterial = material;
+    _gbufferDepth = depth;
 }
 
 void CompositePass::SetGaussianDebugResources(uint32_t tileRangeBufferIndex, uint32_t tileCountX, uint32_t tileCountY)
@@ -66,6 +68,12 @@ void CompositePass::SetMode(uint32_t mode, float gaussianMix, uint32_t debugView
 void CompositePass::SetExposure(float exposureEv)
 {
     _exposureEv = exposureEv;
+}
+
+void CompositePass::SetDepthRange(float nearPlane, float farPlane)
+{
+    _nearPlane = nearPlane;
+    _farPlane = farPlane;
 }
 
 void CompositePass::Initialize(RenderDevice& device)
@@ -124,6 +132,9 @@ void CompositePass::Setup(RenderGraphBuilder& builder)
     if (_gbufferMaterial) {
         builder.Read(_gbufferMaterial, ResourceUsage::StorageRead);
     }
+    if (_gbufferDepth) {
+        builder.Read(_gbufferDepth, ResourceUsage::SampledRead);
+    }
     builder.Write(_output, ResourceUsage::ColorAttachmentWrite);
 }
 
@@ -138,7 +149,7 @@ void CompositePass::Execute(const RenderGraphContext& context)
         .imageIndices1 = glm::uvec4(_mode, _debugView, _gaussianDebugView, kInvalidImageIndex),
         .imageIndices2 = glm::uvec4(kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex),
         .gaussianDebug = glm::uvec4(_gaussianTileRangeBufferIndex, _gaussianTileCountX, _gaussianTileCountY, 8u),
-        .params = glm::vec4(_gaussianMix, _exposureEv, 0.0f, 0.0f),
+        .params = glm::vec4(_gaussianMix, _exposureEv, _nearPlane, _farPlane),
     };
 
     if (_deferredLighting) {
@@ -172,6 +183,10 @@ void CompositePass::Execute(const RenderGraphContext& context)
     if (_gbufferMaterial) {
         const ImageHandle handle = context.GetTextureHandle(_gbufferMaterial);
         pushConstants.imageIndices2.z = context.GetDevice().GetImageResource(handle).bindless.storageImage;
+    }
+    if (_gbufferDepth) {
+        const ImageHandle handle = context.GetTextureHandle(_gbufferDepth);
+        pushConstants.imageIndices2.w = context.GetDevice().GetImageResource(handle).bindless.sampledImage;
     }
 
     VkClearValue clearValue{};

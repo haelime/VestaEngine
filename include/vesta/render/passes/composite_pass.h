@@ -12,11 +12,12 @@ public:
         GraphTextureHandle gaussianAccum,
         GraphTextureHandle gaussianReveal,
         GraphTextureHandle gaussianDebug);
-    void SetGBufferInputs(GraphTextureHandle albedo, GraphTextureHandle normalRoughness, GraphTextureHandle material);
+    void SetGBufferInputs(GraphTextureHandle albedo, GraphTextureHandle normalRoughness, GraphTextureHandle material, GraphTextureHandle depth);
     void SetGaussianDebugResources(uint32_t tileRangeBufferIndex, uint32_t tileCountX, uint32_t tileCountY);
     void SetOutput(GraphTextureHandle output);
     void SetMode(uint32_t mode, float gaussianMix, uint32_t debugView, uint32_t gaussianDebugView);
     void SetExposure(float exposureEv);
+    void SetDepthRange(float nearPlane, float farPlane);
 
     [[nodiscard]] std::string_view Name() const override { return "CompositePass"; }
     void Initialize(RenderDevice& device) override;
@@ -33,6 +34,7 @@ private:
     GraphTextureHandle _gbufferAlbedo{};
     GraphTextureHandle _gbufferNormalRoughness{};
     GraphTextureHandle _gbufferMaterial{};
+    GraphTextureHandle _gbufferDepth{};
     GraphTextureHandle _output{};
     uint32_t _mode{ 0 };
     uint32_t _debugView{ 0 };
@@ -42,6 +44,8 @@ private:
     uint32_t _gaussianTileCountY{ 0 };
     float _gaussianMix{ 0.25f };
     float _exposureEv{ 0.0f };
+    float _nearPlane{ 0.05f };
+    float _farPlane{ 500.0f };
     VkPipelineLayout _pipelineLayout{ VK_NULL_HANDLE };
     VkPipeline _pipeline{ VK_NULL_HANDLE };
     VkShaderModule _vertexShader{ VK_NULL_HANDLE };
