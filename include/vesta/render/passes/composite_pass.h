@@ -14,7 +14,11 @@ public:
         GraphTextureHandle gaussianAccum,
         GraphTextureHandle gaussianReveal,
         GraphTextureHandle gaussianDebug);
-    void SetGBufferInputs(GraphTextureHandle albedo, GraphTextureHandle normalRoughness, GraphTextureHandle material, GraphTextureHandle depth);
+    void SetGBufferInputs(GraphTextureHandle albedo,
+        GraphTextureHandle normalRoughness,
+        GraphTextureHandle material,
+        GraphTextureHandle debug,
+        GraphTextureHandle depth);
     void SetGaussianDebugResources(uint32_t tileRangeBufferIndex, uint32_t tileCountX, uint32_t tileCountY);
     void SetOutput(GraphTextureHandle output);
     void SetMode(uint32_t mode, float gaussianMix, uint32_t debugView, uint32_t gaussianDebugView);
@@ -37,6 +41,7 @@ private:
     GraphTextureHandle _gbufferAlbedo{};
     GraphTextureHandle _gbufferNormalRoughness{};
     GraphTextureHandle _gbufferMaterial{};
+    GraphTextureHandle _gbufferDebug{};
     GraphTextureHandle _gbufferDepth{};
     GraphTextureHandle _output{};
     uint32_t _mode{ 0 };

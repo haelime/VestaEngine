@@ -30,6 +30,7 @@ layout(push_constant) uniform GeometryPushConstants {
 layout(location = 0) out vec4 outAlbedoAo;
 layout(location = 1) out vec4 outNormalRoughness;
 layout(location = 2) out vec4 outEmissiveMetallic;
+layout(location = 3) out vec4 outDebug;
 
 const uint kInvalidResourceIndex = 0xFFFFFFFFu;
 
@@ -84,4 +85,5 @@ void main() {
     outAlbedoAo = vec4(baseColor.rgb, ao);
     outNormalRoughness = vec4(normal * 0.5 + 0.5, roughness);
     outEmissiveMetallic = vec4(emissive, metallic);
+    outDebug = vec4(fract(inTexCoord), fract(float(inMaterialIndex) * 0.61803398875), 1.0);
 }

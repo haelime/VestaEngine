@@ -17,6 +17,7 @@ struct CompositePushConstants {
     glm::uvec4 imageIndices0{ kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex };
     glm::uvec4 imageIndices1{ 0u, 0u, 0u, 0u };
     glm::uvec4 imageIndices2{ kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex };
+    glm::uvec4 imageIndices3{ kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex };
     glm::uvec4 gaussianDebug{ kInvalidImageIndex, 0u, 0u, 8u };
     glm::vec4 params{ 0.25f, 0.0f, 0.0f, 0.0f };
     glm::mat4 inverseViewProjection{ 1.0f };
@@ -38,11 +39,16 @@ void CompositePass::SetInputs(
 }
 
 void CompositePass::SetGBufferInputs(
-    GraphTextureHandle albedo, GraphTextureHandle normalRoughness, GraphTextureHandle material, GraphTextureHandle depth)
+    GraphTextureHandle albedo,
+    GraphTextureHandle normalRoughness,
+    GraphTextureHandle material,
+    GraphTextureHandle debug,
+    GraphTextureHandle depth)
 {
     _gbufferAlbedo = albedo;
     _gbufferNormalRoughness = normalRoughness;
     _gbufferMaterial = material;
+    _gbufferDebug = debug;
     _gbufferDepth = depth;
 }
 
@@ -138,6 +144,9 @@ void CompositePass::Setup(RenderGraphBuilder& builder)
     if (_gbufferMaterial) {
         builder.Read(_gbufferMaterial, ResourceUsage::StorageRead);
     }
+    if (_gbufferDebug) {
+        builder.Read(_gbufferDebug, ResourceUsage::StorageRead);
+    }
     if (_gbufferDepth) {
         builder.Read(_gbufferDepth, ResourceUsage::SampledRead);
     }
@@ -154,6 +163,7 @@ void CompositePass::Execute(const RenderGraphContext& context)
         .imageIndices0 = glm::uvec4(kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex),
         .imageIndices1 = glm::uvec4(_mode, _debugView, _gaussianDebugView, kInvalidImageIndex),
         .imageIndices2 = glm::uvec4(kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex),
+        .imageIndices3 = glm::uvec4(kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex),
         .gaussianDebug = glm::uvec4(_gaussianTileRangeBufferIndex, _gaussianTileCountX, _gaussianTileCountY, 8u),
         .params = glm::vec4(_gaussianMix, _exposureEv, _nearPlane, _farPlane),
         .inverseViewProjection = _inverseViewProjection,
@@ -190,6 +200,10 @@ void CompositePass::Execute(const RenderGraphContext& context)
     if (_gbufferMaterial) {
         const ImageHandle handle = context.GetTextureHandle(_gbufferMaterial);
         pushConstants.imageIndices2.z = context.GetDevice().GetImageResource(handle).bindless.storageImage;
+    }
+    if (_gbufferDebug) {
+        const ImageHandle handle = context.GetTextureHandle(_gbufferDebug);
+        pushConstants.imageIndices3.x = context.GetDevice().GetImageResource(handle).bindless.storageImage;
     }
     if (_gbufferDepth) {
         const ImageHandle handle = context.GetTextureHandle(_gbufferDepth);

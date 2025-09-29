@@ -23,11 +23,13 @@ constexpr VmaAllocationCreateFlags kMappedHostFlags =
     VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
 } // namespace
 
-void GeometryRasterPass::SetTargets(GraphTextureHandle albedo, GraphTextureHandle normal, GraphTextureHandle material, GraphTextureHandle depth)
+void GeometryRasterPass::SetTargets(
+    GraphTextureHandle albedo, GraphTextureHandle normal, GraphTextureHandle material, GraphTextureHandle debug, GraphTextureHandle depth)
 {
     _albedoTarget = albedo;
     _normalTarget = normal;
     _materialTarget = material;
+    _debugTarget = debug;
     _depthTarget = depth;
 }
 
@@ -122,6 +124,7 @@ void GeometryRasterPass::Initialize(RenderDevice& device)
         VK_FORMAT_R16G16B16A16_SFLOAT,
         VK_FORMAT_R16G16B16A16_SFLOAT,
         VK_FORMAT_R16G16B16A16_SFLOAT,
+        VK_FORMAT_R16G16B16A16_SFLOAT,
     };
     pipelineDesc.depthFormat = VK_FORMAT_D32_SFLOAT;
     pipelineDesc.vertexShader = _vertexShader;
@@ -140,6 +143,7 @@ void GeometryRasterPass::Setup(RenderGraphBuilder& builder)
     builder.Write(_albedoTarget, ResourceUsage::ColorAttachmentWrite);
     builder.Write(_normalTarget, ResourceUsage::ColorAttachmentWrite);
     builder.Write(_materialTarget, ResourceUsage::ColorAttachmentWrite);
+    builder.Write(_debugTarget, ResourceUsage::ColorAttachmentWrite);
     builder.Write(_depthTarget, ResourceUsage::DepthAttachmentWrite);
 }
 
@@ -155,8 +159,10 @@ void GeometryRasterPass::Execute(const RenderGraphContext& context)
     normalClear.color = { { 0.5f, 0.5f, 1.0f, 1.0f } };
     VkClearValue materialClear{};
     materialClear.color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
+    VkClearValue debugClear{};
+    debugClear.color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
 
-    std::array<VkRenderingAttachmentInfo, 3> colorAttachments{};
+    std::array<VkRenderingAttachmentInfo, 4> colorAttachments{};
     colorAttachments[0].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
     colorAttachments[0].imageView = context.GetTextureView(_albedoTarget);
     colorAttachments[0].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -177,6 +183,13 @@ void GeometryRasterPass::Execute(const RenderGraphContext& context)
     colorAttachments[2].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     colorAttachments[2].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     colorAttachments[2].clearValue = materialClear;
+
+    colorAttachments[3].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    colorAttachments[3].imageView = context.GetTextureView(_debugTarget);
+    colorAttachments[3].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    colorAttachments[3].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAttachments[3].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachments[3].clearValue = debugClear;
 
     VkRenderingAttachmentInfo depthAttachment{};
     depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;

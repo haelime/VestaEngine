@@ -49,9 +49,11 @@ enum class RendererDebugView : uint32_t {
     Normal = 2,
     WorldPosition = 3,
     Depth = 4,
-    Roughness = 5,
-    Metallic = 6,
-    Emissive = 7,
+    UV = 5,
+    MaterialId = 6,
+    Roughness = 7,
+    Metallic = 8,
+    Emissive = 9,
 };
 
 enum class GaussianDebugView : uint32_t {
@@ -230,6 +232,7 @@ struct RendererGraphResources {
     GraphTextureHandle gbufferAlbedo{};
     GraphTextureHandle gbufferNormal{};
     GraphTextureHandle gbufferMaterial{};
+    GraphTextureHandle gbufferDebug{};
     GraphTextureHandle sceneDepth{};
     GraphTextureHandle deferredLighting{};
     GraphTextureHandle pathTraceOutput{};

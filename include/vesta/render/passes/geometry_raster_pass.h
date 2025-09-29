@@ -13,7 +13,8 @@ namespace vesta::render {
 // later passes can light or debug the scene without re-drawing geometry.
 class GeometryRasterPass final : public IRenderPass {
 public:
-    void SetTargets(GraphTextureHandle albedo, GraphTextureHandle normal, GraphTextureHandle material, GraphTextureHandle depth);
+    void SetTargets(
+        GraphTextureHandle albedo, GraphTextureHandle normal, GraphTextureHandle material, GraphTextureHandle debug, GraphTextureHandle depth);
     void SetScene(const vesta::scene::Scene* scene);
     void SetCamera(const Camera* camera);
     void SetVisibleSurfaceIndices(const std::vector<uint32_t>* visibleSurfaceIndices);
@@ -29,6 +30,7 @@ private:
     GraphTextureHandle _albedoTarget{};
     GraphTextureHandle _normalTarget{};
     GraphTextureHandle _materialTarget{};
+    GraphTextureHandle _debugTarget{};
     GraphTextureHandle _depthTarget{};
     const vesta::scene::Scene* _scene{ nullptr };
     const Camera* _camera{ nullptr };
