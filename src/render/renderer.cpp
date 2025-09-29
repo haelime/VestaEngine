@@ -534,6 +534,7 @@ void ConfigureCompositePass(Renderer& renderer, IRenderPass& pass, const Rendere
         static_cast<uint32_t>(renderer.GetSettings().debugView),
         static_cast<uint32_t>(renderer.GetSettings().gaussianDebugView));
     compositePass.SetExposure(renderer.GetSettings().cameraExposureEv);
+    compositePass.SetInverseViewProjection(renderer.GetCamera().GetInverseViewProjection());
     compositePass.SetDepthRange(renderer.GetCamera().GetNearPlane(), renderer.GetCamera().GetFarPlane());
 }
 } // namespace

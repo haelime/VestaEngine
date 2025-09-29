@@ -16,6 +16,7 @@ layout(push_constant) uniform CompositePushConstants {
     uvec4 imageIndices2;
     uvec4 gaussianDebug;
     vec4 params;
+    mat4 inverseViewProjection;
 } pc;
 
 layout(location = 0) out vec4 outColor;
@@ -70,6 +71,14 @@ vec4 loadStorage(uint index, ivec2 pixel)
     return imageLoad(storageImages[nonuniformEXT(int(index))], clampedPixel);
 }
 
+vec3 reconstructWorldPosition(ivec2 pixel, ivec2 size, float depth)
+{
+    vec2 uv = (vec2(pixel) + 0.5) / vec2(size);
+    vec2 ndc = uv * 2.0 - 1.0;
+    vec4 world = pc.inverseViewProjection * vec4(ndc, depth, 1.0);
+    return world.xyz / max(world.w, 0.0001);
+}
+
 vec3 resolveDebugView(ivec2 pixel)
 {
     uint debugView = pc.imageIndices1.y;
@@ -86,22 +95,30 @@ vec3 resolveDebugView(ivec2 pixel)
         ivec2 size = textureSize(sampledImages[nonuniformEXT(int(pc.imageIndices2.w))], 0);
         ivec2 clampedPixel = clamp(pixel, ivec2(0), size - ivec2(1));
         float depth = texelFetch(sampledImages[nonuniformEXT(int(pc.imageIndices2.w))], clampedPixel, 0).r;
+        vec3 worldPosition = reconstructWorldPosition(clampedPixel, size, depth);
+        return clamp(worldPosition * 0.05 + 0.5, vec3(0.0), vec3(1.0));
+    }
+    if (debugView == 4u) {
+        if (!hasImage(pc.imageIndices2.w)) { return vec3(-1.0); }
+        ivec2 size = textureSize(sampledImages[nonuniformEXT(int(pc.imageIndices2.w))], 0);
+        ivec2 clampedPixel = clamp(pixel, ivec2(0), size - ivec2(1));
+        float depth = texelFetch(sampledImages[nonuniformEXT(int(pc.imageIndices2.w))], clampedPixel, 0).r;
         float nearPlane = max(pc.params.z, 0.0001);
         float farPlane = max(pc.params.w, nearPlane + 0.0001);
         float linearDepth = (nearPlane * farPlane) / max(farPlane + depth * (nearPlane - farPlane), 0.0001);
         return vec3(clamp(linearDepth / farPlane, 0.0, 1.0));
     }
-    if (debugView == 4u) {
+    if (debugView == 5u) {
         if (!hasImage(pc.imageIndices2.y)) { return vec3(-1.0); }
         vec4 normalRoughness = loadStorage(pc.imageIndices2.y, pixel);
         return vec3(normalRoughness.a);
     }
-    if (debugView == 5u) {
+    if (debugView == 6u) {
         if (!hasImage(pc.imageIndices2.z)) { return vec3(-1.0); }
         vec4 material = loadStorage(pc.imageIndices2.z, pixel);
         return vec3(material.a);
     }
-    if (debugView == 6u) {
+    if (debugView == 7u) {
         if (!hasImage(pc.imageIndices2.z)) { return vec3(-1.0); }
         return loadStorage(pc.imageIndices2.z, pixel).rgb;
     }

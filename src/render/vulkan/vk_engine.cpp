@@ -1839,7 +1839,7 @@ void VestaEngine::build_debug_ui()
         ImGui::SetNextWindowSize(ImVec2(360.0f, 300.0f), ImGuiCond_FirstUseEver);
         if (ImGui::Begin("Debug Visualization", &_showDebugVisualizationPanel, ImGuiWindowFlags_NoSavedSettings)) {
             const char* commonViews[] = {
-                "Final Color", "Albedo / Base Color", "Normal", "Linear Depth", "Roughness", "Metallic", "Emissive"
+                "Final Color", "Albedo / Base Color", "Normal", "World Position", "Linear Depth", "Roughness", "Metallic", "Emissive"
             };
             int commonView = static_cast<int>(settings.debugView);
             if (ImGui::Combo("Debug View", &commonView, commonViews, IM_ARRAYSIZE(commonViews))) {

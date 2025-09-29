@@ -1,5 +1,7 @@
 #pragma once
 
+#include <glm/glm.hpp>
+
 #include <vesta/render/graph/render_graph.h>
 
 namespace vesta::render {
@@ -17,6 +19,7 @@ public:
     void SetOutput(GraphTextureHandle output);
     void SetMode(uint32_t mode, float gaussianMix, uint32_t debugView, uint32_t gaussianDebugView);
     void SetExposure(float exposureEv);
+    void SetInverseViewProjection(const glm::mat4& inverseViewProjection);
     void SetDepthRange(float nearPlane, float farPlane);
 
     [[nodiscard]] std::string_view Name() const override { return "CompositePass"; }
@@ -44,6 +47,7 @@ private:
     uint32_t _gaussianTileCountY{ 0 };
     float _gaussianMix{ 0.25f };
     float _exposureEv{ 0.0f };
+    glm::mat4 _inverseViewProjection{ 1.0f };
     float _nearPlane{ 0.05f };
     float _farPlane{ 500.0f };
     VkPipelineLayout _pipelineLayout{ VK_NULL_HANDLE };

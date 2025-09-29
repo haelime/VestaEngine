@@ -19,6 +19,7 @@ struct CompositePushConstants {
     glm::uvec4 imageIndices2{ kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex };
     glm::uvec4 gaussianDebug{ kInvalidImageIndex, 0u, 0u, 8u };
     glm::vec4 params{ 0.25f, 0.0f, 0.0f, 0.0f };
+    glm::mat4 inverseViewProjection{ 1.0f };
 };
 } // namespace
 
@@ -68,6 +69,11 @@ void CompositePass::SetMode(uint32_t mode, float gaussianMix, uint32_t debugView
 void CompositePass::SetExposure(float exposureEv)
 {
     _exposureEv = exposureEv;
+}
+
+void CompositePass::SetInverseViewProjection(const glm::mat4& inverseViewProjection)
+{
+    _inverseViewProjection = inverseViewProjection;
 }
 
 void CompositePass::SetDepthRange(float nearPlane, float farPlane)
@@ -150,6 +156,7 @@ void CompositePass::Execute(const RenderGraphContext& context)
         .imageIndices2 = glm::uvec4(kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex),
         .gaussianDebug = glm::uvec4(_gaussianTileRangeBufferIndex, _gaussianTileCountX, _gaussianTileCountY, 8u),
         .params = glm::vec4(_gaussianMix, _exposureEv, _nearPlane, _farPlane),
+        .inverseViewProjection = _inverseViewProjection,
     };
 
     if (_deferredLighting) {
