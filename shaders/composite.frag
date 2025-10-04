@@ -119,16 +119,21 @@ vec3 resolveDebugView(ivec2 pixel)
         return fract(vec3(0.97, 0.57, 0.23) + idHash * vec3(1.0, 2.17, 3.31));
     }
     if (debugView == 7u) {
+        if (!hasImage(pc.imageIndices3.x)) { return vec3(-1.0); }
+        float idHash = loadStorage(pc.imageIndices3.x, pixel).a;
+        return fract(vec3(0.19, 0.83, 0.41) + idHash * vec3(3.73, 1.61, 2.29));
+    }
+    if (debugView == 8u) {
         if (!hasImage(pc.imageIndices2.y)) { return vec3(-1.0); }
         vec4 normalRoughness = loadStorage(pc.imageIndices2.y, pixel);
         return vec3(normalRoughness.a);
     }
-    if (debugView == 8u) {
+    if (debugView == 9u) {
         if (!hasImage(pc.imageIndices2.z)) { return vec3(-1.0); }
         vec4 material = loadStorage(pc.imageIndices2.z, pixel);
         return vec3(material.a);
     }
-    if (debugView == 9u) {
+    if (debugView == 10u) {
         if (!hasImage(pc.imageIndices2.z)) { return vec3(-1.0); }
         return loadStorage(pc.imageIndices2.z, pixel).rgb;
     }

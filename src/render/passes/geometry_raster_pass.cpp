@@ -80,7 +80,7 @@ void GeometryRasterPass::Initialize(RenderDevice& device)
     binding.stride = sizeof(vesta::scene::SceneVertex);
     binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-    std::array<VkVertexInputAttributeDescription, 6> attributes{};
+    std::array<VkVertexInputAttributeDescription, 7> attributes{};
     attributes[0] = VkVertexInputAttributeDescription{
         .location = 0,
         .binding = 0,
@@ -116,6 +116,12 @@ void GeometryRasterPass::Initialize(RenderDevice& device)
         .binding = 0,
         .format = VK_FORMAT_R32_UINT,
         .offset = offsetof(vesta::scene::SceneVertex, materialIndex),
+    };
+    attributes[6] = VkVertexInputAttributeDescription{
+        .location = 6,
+        .binding = 0,
+        .format = VK_FORMAT_R32_UINT,
+        .offset = offsetof(vesta::scene::SceneVertex, objectIndex),
     };
 
     vkutil::GraphicsPipelineDesc pipelineDesc{};

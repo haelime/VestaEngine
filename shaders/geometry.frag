@@ -16,6 +16,7 @@ layout(location = 1) in vec4 inTangent;
 layout(location = 2) in vec4 inColor;
 layout(location = 3) in vec2 inTexCoord;
 layout(location = 4) flat in uint inMaterialIndex;
+layout(location = 5) flat in uint inObjectIndex;
 
 layout(set = 0, binding = 0) uniform sampler2D sampledImages[];
 layout(set = 0, binding = 2, std430) readonly buffer MaterialBuffer {
@@ -85,5 +86,7 @@ void main() {
     outAlbedoAo = vec4(baseColor.rgb, ao);
     outNormalRoughness = vec4(normal * 0.5 + 0.5, roughness);
     outEmissiveMetallic = vec4(emissive, metallic);
-    outDebug = vec4(fract(inTexCoord), fract(float(inMaterialIndex) * 0.61803398875), 1.0);
+    outDebug = vec4(fract(inTexCoord),
+        fract(float(inMaterialIndex) * 0.61803398875),
+        fract(float(inObjectIndex) * 0.75487766625));
 }

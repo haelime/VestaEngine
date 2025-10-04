@@ -45,6 +45,7 @@ struct SceneVertex {
     glm::vec2 texCoord{ 0.0f };
     glm::vec2 splatParams{ 1.0f, 1.0f };
     uint32_t materialIndex{ 0 };
+    uint32_t objectIndex{ 0 };
 };
 
 struct SceneMaterial {

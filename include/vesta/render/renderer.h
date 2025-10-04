@@ -51,9 +51,10 @@ enum class RendererDebugView : uint32_t {
     Depth = 4,
     UV = 5,
     MaterialId = 6,
-    Roughness = 7,
-    Metallic = 8,
-    Emissive = 9,
+    ObjectId = 7,
+    Roughness = 8,
+    Metallic = 9,
+    Emissive = 10,
 };
 
 enum class GaussianDebugView : uint32_t {

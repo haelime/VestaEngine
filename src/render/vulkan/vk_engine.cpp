@@ -1846,6 +1846,7 @@ void VestaEngine::build_debug_ui()
                 "Linear Depth",
                 "UV",
                 "Material ID",
+                "Object ID",
                 "Roughness",
                 "Metallic",
                 "Emissive",

@@ -2411,6 +2411,7 @@ bool Scene::PrepareParsedScene()
                     .texCoord = vertexIndex < primitive.texCoords.size() ? primitive.texCoords[vertexIndex] : glm::vec2(0.0f),
                     .splatParams = glm::vec2(1.0f, material.baseColorFactor.a),
                     .materialIndex = primitive.materialIndex,
+                    .objectIndex = primitive.objectIndex,
                 });
             }
             sceneObject.vertexCount += static_cast<uint32_t>(primitive.positions.size());
