@@ -1752,13 +1752,15 @@ void VestaEngine::build_debug_ui()
             }
 
             const std::vector<vesta::render::RenderPassDebugInfo> passInfo = _renderer.GetRenderPassDebugInfo();
-            if (ImGui::BeginTable("PassRegistry", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+            if (ImGui::BeginTable("PassRegistry", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
                 ImGui::TableSetupColumn("Pass");
                 ImGui::TableSetupColumn("Order", ImGuiTableColumnFlags_WidthFixed, 52.0f);
+                ImGui::TableSetupColumn("Move", ImGuiTableColumnFlags_WidthFixed, 74.0f);
                 ImGui::TableSetupColumn("Enabled", ImGuiTableColumnFlags_WidthFixed, 64.0f);
                 ImGui::TableSetupColumn("Id");
                 ImGui::TableHeadersRow();
-                for (const auto& pass : passInfo) {
+                for (size_t passIndex = 0; passIndex < passInfo.size(); ++passIndex) {
+                    const auto& pass = passInfo[passIndex];
                     bool enabled = pass.enabled;
                     ImGui::TableNextRow();
                     ImGui::TableSetColumnIndex(0);
@@ -1767,12 +1769,30 @@ void VestaEngine::build_debug_ui()
                     ImGui::Text("%u", pass.order);
                     ImGui::TableSetColumnIndex(2);
                     ImGui::PushID(pass.id.c_str());
+                    ImGui::BeginDisabled(passIndex == 0);
+                    if (ImGui::SmallButton("Up")) {
+                        const auto& previousPass = passInfo[passIndex - 1];
+                        _renderer.SetPassOrder(pass.id, previousPass.order);
+                        _renderer.SetPassOrder(previousPass.id, pass.order);
+                        _renderer.ResetAccumulation();
+                    }
+                    ImGui::EndDisabled();
+                    ImGui::SameLine();
+                    ImGui::BeginDisabled(passIndex + 1 >= passInfo.size());
+                    if (ImGui::SmallButton("Dn")) {
+                        const auto& nextPass = passInfo[passIndex + 1];
+                        _renderer.SetPassOrder(pass.id, nextPass.order);
+                        _renderer.SetPassOrder(nextPass.id, pass.order);
+                        _renderer.ResetAccumulation();
+                    }
+                    ImGui::EndDisabled();
+                    ImGui::TableSetColumnIndex(3);
                     if (ImGui::Checkbox("##enabled", &enabled)) {
                         _renderer.SetPassEnabled(pass.id, enabled);
                         _renderer.ResetAccumulation();
                     }
                     ImGui::PopID();
-                    ImGui::TableSetColumnIndex(3);
+                    ImGui::TableSetColumnIndex(4);
                     ImGui::TextUnformatted(pass.id.c_str());
                 }
                 ImGui::EndTable();
