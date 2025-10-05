@@ -2495,6 +2495,39 @@ void VestaEngine::build_debug_ui()
                 + BufferSizeBytes(device, scene.GetGaussianBuffer());
             const uint64_t accelerationBytes =
                 BufferSizeBytes(device, scene.GetBottomLevelBuffer()) + BufferSizeBytes(device, scene.GetTopLevelBuffer());
+            struct FrameTextureRow {
+                vesta::render::RenderGraphPassTiming::ResourceAccess access;
+                uint32_t readers{ 0 };
+                uint32_t writers{ 0 };
+            };
+            std::vector<FrameTextureRow> frameTextures;
+            auto addFrameTexture = [&](const vesta::render::RenderGraphPassTiming::ResourceAccess& access, bool writer) {
+                auto existing = std::find_if(frameTextures.begin(), frameTextures.end(), [&](const FrameTextureRow& row) {
+                    return row.access.name == access.name;
+                });
+                if (existing == frameTextures.end()) {
+                    FrameTextureRow row{};
+                    row.access = access;
+                    row.readers = writer ? 0u : 1u;
+                    row.writers = writer ? 1u : 0u;
+                    frameTextures.push_back(std::move(row));
+                    return;
+                }
+                existing->access = access;
+                existing->readers += writer ? 0u : 1u;
+                existing->writers += writer ? 1u : 0u;
+            };
+            for (const auto& timing : graphTimings) {
+                for (const auto& input : timing.inputs) {
+                    addFrameTexture(input, false);
+                }
+                for (const auto& output : timing.outputs) {
+                    addFrameTexture(output, true);
+                }
+            }
+            std::sort(frameTextures.begin(), frameTextures.end(), [](const FrameTextureRow& lhs, const FrameTextureRow& rhs) {
+                return lhs.access.name < rhs.access.name;
+            });
 
             if (ImGui::BeginTabBar("ResourceTabs")) {
                 if (ImGui::BeginTabItem("Summary")) {
@@ -2521,6 +2554,40 @@ void VestaEngine::build_debug_ui()
                     ImGui::Text("Upload Last %.2f MiB  Pending %.2f MiB",
                         MiB(static_cast<uint64_t>(device.GetUploadBatchStats().lastSubmittedBytes)),
                         MiB(static_cast<uint64_t>(device.GetUploadBatchStats().pendingBytes)));
+                    ImGui::EndTabItem();
+                }
+                if (ImGui::BeginTabItem("Frame Textures")) {
+                    if (ImGui::BeginTable("FrameTextureTable", 7, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+                        ImGui::TableSetupColumn("Name");
+                        ImGui::TableSetupColumn("Last Usage", ImGuiTableColumnFlags_WidthFixed, 108.0f);
+                        ImGui::TableSetupColumn("Format", ImGuiTableColumnFlags_WidthFixed, 82.0f);
+                        ImGui::TableSetupColumn("Resolution", ImGuiTableColumnFlags_WidthFixed, 96.0f);
+                        ImGui::TableSetupColumn("Reads", ImGuiTableColumnFlags_WidthFixed, 44.0f);
+                        ImGui::TableSetupColumn("Writes", ImGuiTableColumnFlags_WidthFixed, 48.0f);
+                        ImGui::TableSetupColumn("Scale", ImGuiTableColumnFlags_WidthFixed, 72.0f);
+                        ImGui::TableHeadersRow();
+                        for (const FrameTextureRow& row : frameTextures) {
+                            ImGui::TableNextRow();
+                            ImGui::TableSetColumnIndex(0);
+                            ImGui::TextUnformatted(row.access.name.c_str());
+                            ImGui::TableSetColumnIndex(1);
+                            ImGui::TextUnformatted(ResourceUsageLabel(row.access.usage));
+                            ImGui::TableSetColumnIndex(2);
+                            ImGui::TextUnformatted(VkFormatLabel(row.access.format));
+                            ImGui::TableSetColumnIndex(3);
+                            ImGui::Text("%ux%u", row.access.extent.width, row.access.extent.height);
+                            ImGui::TableSetColumnIndex(4);
+                            ImGui::Text("%u", row.readers);
+                            ImGui::TableSetColumnIndex(5);
+                            ImGui::Text("%u", row.writers);
+                            ImGui::TableSetColumnIndex(6);
+                            const VkExtent2D swapchainExtent = device.GetSwapchainExtent();
+                            const bool fullRes = row.access.extent.width == swapchainExtent.width
+                                && row.access.extent.height == swapchainExtent.height;
+                            ImGui::TextUnformatted(fullRes ? "full-res" : "scaled");
+                        }
+                        ImGui::EndTable();
+                    }
                     ImGui::EndTabItem();
                 }
                 if (ImGui::BeginTabItem("Textures")) {
