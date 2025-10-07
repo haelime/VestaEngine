@@ -477,6 +477,35 @@ std::string CsvEscape(std::string value)
     return "\"" + value + "\"";
 }
 
+std::string JsonEscape(std::string_view value)
+{
+    std::string escaped;
+    escaped.reserve(value.size() + 8);
+    for (char character : value) {
+        switch (character) {
+        case '\\':
+            escaped += "\\\\";
+            break;
+        case '"':
+            escaped += "\\\"";
+            break;
+        case '\n':
+            escaped += "\\n";
+            break;
+        case '\r':
+            escaped += "\\r";
+            break;
+        case '\t':
+            escaped += "\\t";
+            break;
+        default:
+            escaped += character;
+            break;
+        }
+    }
+    return escaped;
+}
+
 std::filesystem::path NormalizeScenePath(std::filesystem::path path)
 {
     if (path.empty()) {
@@ -767,7 +796,8 @@ void VestaEngine::run()
             }
             if (e.type == SDL_KEYDOWN && e.key.repeat == 0 && e.key.keysym.sym == SDLK_F12) {
                 const std::filesystem::path path = MakeTimestampedCapturePath("screenshot", ".png");
-                log_startup_event(_renderer.RequestScreenshot(path) ? "Screenshot queued: " + path.string() : "Screenshot failed");
+                log_startup_event(request_screenshot_with_metadata(path, "hotkey_screenshot") ? "Screenshot queued: " + path.string()
+                                                                                               : "Screenshot failed");
                 continue;
             }
 
@@ -1007,7 +1037,7 @@ void VestaEngine::update_benchmark(float deltaSeconds)
 
     if (!_benchmarkState.screenshotQueued && !benchmark.screenshotOutputPath.empty()) {
         _benchmarkState.screenshotQueued = true;
-        if (_renderer.RequestScreenshot(benchmark.screenshotOutputPath)) {
+        if (request_screenshot_with_metadata(benchmark.screenshotOutputPath, "benchmark")) {
             log_startup_event("Benchmark screenshot queued: " + benchmark.screenshotOutputPath.string());
         } else {
             log_startup_event("Benchmark screenshot failed");
@@ -1180,6 +1210,57 @@ void VestaEngine::finish_benchmark()
            << averagePassGpuMs(6) << '\n';
 
     fmt::println("Benchmark written to {}", outputPath.string());
+}
+
+bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& path, std::string_view captureKind)
+{
+    if (!_renderer.RequestScreenshot(path)) {
+        return false;
+    }
+
+    std::filesystem::path metadataPath = path;
+    metadataPath.replace_extension(".json");
+    if (metadataPath.is_relative()) {
+        metadataPath = std::filesystem::current_path() / metadataPath;
+    }
+    if (!metadataPath.parent_path().empty()) {
+        std::filesystem::create_directories(metadataPath.parent_path());
+    }
+
+    const auto& settings = _renderer.GetSettings();
+    const auto& scene = _renderer.GetScene();
+    const auto extent = _renderer.GetRenderDevice().GetSwapchainExtent();
+    const auto& camera = _renderer.GetCamera();
+
+    std::ofstream output(metadataPath, std::ios::trunc);
+    if (!output.is_open()) {
+        log_startup_event("Capture metadata failed: " + metadataPath.string());
+        return true;
+    }
+
+    output << "{\n"
+           << "  \"capture_kind\": \"" << JsonEscape(captureKind) << "\",\n"
+           << "  \"image\": \"" << JsonEscape(path.string()) << "\",\n"
+           << "  \"scene\": \"" << JsonEscape(scene.GetSourcePath().string()) << "\",\n"
+           << "  \"scene_kind\": \"" << JsonEscape(SceneKindLabel(scene.GetSceneKind())) << "\",\n"
+           << "  \"gpu\": \"" << JsonEscape(_renderer.GetRenderDevice().GetGpuName()) << "\",\n"
+           << "  \"api\": \"Vulkan\",\n"
+           << "  \"resolution\": \"" << extent.width << "x" << extent.height << "\",\n"
+           << "  \"display_mode\": \"" << DisplayModeLabel(settings.displayMode) << "\",\n"
+           << "  \"path_trace_backend\": \"" << PathTraceBackendLabel(_renderer.GetActivePathTraceBackend()) << "\",\n"
+           << "  \"frame_index\": " << _frameNumber << ",\n"
+           << "  \"path_trace_frame_index\": " << _renderer.GetPathTraceFrameIndex() << ",\n"
+           << "  \"environment_intensity\": " << settings.environmentIntensity << ",\n"
+           << "  \"environment_rotation_degrees\": " << settings.environmentRotationDegrees << ",\n"
+           << "  \"exposure_ev\": " << settings.cameraExposureEv << ",\n"
+           << "  \"aperture_radius\": " << settings.cameraApertureRadius << ",\n"
+           << "  \"focal_distance\": " << settings.cameraFocalDistance << ",\n"
+           << "  \"camera_fov_degrees\": " << camera.GetFovDegrees() << ",\n"
+           << "  \"camera_near\": " << camera.GetNearPlane() << ",\n"
+           << "  \"camera_far\": " << camera.GetFarPlane() << "\n"
+           << "}\n";
+    log_startup_event("Capture metadata written: " + metadataPath.string());
+    return true;
 }
 
 void VestaEngine::init_imgui()
@@ -1589,7 +1670,8 @@ void VestaEngine::build_main_menu_bar()
             }
             if (ImGui::MenuItem("Capture Frame")) {
                 const std::filesystem::path path = MakeTimestampedCapturePath("frame", ".png");
-                log_startup_event(_renderer.RequestScreenshot(path) ? "Frame capture queued: " + path.string() : "Frame capture failed");
+                log_startup_event(request_screenshot_with_metadata(path, "menu_frame_capture") ? "Frame capture queued: " + path.string()
+                                                                                                : "Frame capture failed");
             }
             ImGui::EndMenu();
         }
@@ -1719,12 +1801,14 @@ void VestaEngine::build_debug_ui()
             ImGui::SameLine();
             if (ImGui::Button("Capture")) {
                 const std::filesystem::path path = MakeTimestampedCapturePath("frame", ".png");
-                log_startup_event(_renderer.RequestScreenshot(path) ? "Frame capture queued: " + path.string() : "Frame capture failed");
+                log_startup_event(request_screenshot_with_metadata(path, "frame_overview_capture") ? "Frame capture queued: " + path.string()
+                                                                                                    : "Frame capture failed");
             }
             ImGui::SameLine();
             if (ImGui::Button("Screenshot")) {
                 const std::filesystem::path path = MakeTimestampedCapturePath("screenshot", ".png");
-                log_startup_event(_renderer.RequestScreenshot(path) ? "Screenshot queued: " + path.string() : "Screenshot failed");
+                log_startup_event(request_screenshot_with_metadata(path, "frame_overview_screenshot") ? "Screenshot queued: " + path.string()
+                                                                                                      : "Screenshot failed");
             }
             ImGui::SameLine();
             if (ImGui::Button("Shader Reload")) {

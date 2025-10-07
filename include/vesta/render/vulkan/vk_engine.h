@@ -114,6 +114,7 @@ private:
     void update_startup_state();
     void update_benchmark(float deltaSeconds);
     void finish_benchmark();
+    bool request_screenshot_with_metadata(const std::filesystem::path& path, std::string_view captureKind);
     void load_scene_path(const std::filesystem::path& path);
     void remember_recent_scene(const std::filesystem::path& path);
 
