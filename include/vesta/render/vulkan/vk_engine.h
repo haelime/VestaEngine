@@ -73,6 +73,12 @@ public:
     bool _showSceneInspectorPanel{ true };
     bool _showResourceInspectorPanel{ true };
     bool _showLogConsolePanel{ true };
+    bool _logShowInfo{ true };
+    bool _logShowPerformance{ true };
+    bool _logShowValidation{ true };
+    bool _logShowResources{ true };
+    bool _logShowErrors{ true };
+    std::array<char, 128> _logFilterText{};
     bool _vsyncUiPlaceholder{ false };
     bool _wireframeUiPlaceholder{ false };
     bool _overdrawUiPlaceholder{ false };

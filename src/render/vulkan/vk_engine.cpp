@@ -2793,24 +2793,79 @@ void VestaEngine::build_debug_ui()
         ImGui::SetNextWindowPos(ImVec2(18.0f, 612.0f), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(560.0f, 300.0f), ImGuiCond_FirstUseEver);
         if (ImGui::Begin("Log / Validation / Error Console", &_showLogConsolePanel, ImGuiWindowFlags_NoSavedSettings)) {
+            auto classifyLogLine = [](const std::string& line) {
+                struct Classification {
+                    bool perf{ false };
+                    bool validation{ false };
+                    bool resource{ false };
+                    bool error{ false };
+                };
+
+                return Classification{
+                    line.find("[PERF]") != std::string::npos,
+                    line.find("[VALIDATION]") != std::string::npos,
+                    line.find("[RESOURCE]") != std::string::npos,
+                    line.find("failed") != std::string::npos || line.find("[ERROR]") != std::string::npos,
+                };
+            };
+            auto lineMatchesFilters = [&](const std::string& line) {
+                const auto cls = classifyLogLine(line);
+                const bool isInfo = !cls.perf && !cls.validation && !cls.resource && !cls.error;
+                if ((isInfo && !_logShowInfo) || (cls.perf && !_logShowPerformance) || (cls.validation && !_logShowValidation) ||
+                    (cls.resource && !_logShowResources) || (cls.error && !_logShowErrors)) {
+                    return false;
+                }
+                const std::string_view filter{ _logFilterText.data() };
+                return filter.empty() || line.find(filter) != std::string::npos;
+            };
+
             int perfWarnings = 0;
             int validationWarnings = 0;
             int resourceWarnings = 0;
             int errors = 0;
+            int visibleLines = 0;
             for (const std::string& line : _logConsoleLines) {
-                perfWarnings += line.find("[PERF]") != std::string::npos ? 1 : 0;
-                validationWarnings += line.find("[VALIDATION]") != std::string::npos ? 1 : 0;
-                resourceWarnings += line.find("[RESOURCE]") != std::string::npos ? 1 : 0;
-                errors += line.find("failed") != std::string::npos || line.find("[ERROR]") != std::string::npos ? 1 : 0;
+                const auto cls = classifyLogLine(line);
+                perfWarnings += cls.perf ? 1 : 0;
+                validationWarnings += cls.validation ? 1 : 0;
+                resourceWarnings += cls.resource ? 1 : 0;
+                errors += cls.error ? 1 : 0;
+                visibleLines += lineMatchesFilters(line) ? 1 : 0;
             }
-            ImGui::Text("Perf %d  Validation %d  Resource %d  Errors %d",
+            ImGui::Text("Visible %d/%zu  Perf %d  Validation %d  Resource %d  Errors %d",
+                visibleLines,
+                _logConsoleLines.size(),
                 perfWarnings,
                 validationWarnings,
                 resourceWarnings,
                 errors);
             ImGui::Separator();
+            ImGui::Checkbox("Info", &_logShowInfo);
+            ImGui::SameLine();
+            ImGui::Checkbox("Perf", &_logShowPerformance);
+            ImGui::SameLine();
+            ImGui::Checkbox("Validation", &_logShowValidation);
+            ImGui::SameLine();
+            ImGui::Checkbox("Resource", &_logShowResources);
+            ImGui::SameLine();
+            ImGui::Checkbox("Errors", &_logShowErrors);
+            ImGui::SetNextItemWidth(240.0f);
+            ImGui::InputText("Filter", _logFilterText.data(), _logFilterText.size());
+            ImGui::Separator();
             if (ImGui::Button("Clear")) {
                 _logConsoleLines.clear();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Export Visible")) {
+                const std::filesystem::path path = MakeTimestampedCapturePath("log", ".txt");
+                std::filesystem::create_directories(path.parent_path());
+                std::ofstream output(path, std::ios::binary);
+                for (const std::string& line : _logConsoleLines) {
+                    if (lineMatchesFilters(line)) {
+                        output << line << '\n';
+                    }
+                }
+                log_startup_event(output ? "Log export written: " + path.string() : "Log export failed: " + path.string());
             }
             ImGui::SameLine();
             if (ImGui::Button("Shader Reload")) {
@@ -2831,11 +2886,15 @@ void VestaEngine::build_debug_ui()
             ImGui::Separator();
             ImGui::BeginChild("LogScroll", ImVec2(0.0f, 0.0f), true);
             for (const std::string& line : _logConsoleLines) {
-                if (line.find("[PERF]") != std::string::npos) {
+                if (!lineMatchesFilters(line)) {
+                    continue;
+                }
+                const auto cls = classifyLogLine(line);
+                if (cls.perf) {
                     ImGui::TextColored(ImVec4(1.0f, 0.78f, 0.28f, 1.0f), "%s", line.c_str());
-                } else if (line.find("[VALIDATION]") != std::string::npos || line.find("[RESOURCE]") != std::string::npos) {
+                } else if (cls.validation || cls.resource) {
                     ImGui::TextColored(ImVec4(0.45f, 0.74f, 1.0f, 1.0f), "%s", line.c_str());
-                } else if (line.find("failed") != std::string::npos || line.find("[ERROR]") != std::string::npos) {
+                } else if (cls.error) {
                     ImGui::TextColored(ImVec4(1.0f, 0.36f, 0.32f, 1.0f), "%s", line.c_str());
                 } else {
                     ImGui::TextUnformatted(line.c_str());
