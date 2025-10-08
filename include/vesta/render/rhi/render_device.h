@@ -47,6 +47,7 @@ struct RenderDeviceDesc {
     const char* engineName{ "VestaEngine" };
     VkExtent2D swapchainExtent{ 1700, 900 };
     bool enableValidation{ false };
+    bool enableVSync{ true };
 };
 
 // BufferDesc and ImageDesc are small "creation recipes" that the renderer and
@@ -160,6 +161,7 @@ public:
     void InvalidateBuffer(BufferHandle handle, VkDeviceSize offset, VkDeviceSize size);
     void SetDebugWaitContext(std::string_view context);
     void PushValidationMessage(std::string message);
+    void SetVSyncEnabled(bool enabled) { _vsyncEnabled = enabled; }
 
     [[nodiscard]] VkBuffer GetBuffer(BufferHandle handle) const;
     [[nodiscard]] VkImage GetImage(ImageHandle handle) const;
@@ -197,6 +199,8 @@ public:
     [[nodiscard]] VkSwapchainKHR GetSwapchain() const { return _swapchain; }
     [[nodiscard]] VkFormat GetSwapchainFormat() const { return _swapchainImageFormat; }
     [[nodiscard]] VkExtent2D GetSwapchainExtent() const { return _swapchainExtent; }
+    [[nodiscard]] bool IsVSyncEnabled() const { return _vsyncEnabled; }
+    [[nodiscard]] VkPresentModeKHR GetPresentMode() const { return _presentMode; }
     [[nodiscard]] ImageHandle GetSwapchainImageHandle(uint32_t imageIndex) const;
     [[nodiscard]] const std::vector<ImageHandle>& GetSwapchainImageHandles() const { return _swapchainImageHandles; }
     [[nodiscard]] BindlessDescriptorManager& GetBindless() { return _bindless; }
@@ -255,6 +259,8 @@ private:
     VkSwapchainKHR _swapchain{ VK_NULL_HANDLE };
     VkFormat _swapchainImageFormat{ VK_FORMAT_UNDEFINED };
     VkExtent2D _swapchainExtent{};
+    bool _vsyncEnabled{ true };
+    VkPresentModeKHR _presentMode{ VK_PRESENT_MODE_FIFO_KHR };
     std::vector<ImageHandle> _swapchainImageHandles;
 
     std::vector<AllocatedBuffer> _buffers;

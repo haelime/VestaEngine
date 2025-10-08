@@ -174,6 +174,7 @@ struct RendererSettings {
     bool autoFocusSceneOnLoad{ false };
     bool frameTimingCapture{ false };
     bool benchmarkOverlay{ false };
+    bool enableVSync{ true };
     bool enableFpsLimit{ false };
     uint32_t fpsLimit{ 60 };
     bool enableFrustumCulling{ true };
@@ -388,6 +389,7 @@ public:
     void ResetAccumulation() { _pathTraceFrameIndex = 0; }
     bool ReloadShaders();
     bool RequestScreenshot(const std::filesystem::path& path);
+    void SetVSyncEnabled(bool enabled);
     void ApplyPreset(RendererPreset preset);
     bool LoadScene(const std::filesystem::path& path);
     bool LoadSceneAsync(const std::filesystem::path& path);

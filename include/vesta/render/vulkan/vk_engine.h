@@ -79,7 +79,6 @@ public:
     bool _logShowResources{ true };
     bool _logShowErrors{ true };
     std::array<char, 128> _logFilterText{};
-    bool _vsyncUiPlaceholder{ false };
     bool _wireframeUiPlaceholder{ false };
     bool _overdrawUiPlaceholder{ false };
     int _lastCpuFrameWarningFrame{ -100000 };

@@ -604,6 +604,7 @@ bool Renderer::Initialize(SDL_Window* window, VkExtent2D initialExtent, bool ena
     RenderDeviceDesc deviceDesc;
     deviceDesc.swapchainExtent = initialExtent;
     deviceDesc.enableValidation = enableValidation;
+    deviceDesc.enableVSync = _settings.enableVSync;
     _device.Initialize(window, deviceDesc);
     _jobs.Initialize();
     ApplyPreset(RendererPreset::Recommended);
@@ -1562,6 +1563,18 @@ bool Renderer::RequestScreenshot(const std::filesystem::path& path)
 
     _pendingScreenshotPath = path;
     return true;
+}
+
+void Renderer::SetVSyncEnabled(bool enabled)
+{
+    if (_settings.enableVSync == enabled && _device.IsVSyncEnabled() == enabled) {
+        return;
+    }
+
+    _settings.enableVSync = enabled;
+    _device.SetVSyncEnabled(enabled);
+    RecreateSwapchain();
+    ResetAccumulation();
 }
 
 void Renderer::InitializeCommands()

@@ -113,6 +113,22 @@ const char* SceneKindLabel(vesta::scene::SceneKind kind)
     }
 }
 
+const char* PresentModeLabel(VkPresentModeKHR mode)
+{
+    switch (mode) {
+    case VK_PRESENT_MODE_IMMEDIATE_KHR:
+        return "Immediate";
+    case VK_PRESENT_MODE_MAILBOX_KHR:
+        return "Mailbox";
+    case VK_PRESENT_MODE_FIFO_KHR:
+        return "FIFO";
+    case VK_PRESENT_MODE_FIFO_RELAXED_KHR:
+        return "FIFO Relaxed";
+    default:
+        return "Other";
+    }
+}
+
 const char* PathTraceBackendLabel(vesta::render::PathTraceBackend backend)
 {
     switch (backend) {
@@ -1564,6 +1580,13 @@ void VestaEngine::build_main_menu_bar()
                 ImGui::MenuItem("Use Indirect Draw", nullptr, &settings.useIndirectDraw);
                 ImGui::MenuItem("Frame Timing Capture", nullptr, &settings.frameTimingCapture);
                 ImGui::MenuItem("Benchmark Overlay", nullptr, &settings.benchmarkOverlay);
+                bool vsyncEnabled = settings.enableVSync;
+                if (ImGui::MenuItem("VSync", nullptr, vsyncEnabled)) {
+                    _renderer.SetVSyncEnabled(!vsyncEnabled);
+                    log_startup_event(fmt::format("VSync {} ({})",
+                        !vsyncEnabled ? "enabled" : "disabled",
+                        PresentModeLabel(_renderer.GetRenderDevice().GetPresentMode())));
+                }
                 ImGui::MenuItem("FPS Limit", nullptr, &settings.enableFpsLimit);
                 int fpsLimit = static_cast<int>(settings.fpsLimit);
                 if (ImGui::SliderInt("FPS Limit Value", &fpsLimit, 15, 360)) {
@@ -1787,9 +1810,16 @@ void VestaEngine::build_debug_ui()
                 ImGui::EndTable();
             }
 
-            ImGui::BeginDisabled();
-            ImGui::Checkbox("VSync", &_vsyncUiPlaceholder);
-            ImGui::EndDisabled();
+            bool vsyncEnabled = settings.enableVSync;
+            if (ImGui::Checkbox("VSync", &vsyncEnabled)) {
+                _renderer.SetVSyncEnabled(vsyncEnabled);
+                log_startup_event(fmt::format("VSync {} ({})",
+                    vsyncEnabled ? "enabled" : "disabled",
+                    PresentModeLabel(_renderer.GetRenderDevice().GetPresentMode())));
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Current present mode: %s", PresentModeLabel(_renderer.GetRenderDevice().GetPresentMode()));
+            }
             ImGui::SameLine();
             ImGui::Checkbox("FPS Limit", &settings.enableFpsLimit);
             ImGui::SameLine();
@@ -2017,6 +2047,7 @@ void VestaEngine::build_debug_ui()
             ImGui::Text("Frustum Culling %s", settings.enableFrustumCulling ? "On" : "Off");
             ImGui::Text("Distance Culling %s", settings.enableDistanceCulling ? "On" : "Off");
             ImGui::Text("Indirect Draw %s", settings.useIndirectDraw ? "On" : "Off");
+            ImGui::Text("VSync %s / %s", settings.enableVSync ? "On" : "Off", PresentModeLabel(device.GetPresentMode()));
             ImGui::Text("FPS Limit %s / %u", settings.enableFpsLimit ? "On" : "Off", settings.fpsLimit);
             ImGui::Text("Upload Budget %u MiB", settings.maxUploadBytesPerFrame / (1024u * 1024u));
             ImGui::Text("Texture Budget %u MiB", settings.maxTextureUploadBytesPerFrame / (1024u * 1024u));

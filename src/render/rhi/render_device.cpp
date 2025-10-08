@@ -236,6 +236,7 @@ uint32_t BindlessDescriptorManager::RegisterStorageBuffer(VkDevice device, VkBuf
 bool RenderDevice::Initialize(SDL_Window* window, const RenderDeviceDesc& desc)
 {
     _window = window;
+    _vsyncEnabled = desc.enableVSync;
 
     // Vulkan instance/device creation happens before the allocator because VMA
     // needs both handles to manage memory allocations for buffers and images.
@@ -932,17 +933,24 @@ void RenderDevice::CreateSwapchain(VkExtent2D extent)
     vkb::SwapchainBuilder swapchainBuilder{ _physicalDevice, _device, _surface };
     _swapchainImageFormat = VK_FORMAT_B8G8R8A8_UNORM;
 
-    // FIFO is chosen as the safe default because it is universally supported.
-    vkb::Swapchain swapchain = swapchainBuilder.set_desired_format(
+    auto configuredBuilder = swapchainBuilder.set_desired_format(
             VkSurfaceFormatKHR{ .format = _swapchainImageFormat, .colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR })
-        .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
         .set_desired_extent(extent.width, extent.height)
-        .add_image_usage_flags(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT)
-        .build()
-        .value();
+        .add_image_usage_flags(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+
+    if (_vsyncEnabled) {
+        configuredBuilder.set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR);
+    } else {
+        configuredBuilder.set_desired_present_mode(VK_PRESENT_MODE_IMMEDIATE_KHR)
+            .add_fallback_present_mode(VK_PRESENT_MODE_MAILBOX_KHR)
+            .add_fallback_present_mode(VK_PRESENT_MODE_FIFO_KHR);
+    }
+
+    vkb::Swapchain swapchain = configuredBuilder.build().value();
 
     _swapchain = swapchain.swapchain;
     _swapchainExtent = swapchain.extent;
+    _presentMode = swapchain.present_mode;
 
     const std::vector<VkImage> swapchainImages = swapchain.get_images().value();
     const std::vector<VkImageView> swapchainImageViews = swapchain.get_image_views().value();
