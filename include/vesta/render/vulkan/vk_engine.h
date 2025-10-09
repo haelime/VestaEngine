@@ -86,6 +86,9 @@ public:
     int _lastPassWarningFrame{ -100000 };
     int _lastResourceWarningFrame{ -100000 };
     int _lastValidationWarningFrame{ -100000 };
+    std::array<float, 240> _gpuFrameTimeHistoryMs{};
+    size_t _gpuFrameTimeHistoryHead{ 0 };
+    size_t _gpuFrameTimeHistoryCount{ 0 };
     VkDescriptorPool _imguiDescriptorPool{ VK_NULL_HANDLE };
     std::vector<std::filesystem::path> _recentScenePaths;
     std::vector<std::string> _logConsoleLines;

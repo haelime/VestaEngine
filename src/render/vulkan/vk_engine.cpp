@@ -764,6 +764,18 @@ void VestaEngine::draw(float deltaSeconds)
         log_startup_event("Entering first RenderFrame");
     }
     _renderer.RenderFrame();
+    if (_showGpuProfilerPanel) {
+        const float gpuFrameMs = TotalGpuMs(_renderer.GetLastRenderGraphTimings());
+        if (gpuFrameMs > 0.0f) {
+            _gpuFrameTimeHistoryMs[_gpuFrameTimeHistoryHead] = gpuFrameMs;
+            _gpuFrameTimeHistoryHead = (_gpuFrameTimeHistoryHead + 1) % _gpuFrameTimeHistoryMs.size();
+            _gpuFrameTimeHistoryCount = std::min(_gpuFrameTimeHistoryCount + 1, _gpuFrameTimeHistoryMs.size());
+        }
+    } else {
+        _gpuFrameTimeHistoryHead = 0;
+        _gpuFrameTimeHistoryCount = 0;
+        _gpuFrameTimeHistoryMs.fill(0.0f);
+    }
     update_startup_state();
     update_runtime_warnings();
     _frameNumber++;
@@ -1963,6 +1975,18 @@ void VestaEngine::build_debug_ui()
             if (frameHistoryCount > 0) {
                 ImGui::PlotLines("CPU Frame History", frameHistory.data(), static_cast<int>(frameHistoryCount), 0, nullptr, 0.0f,
                     std::max(33.0f, frameStats.maxMs * 1.1f), ImVec2(0.0f, 72.0f));
+            }
+            if (_gpuFrameTimeHistoryCount > 0) {
+                const auto gpuHistoryEnd = _gpuFrameTimeHistoryMs.begin() + static_cast<std::ptrdiff_t>(_gpuFrameTimeHistoryCount);
+                const float maxGpuHistoryMs = *std::max_element(_gpuFrameTimeHistoryMs.begin(), gpuHistoryEnd);
+                ImGui::PlotLines("GPU Timestamp History",
+                    _gpuFrameTimeHistoryMs.data(),
+                    static_cast<int>(_gpuFrameTimeHistoryCount),
+                    0,
+                    nullptr,
+                    0.0f,
+                    std::max(33.0f, maxGpuHistoryMs * 1.1f),
+                    ImVec2(0.0f, 72.0f));
             }
         }
         ImGui::End();
