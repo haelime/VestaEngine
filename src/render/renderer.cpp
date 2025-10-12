@@ -1486,15 +1486,72 @@ const IRenderPass* Renderer::FindPass(std::string_view id) const
 
 std::vector<RenderPassDebugInfo> Renderer::GetRenderPassDebugInfo() const
 {
+    const auto estimateVisibleSurfaceCount = [&]() -> uint32_t {
+        return HasValidVisibilitySet() ? static_cast<uint32_t>(_visibleSurfaceIndices.size()) : static_cast<uint32_t>(_scene.GetSurfaces().size());
+    };
+    const auto estimateVisibleTriangleCount = [&]() -> uint64_t {
+        uint64_t triangles = 0;
+        if (HasValidVisibilitySet()) {
+            for (uint32_t surfaceIndex : _visibleSurfaceIndices) {
+                if (surfaceIndex < _scene.GetSurfaces().size()) {
+                    triangles += _scene.GetSurfaces()[surfaceIndex].indexCount / 3u;
+                }
+            }
+            return triangles;
+        }
+
+        for (const auto& surface : _scene.GetSurfaces()) {
+            triangles += surface.indexCount / 3u;
+        }
+        return triangles;
+    };
+    const auto computeDispatchGrid = [](VkExtent2D extent, uint32_t tileSize) -> uint32_t {
+        return std::max(1u, (extent.width + tileSize - 1u) / tileSize) * std::max(1u, (extent.height + tileSize - 1u) / tileSize);
+    };
+
+    const VkExtent2D extent = _device.GetSwapchainExtent();
+    const uint32_t fullResDispatchGrid = computeDispatchGrid(extent, 8u);
+    const VkExtent2D pathTraceExtent{
+        std::max(1u, static_cast<uint32_t>(std::ceil(static_cast<float>(extent.width) * _settings.pathTraceResolutionScale))),
+        std::max(1u, static_cast<uint32_t>(std::ceil(static_cast<float>(extent.height) * _settings.pathTraceResolutionScale))),
+    };
+    const uint32_t pathTraceDispatchGrid = computeDispatchGrid(pathTraceExtent, 8u);
+
     std::vector<RenderPassDebugInfo> result;
     result.reserve(_passRegistry.size());
     for (const RegisteredPassEntry& entry : _passRegistry) {
-        result.push_back(RenderPassDebugInfo{
+        RenderPassDebugInfo info{
             .id = entry.id,
             .name = entry.pass ? std::string(entry.pass->Name()) : std::string{},
             .order = entry.order,
             .enabled = entry.enabled,
-        });
+        };
+
+        if (entry.id == "geometry-raster") {
+            info.drawCount = _settings.useIndirectDraw && estimateVisibleSurfaceCount() > 0u ? 1u : estimateVisibleSurfaceCount();
+            info.triangleCount = estimateVisibleTriangleCount();
+            info.instanceCount = estimateVisibleSurfaceCount();
+        } else if (entry.id == "deferred-lighting") {
+            info.dispatchCount = 1u;
+            info.rayCount = fullResDispatchGrid * 64ull;
+        } else if (entry.id == "gaussian-splat") {
+            info.drawCount = _scene.HasGaussianSplats() ? 1u : 0u;
+            info.splatCount = _scene.GetGaussianCount();
+        } else if (entry.id == "official-gaussian-raster") {
+            info.dispatchCount = _scene.HasTrainedGaussians() ? 10u : 0u;
+            info.splatCount = GetOfficialGaussianDuplicateCount() > 0u ? GetOfficialGaussianDuplicateCount() : _scene.GetGaussianCount();
+        } else if (entry.id == "path-tracer") {
+            info.dispatchCount = 1u;
+            info.triangleCount = _scene.GetTriangles().size();
+            info.rayCount = static_cast<uint64_t>(pathTraceExtent.width) * pathTraceExtent.height * _settings.pathTraceSamplesPerPixel;
+        } else if (entry.id == "path-denoise") {
+            info.dispatchCount = 1u;
+            info.rayCount = static_cast<uint64_t>(pathTraceDispatchGrid) * 64ull;
+        } else if (entry.id == "composite") {
+            info.drawCount = 1u;
+        }
+
+        result.push_back(std::move(info));
     }
     std::sort(result.begin(), result.end(), [](const RenderPassDebugInfo& lhs, const RenderPassDebugInfo& rhs) {
         if (lhs.order != rhs.order) {

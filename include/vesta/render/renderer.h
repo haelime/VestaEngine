@@ -283,6 +283,12 @@ struct RenderPassDebugInfo {
     std::string name;
     uint32_t order{ 0 };
     bool enabled{ false };
+    uint32_t drawCount{ 0 };
+    uint32_t dispatchCount{ 0 };
+    uint64_t triangleCount{ 0 };
+    uint64_t instanceCount{ 0 };
+    uint64_t rayCount{ 0 };
+    uint64_t splatCount{ 0 };
 };
 
 struct TransientImageKey {

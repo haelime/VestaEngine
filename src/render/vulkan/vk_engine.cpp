@@ -1878,11 +1878,14 @@ void VestaEngine::build_debug_ui()
             }
 
             const std::vector<vesta::render::RenderPassDebugInfo> passInfo = _renderer.GetRenderPassDebugInfo();
-            if (ImGui::BeginTable("PassRegistry", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+            if (ImGui::BeginTable("PassRegistry", 8, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
                 ImGui::TableSetupColumn("Pass");
                 ImGui::TableSetupColumn("Order", ImGuiTableColumnFlags_WidthFixed, 52.0f);
                 ImGui::TableSetupColumn("Move", ImGuiTableColumnFlags_WidthFixed, 74.0f);
                 ImGui::TableSetupColumn("Enabled", ImGuiTableColumnFlags_WidthFixed, 64.0f);
+                ImGui::TableSetupColumn("Draw", ImGuiTableColumnFlags_WidthFixed, 54.0f);
+                ImGui::TableSetupColumn("Dispatch", ImGuiTableColumnFlags_WidthFixed, 64.0f);
+                ImGui::TableSetupColumn("Work");
                 ImGui::TableSetupColumn("Id");
                 ImGui::TableHeadersRow();
                 for (size_t passIndex = 0; passIndex < passInfo.size(); ++passIndex) {
@@ -1919,6 +1922,20 @@ void VestaEngine::build_debug_ui()
                     }
                     ImGui::PopID();
                     ImGui::TableSetColumnIndex(4);
+                    ImGui::Text("%u", pass.drawCount);
+                    ImGui::TableSetColumnIndex(5);
+                    ImGui::Text("%u", pass.dispatchCount);
+                    ImGui::TableSetColumnIndex(6);
+                    if (pass.splatCount > 0u) {
+                        ImGui::Text("%llu splats", static_cast<unsigned long long>(pass.splatCount));
+                    } else if (pass.rayCount > 0u) {
+                        ImGui::Text("%llu rays", static_cast<unsigned long long>(pass.rayCount));
+                    } else if (pass.triangleCount > 0u) {
+                        ImGui::Text("%llu tris", static_cast<unsigned long long>(pass.triangleCount));
+                    } else {
+                        ImGui::TextUnformatted("-");
+                    }
+                    ImGui::TableSetColumnIndex(7);
                     ImGui::TextUnformatted(pass.id.c_str());
                 }
                 ImGui::EndTable();
@@ -1945,10 +1962,23 @@ void VestaEngine::build_debug_ui()
         ImGui::SetNextWindowPos(ImVec2(590.0f, 238.0f), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(520.0f, 300.0f), ImGuiCond_FirstUseEver);
         if (ImGui::Begin("GPU Profiler", &_showGpuProfilerPanel, ImGuiWindowFlags_NoSavedSettings)) {
+            const std::vector<vesta::render::RenderPassDebugInfo> passInfo = _renderer.GetRenderPassDebugInfo();
+            uint32_t totalDraws = 0;
+            uint32_t totalDispatches = 0;
+            uint64_t totalRayWork = 0;
+            for (const auto& pass : passInfo) {
+                if (!pass.enabled) {
+                    continue;
+                }
+                totalDraws += pass.drawCount;
+                totalDispatches += pass.dispatchCount;
+                totalRayWork += pass.rayCount;
+            }
             ImGui::Text("CPU Frame %.3f ms", _renderer.GetFrameTimeMs());
             ImGui::Text("GPU Frame %.3f ms", gpuFrameMs);
-            ImGui::Text("Draw / Dispatch %s", "tracked per pass via timing table");
+            ImGui::Text("Draw / Dispatch %u / %u", totalDraws, totalDispatches);
             ImGui::Text("Triangles %zu", scene.GetTriangles().size());
+            ImGui::Text("Estimated Ray Work %llu", static_cast<unsigned long long>(totalRayWork));
             ImGui::Text("Visible Surfaces %u / %zu", _renderer.GetVisibleSurfaceCount(), scene.GetSurfaces().size());
             ImGui::Text("Gaussians %u visible/projection %u", scene.GetGaussianCount(), _renderer.GetOfficialGaussianProjectedCount());
             ImGui::Text("Splats rendered %u", _renderer.GetOfficialGaussianDuplicateCount());
@@ -1969,6 +1999,37 @@ void VestaEngine::build_debug_ui()
                     timing.gpuTimingValid ? ImGui::Text("%.3f", timing.gpuMs) : ImGui::TextUnformatted("-");
                     ImGui::TableSetColumnIndex(3);
                     ImGui::Text("%u barriers", timing.barrierCount);
+                }
+                ImGui::EndTable();
+            }
+            if (ImGui::BeginTable("GpuPassWork", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+                ImGui::TableSetupColumn("Pass");
+                ImGui::TableSetupColumn("Draw", ImGuiTableColumnFlags_WidthFixed, 54.0f);
+                ImGui::TableSetupColumn("Dispatch", ImGuiTableColumnFlags_WidthFixed, 64.0f);
+                ImGui::TableSetupColumn("Triangles", ImGuiTableColumnFlags_WidthFixed, 82.0f);
+                ImGui::TableSetupColumn("Rays / Splats");
+                ImGui::TableHeadersRow();
+                for (const auto& pass : passInfo) {
+                    if (!pass.enabled) {
+                        continue;
+                    }
+                    ImGui::TableNextRow();
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::TextUnformatted(pass.name.c_str());
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::Text("%u", pass.drawCount);
+                    ImGui::TableSetColumnIndex(2);
+                    ImGui::Text("%u", pass.dispatchCount);
+                    ImGui::TableSetColumnIndex(3);
+                    ImGui::Text("%llu", static_cast<unsigned long long>(pass.triangleCount));
+                    ImGui::TableSetColumnIndex(4);
+                    if (pass.splatCount > 0u) {
+                        ImGui::Text("%llu splats", static_cast<unsigned long long>(pass.splatCount));
+                    } else if (pass.rayCount > 0u) {
+                        ImGui::Text("%llu rays", static_cast<unsigned long long>(pass.rayCount));
+                    } else {
+                        ImGui::TextUnformatted("-");
+                    }
                 }
                 ImGui::EndTable();
             }
