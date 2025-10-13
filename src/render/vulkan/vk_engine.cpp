@@ -384,6 +384,31 @@ void DrawRenderGraphResourceList(const char* label,
     ImGui::TreePop();
 }
 
+void DrawRenderGraphBarrierList(const std::vector<vesta::render::RenderGraphPassTiming::BarrierInfo>& barriers)
+{
+    if (barriers.empty()) {
+        ImGui::TextDisabled("Barriers: none");
+        return;
+    }
+
+    if (ImGui::BeginTable("BarrierTransitions", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+        ImGui::TableSetupColumn("Resource");
+        ImGui::TableSetupColumn("From");
+        ImGui::TableSetupColumn("To");
+        ImGui::TableHeadersRow();
+        for (const auto& barrier : barriers) {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted(barrier.name.c_str());
+            ImGui::TableSetColumnIndex(1);
+            ImGui::TextUnformatted(ResourceUsageLabel(barrier.fromUsage));
+            ImGui::TableSetColumnIndex(2);
+            ImGui::TextUnformatted(ResourceUsageLabel(barrier.toUsage));
+        }
+        ImGui::EndTable();
+    }
+}
+
 void DrawBufferResourceRow(const char* name,
     const vesta::render::RenderDevice& device,
     vesta::render::BufferHandle handle,
@@ -1957,6 +1982,7 @@ void VestaEngine::build_debug_ui()
                     } else {
                         ImGui::Text("CPU %.3f ms, GPU -, Barriers %u", timing.cpuMs, timing.barrierCount);
                     }
+                    DrawRenderGraphBarrierList(timing.barriers);
                     DrawRenderGraphResourceList("Inputs", timing.inputs);
                     DrawRenderGraphResourceList("Outputs", timing.outputs);
                     ImGui::TreePop();

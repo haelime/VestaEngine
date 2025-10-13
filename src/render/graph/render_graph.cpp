@@ -384,6 +384,16 @@ void RenderGraph::Execute(RenderGraphExecutionContext& executionContext)
                 gpuMs = previousGpuMs[passIndex];
                 gpuTimingValid = true;
             }
+            std::vector<RenderGraphPassTiming::BarrierInfo> barrierInfo;
+            barrierInfo.reserve(compiledPass.barriers.size());
+            for (const CompiledBarrier& barrier : compiledPass.barriers) {
+                const uint32_t resourceIndex = barrier.resource.index;
+                barrierInfo.push_back(RenderGraphPassTiming::BarrierInfo{
+                    .name = resourceIndex < _textures.size() ? _textures[resourceIndex].name : std::string{ "Unknown" },
+                    .fromUsage = barrier.fromUsage,
+                    .toUsage = barrier.toUsage,
+                });
+            }
             executionContext.passTimings->push_back(RenderGraphPassTiming{
                 .name = std::string(compiledPass.pass->Name()),
                 .readCount = compiledPass.readCount,
@@ -394,6 +404,7 @@ void RenderGraph::Execute(RenderGraphExecutionContext& executionContext)
                 .gpuTimingValid = gpuTimingValid,
                 .inputs = compiledPass.inputs,
                 .outputs = compiledPass.outputs,
+                .barriers = std::move(barrierInfo),
             });
         }
     }

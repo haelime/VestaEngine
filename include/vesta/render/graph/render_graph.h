@@ -54,6 +54,11 @@ struct RenderGraphPassTiming {
         VkFormat format{ VK_FORMAT_UNDEFINED };
         VkExtent3D extent{ 1, 1, 1 };
     };
+    struct BarrierInfo {
+        std::string name;
+        ResourceUsage fromUsage{ ResourceUsage::Undefined };
+        ResourceUsage toUsage{ ResourceUsage::Undefined };
+    };
 
     std::string name;
     uint32_t readCount{ 0 };
@@ -64,6 +69,7 @@ struct RenderGraphPassTiming {
     bool gpuTimingValid{ false };
     std::vector<ResourceAccess> inputs;
     std::vector<ResourceAccess> outputs;
+    std::vector<BarrierInfo> barriers;
 };
 
 struct CompiledBarrier {
