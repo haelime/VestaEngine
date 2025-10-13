@@ -1134,7 +1134,7 @@ void VestaEngine::finish_benchmark()
     }
 
     if (writeHeader) {
-        output << "timestamp,scene,scene_kind,gpu,resolution,display_mode,requested_backend,active_backend,scene_upload_mode,"
+        output << "timestamp,scene,scene_kind,gpu,resolution,vsync,present_mode,fps_limit_enabled,fps_limit,display_mode,requested_backend,active_backend,scene_upload_mode,"
                << "gaussian,path_tracing,texture_streaming,indirect_draw,frustum_culling,distance_culling,"
                << "gaussian_trained,gaussian_count,gaussian_sh_degree,gaussian_view_dependent_color,gaussian_antialiasing,"
                << "gaussian_fast_culling,gaussian_opacity,gaussian_mix,gaussian_interactive_preview,"
@@ -1174,6 +1174,10 @@ void VestaEngine::finish_benchmark()
            << CsvEscape(SceneKindLabel(scene.GetSceneKind())) << ','
            << CsvEscape(_renderer.GetRenderDevice().GetGpuName()) << ','
            << CsvEscape(fmt::format("{}x{}", extent.width, extent.height)) << ','
+           << (settings.enableVSync ? "true" : "false") << ','
+           << PresentModeLabel(_renderer.GetRenderDevice().GetPresentMode()) << ','
+           << (settings.enableFpsLimit ? "true" : "false") << ','
+           << settings.fpsLimit << ','
            << DisplayModeLabel(settings.displayMode) << ','
            << PathTraceBackendLabel(settings.pathTraceBackend) << ','
            << PathTraceBackendLabel(_renderer.GetActivePathTraceBackend()) << ','
@@ -1274,6 +1278,10 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "  \"gpu\": \"" << JsonEscape(_renderer.GetRenderDevice().GetGpuName()) << "\",\n"
            << "  \"api\": \"Vulkan\",\n"
            << "  \"resolution\": \"" << extent.width << "x" << extent.height << "\",\n"
+           << "  \"vsync\": " << (settings.enableVSync ? "true" : "false") << ",\n"
+           << "  \"present_mode\": \"" << PresentModeLabel(_renderer.GetRenderDevice().GetPresentMode()) << "\",\n"
+           << "  \"fps_limit_enabled\": " << (settings.enableFpsLimit ? "true" : "false") << ",\n"
+           << "  \"fps_limit\": " << settings.fpsLimit << ",\n"
            << "  \"display_mode\": \"" << DisplayModeLabel(settings.displayMode) << "\",\n"
            << "  \"path_trace_backend\": \"" << PathTraceBackendLabel(_renderer.GetActivePathTraceBackend()) << "\",\n"
            << "  \"frame_index\": " << _frameNumber << ",\n"
