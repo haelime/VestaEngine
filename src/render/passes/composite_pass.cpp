@@ -20,6 +20,7 @@ struct CompositePushConstants {
     glm::uvec4 imageIndices3{ kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex };
     glm::uvec4 gaussianDebug{ kInvalidImageIndex, 0u, 0u, 8u };
     glm::vec4 params{ 0.25f, 0.0f, 0.0f, 0.0f };
+    glm::vec4 compareParams{ 0.0f, 0.5f, 4.0f, 0.0f };
     glm::mat4 inverseViewProjection{ 1.0f };
 };
 } // namespace
@@ -70,6 +71,13 @@ void CompositePass::SetMode(uint32_t mode, float gaussianMix, uint32_t debugView
     _gaussianMix = gaussianMix;
     _debugView = debugView;
     _gaussianDebugView = gaussianDebugView;
+}
+
+void CompositePass::SetCompare(uint32_t compareMode, float splitPosition, float differenceScale)
+{
+    _compareMode = compareMode;
+    _compareSplitPosition = glm::clamp(splitPosition, 0.02f, 0.98f);
+    _compareDifferenceScale = glm::max(differenceScale, 0.1f);
 }
 
 void CompositePass::SetExposure(float exposureEv)
@@ -166,6 +174,7 @@ void CompositePass::Execute(const RenderGraphContext& context)
         .imageIndices3 = glm::uvec4(kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex),
         .gaussianDebug = glm::uvec4(_gaussianTileRangeBufferIndex, _gaussianTileCountX, _gaussianTileCountY, 8u),
         .params = glm::vec4(_gaussianMix, _exposureEv, _nearPlane, _farPlane),
+        .compareParams = glm::vec4(static_cast<float>(_compareMode), _compareSplitPosition, _compareDifferenceScale, 0.0f),
         .inverseViewProjection = _inverseViewProjection,
     };
 

@@ -17,6 +17,7 @@ layout(push_constant) uniform CompositePushConstants {
     uvec4 imageIndices3;
     uvec4 gaussianDebug;
     vec4 params;
+    vec4 compareParams;
     mat4 inverseViewProjection;
 } pc;
 
@@ -156,6 +157,13 @@ vec3 heatmap(float value)
     return mix(yellow, red, (value - 0.66) / 0.34);
 }
 
+vec3 applyDisplayTransform(vec3 color)
+{
+    color *= exp2(pc.params.y);
+    color = tonemap(color);
+    return pow(color, vec3(1.0 / 2.2));
+}
+
 vec3 resolveGaussianDebugView(vec4 gaussianColor, ivec2 pixel, vec2 uv)
 {
     uint gaussianDebugView = pc.imageIndices1.z;
@@ -241,6 +249,24 @@ void main() {
         return;
     }
 
+    uint compareMode = uint(pc.compareParams.x + 0.5);
+    if (pc.imageIndices1.x == 0u && compareMode != 0u && hasImage(pc.imageIndices0.x) && hasImage(pc.imageIndices0.y)) {
+        vec3 rasterDisplay = applyDisplayTransform(deferredColor);
+        vec3 pathDisplay = applyDisplayTransform(pathTraceColor);
+        if (compareMode == 1u) {
+            float splitPosition = clamp(pc.compareParams.y, 0.02, 0.98);
+            vec3 splitColor = uv.x < splitPosition ? rasterDisplay : pathDisplay;
+            float divider = 1.0 - smoothstep(0.0, 0.003, abs(uv.x - splitPosition));
+            outColor = vec4(mix(splitColor, vec3(1.0), divider), 1.0);
+            return;
+        }
+        if (compareMode == 2u) {
+            float diff = length(rasterDisplay - pathDisplay) * pc.compareParams.z;
+            outColor = vec4(heatmap(diff), 1.0);
+            return;
+        }
+    }
+
     vec3 composite = deferredColor;
     if (pc.imageIndices1.x == 1u) {
         composite = deferredColor;
@@ -256,9 +282,7 @@ void main() {
     }
 
     if (pc.imageIndices1.x != 2u) {
-        composite *= exp2(pc.params.y);
-        composite = tonemap(composite);
-        composite = pow(composite, vec3(1.0 / 2.2));
+        composite = applyDisplayTransform(composite);
     }
     outColor = vec4(composite, 1.0);
 }

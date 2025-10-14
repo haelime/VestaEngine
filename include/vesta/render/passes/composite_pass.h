@@ -22,6 +22,7 @@ public:
     void SetGaussianDebugResources(uint32_t tileRangeBufferIndex, uint32_t tileCountX, uint32_t tileCountY);
     void SetOutput(GraphTextureHandle output);
     void SetMode(uint32_t mode, float gaussianMix, uint32_t debugView, uint32_t gaussianDebugView);
+    void SetCompare(uint32_t compareMode, float splitPosition, float differenceScale);
     void SetExposure(float exposureEv);
     void SetInverseViewProjection(const glm::mat4& inverseViewProjection);
     void SetDepthRange(float nearPlane, float farPlane);
@@ -47,10 +48,13 @@ private:
     uint32_t _mode{ 0 };
     uint32_t _debugView{ 0 };
     uint32_t _gaussianDebugView{ 0 };
+    uint32_t _compareMode{ 0 };
     uint32_t _gaussianTileRangeBufferIndex{ kInvalidResourceIndex };
     uint32_t _gaussianTileCountX{ 0 };
     uint32_t _gaussianTileCountY{ 0 };
     float _gaussianMix{ 0.25f };
+    float _compareSplitPosition{ 0.5f };
+    float _compareDifferenceScale{ 4.0f };
     float _exposureEv{ 0.0f };
     glm::mat4 _inverseViewProjection{ 1.0f };
     float _nearPlane{ 0.05f };

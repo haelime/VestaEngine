@@ -66,6 +66,12 @@ enum class GaussianDebugView : uint32_t {
     TileOccupancy = 5,
 };
 
+enum class CompareMode : uint32_t {
+    Off = 0,
+    RasterPathSplit = 1,
+    DifferenceHeatmap = 2,
+};
+
 enum class SceneLoadState : uint32_t {
     Idle = 0,
     Parsing = 1,
@@ -196,6 +202,9 @@ struct RendererSettings {
     PathTraceDebugView pathTraceDebugView{ PathTraceDebugView::Final };
     RendererDebugView debugView{ RendererDebugView::FinalColor };
     GaussianDebugView gaussianDebugView{ GaussianDebugView::Final };
+    CompareMode compareMode{ CompareMode::Off };
+    float compareSplitPosition{ 0.5f };
+    float compareDifferenceScale{ 4.0f };
     bool enablePathTraceDenoiser{ true };
     float pathTraceDenoiserStrength{ 0.65f };
     float pathTraceDenoiserTemporalBlend{ 0.88f };

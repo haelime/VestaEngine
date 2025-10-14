@@ -161,6 +161,19 @@ const char* PathTraceDebugViewLabel(vesta::render::PathTraceDebugView view)
     }
 }
 
+const char* CompareModeLabel(vesta::render::CompareMode mode)
+{
+    switch (mode) {
+    case vesta::render::CompareMode::RasterPathSplit:
+        return "Raster / Path Split";
+    case vesta::render::CompareMode::DifferenceHeatmap:
+        return "Difference Heatmap";
+    case vesta::render::CompareMode::Off:
+    default:
+        return "Off";
+    }
+}
+
 std::optional<size_t> BenchmarkPassIndex(std::string_view passName)
 {
     for (size_t index = 0; index < kBenchmarkPassNames.size(); ++index) {
@@ -1159,7 +1172,7 @@ void VestaEngine::finish_benchmark()
     }
 
     if (writeHeader) {
-        output << "timestamp,scene,scene_kind,gpu,resolution,vsync,present_mode,fps_limit_enabled,fps_limit,display_mode,requested_backend,active_backend,scene_upload_mode,"
+        output << "timestamp,scene,scene_kind,gpu,resolution,vsync,present_mode,fps_limit_enabled,fps_limit,display_mode,compare_mode,compare_split,compare_difference_scale,requested_backend,active_backend,scene_upload_mode,"
                << "gaussian,path_tracing,texture_streaming,indirect_draw,frustum_culling,distance_culling,"
                << "gaussian_trained,gaussian_count,gaussian_sh_degree,gaussian_view_dependent_color,gaussian_antialiasing,"
                << "gaussian_fast_culling,gaussian_opacity,gaussian_mix,gaussian_interactive_preview,"
@@ -1204,6 +1217,9 @@ void VestaEngine::finish_benchmark()
            << (settings.enableFpsLimit ? "true" : "false") << ','
            << settings.fpsLimit << ','
            << DisplayModeLabel(settings.displayMode) << ','
+           << CsvEscape(CompareModeLabel(settings.compareMode)) << ','
+           << settings.compareSplitPosition << ','
+           << settings.compareDifferenceScale << ','
            << PathTraceBackendLabel(settings.pathTraceBackend) << ','
            << PathTraceBackendLabel(_renderer.GetActivePathTraceBackend()) << ','
            << CsvEscape(SceneUploadModeLabel(settings.sceneUploadMode)) << ','
@@ -1308,6 +1324,9 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "  \"fps_limit_enabled\": " << (settings.enableFpsLimit ? "true" : "false") << ",\n"
            << "  \"fps_limit\": " << settings.fpsLimit << ",\n"
            << "  \"display_mode\": \"" << DisplayModeLabel(settings.displayMode) << "\",\n"
+           << "  \"compare_mode\": \"" << CompareModeLabel(settings.compareMode) << "\",\n"
+           << "  \"compare_split\": " << settings.compareSplitPosition << ",\n"
+           << "  \"compare_difference_scale\": " << settings.compareDifferenceScale << ",\n"
            << "  \"path_trace_backend\": \"" << PathTraceBackendLabel(_renderer.GetActivePathTraceBackend()) << "\",\n"
            << "  \"frame_index\": " << _frameNumber << ",\n"
            << "  \"path_trace_frame_index\": " << _renderer.GetPathTraceFrameIndex() << ",\n"
@@ -2126,6 +2145,20 @@ void VestaEngine::build_debug_ui()
             }
             ImGui::Checkbox("Wireframe", &_wireframeUiPlaceholder);
             ImGui::Checkbox("Overdraw Heatmap", &_overdrawUiPlaceholder);
+            ImGui::SeparatorText("Reference Compare");
+            const char* compareModes[] = { "Off", "Raster / Path Split", "Difference Heatmap" };
+            int compareMode = static_cast<int>(settings.compareMode);
+            if (ImGui::Combo("Compare Mode", &compareMode, compareModes, IM_ARRAYSIZE(compareModes))) {
+                settings.compareMode = static_cast<vesta::render::CompareMode>(compareMode);
+                settings.displayMode = vesta::render::RendererDisplayMode::Composite;
+                _renderer.ResetAccumulation();
+            }
+            if (settings.compareMode == vesta::render::CompareMode::RasterPathSplit) {
+                ImGui::SliderFloat("Split Position", &settings.compareSplitPosition, 0.05f, 0.95f, "%.2f");
+            }
+            if (settings.compareMode == vesta::render::CompareMode::DifferenceHeatmap) {
+                ImGui::SliderFloat("Difference Scale", &settings.compareDifferenceScale, 0.5f, 12.0f, "%.1f");
+            }
         }
         ImGui::End();
     }
@@ -2141,6 +2174,7 @@ void VestaEngine::build_debug_ui()
         ImGui::TextWrapped("%s", sceneLabel.c_str());
         ImGui::Text("Type %s", SceneKindLabel(scene.GetSceneKind()));
         ImGui::Text("Display %s", DisplayModeLabel(settings.displayMode));
+        ImGui::Text("Compare %s", CompareModeLabel(settings.compareMode));
         ImGui::Text("Load %s", SceneLoadStateLabel(sceneLoadStatus.state));
         ImGui::Text("Selected %s", selectionLabel.c_str());
         if (scene.GetGaussianCount() > 0u) {

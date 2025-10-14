@@ -535,6 +535,9 @@ void ConfigureCompositePass(Renderer& renderer, IRenderPass& pass, const Rendere
         renderer.GetSettings().gaussianMix,
         static_cast<uint32_t>(renderer.GetSettings().debugView),
         static_cast<uint32_t>(renderer.GetSettings().gaussianDebugView));
+    compositePass.SetCompare(static_cast<uint32_t>(renderer.GetSettings().compareMode),
+        renderer.GetSettings().compareSplitPosition,
+        renderer.GetSettings().compareDifferenceScale);
     compositePass.SetExposure(renderer.GetSettings().cameraExposureEv);
     compositePass.SetInverseViewProjection(renderer.GetCamera().GetInverseViewProjection());
     compositePass.SetDepthRange(renderer.GetCamera().GetNearPlane(), renderer.GetCamera().GetFarPlane());
