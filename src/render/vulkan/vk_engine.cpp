@@ -2905,10 +2905,28 @@ void VestaEngine::build_debug_ui()
                     ImGui::EndTabItem();
                 }
                 if (ImGui::BeginTabItem("Acceleration")) {
-                    ImGui::Text("TLAS %s", scene.HasRayTracingScene() ? "Resident" : "Missing");
-                    ImGui::Text("BLAS Build %.3f ms", scene.GetBottomLevelBuildMs());
-                    ImGui::Text("TLAS Build %.3f ms", scene.GetTopLevelBuildMs());
-                    ImGui::Text("Instances %zu", scene.GetObjects().size());
+                    const uint64_t blasBytes = BufferSizeBytes(device, scene.GetBottomLevelBuffer());
+                    const uint64_t tlasBytes = BufferSizeBytes(device, scene.GetTopLevelBuffer());
+                    const bool rtSupported = device.IsRayTracingSupported();
+                    const bool blasResident = scene.GetBottomLevelBuffer() && scene.GetBottomLevelBuildMs() > 0.0f;
+                    const bool tlasResident = scene.HasRayTracingScene();
+                    const uint32_t blasCount = blasResident ? 1u : 0u;
+                    const uint32_t tlasCount = tlasResident ? 1u : 0u;
+                    const uint32_t tlasInstanceCount = tlasResident ? 1u : 0u;
+                    const auto& rtSupport = device.GetRayTracingSupport();
+                    ImGui::Text("Ray Tracing Support %s", rtSupported ? "Available" : "Unavailable");
+                    ImGui::Text("TLAS %s  BLAS %s", tlasResident ? "Resident" : "Missing", blasResident ? "Resident" : "Missing");
+                    ImGui::Text("Build %.3f ms BLAS / %.3f ms TLAS", scene.GetBottomLevelBuildMs(), scene.GetTopLevelBuildMs());
+                    ImGui::Text("Counts TLAS %u  BLAS %u  Instances %u", tlasCount, blasCount, tlasInstanceCount);
+                    ImGui::Text("Primitives %zu triangles  Scene Objects %zu", scene.GetTriangles().size(), scene.GetObjects().size());
+                    ImGui::Text("Memory %.2f MiB BLAS / %.2f MiB TLAS / %.2f MiB total",
+                        MiB(blasBytes),
+                        MiB(tlasBytes),
+                        MiB(blasBytes + tlasBytes));
+                    ImGui::Text("Build Mode Build-on-load  Update/Refit %s", settings.buildRayTracingStructuresOnLoad ? "manual rebuild" : "deferred");
+                    ImGui::Text("Ray Query %s  Pipeline %s",
+                        rtSupport.rayQueryFeatures.rayQuery == VK_TRUE ? "Yes" : "No",
+                        rtSupport.rayTracingPipelineFeatures.rayTracingPipeline == VK_TRUE ? "Yes" : "No");
                     ImGui::Separator();
                     if (ImGui::BeginTable("AccelerationTable", 7, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
                         ImGui::TableSetupColumn("Name");
