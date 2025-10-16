@@ -103,6 +103,15 @@ FBX mesh files are also accepted, for example:
 
 Benchmark CSV에는 프레임 타임뿐 아니라 scene stats, upload timing, active backend, Gaussian-specific metadata가 함께 기록된다.
 
+### Portfolio capture set
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\capture-portfolio-demos.ps1
+```
+
+The script writes benchmark CSV files, PNG screenshots, and JSON sidecars under `out\portfolio`.
+It captures raster/path split comparison, difference heatmap, path-traced reference, and Gaussian debug scenes.
+
 ## Controls
 
 - `RMB + Mouse`: look
