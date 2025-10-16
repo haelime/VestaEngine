@@ -13,6 +13,9 @@ void PrintUsage()
         << "  --scene <path>                Load a scene at startup.\n"
         << "  --preset <recommended|performance|balanced|quality>\n"
         << "  --mode <composite|raster|deferred|gaussian|pathtrace>\n"
+        << "  --compare <off|split|difference>\n"
+        << "  --compare-split <0.05-0.95>\n"
+        << "  --compare-scale <value>\n"
         << "  --pt-backend <auto|compute|hardwarert>\n"
         << "  --pt-scale <0.25-1.0>\n"
         << "  --benchmark <csv-path>        Run a timed benchmark and exit.\n"
@@ -68,6 +71,20 @@ std::optional<vesta::render::PathTraceBackend> ParsePathTraceBackend(std::string
     }
     if (value == "hardwarert" || value == "hardware-rt" || value == "rt") {
         return vesta::render::PathTraceBackend::HardwareRT;
+    }
+    return std::nullopt;
+}
+
+std::optional<vesta::render::CompareMode> ParseCompareMode(std::string_view value)
+{
+    if (value == "off") {
+        return vesta::render::CompareMode::Off;
+    }
+    if (value == "split" || value == "raster-path-split") {
+        return vesta::render::CompareMode::RasterPathSplit;
+    }
+    if (value == "difference" || value == "diff" || value == "heatmap") {
+        return vesta::render::CompareMode::DifferenceHeatmap;
     }
     return std::nullopt;
 }
@@ -146,6 +163,45 @@ int main(int argc, char* argv[])
                 std::cerr << "Unknown PT backend: " << value << "\n";
                 return 1;
             }
+            continue;
+        }
+        if (argument == "--compare") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            options.startupCompareMode = ParseCompareMode(value);
+            if (!options.startupCompareMode.has_value()) {
+                std::cerr << "Unknown compare mode: " << value << "\n";
+                return 1;
+            }
+            options.startupDisplayMode = vesta::render::RendererDisplayMode::Composite;
+            continue;
+        }
+        if (argument == "--compare-split") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            float split = 0.0f;
+            if (!TryParseFloat(value, split) || split < 0.05f || split > 0.95f) {
+                std::cerr << "Invalid compare split: " << value << "\n";
+                return 1;
+            }
+            options.startupCompareSplitPosition = split;
+            continue;
+        }
+        if (argument == "--compare-scale") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            float scale = 0.0f;
+            if (!TryParseFloat(value, scale) || scale <= 0.0f) {
+                std::cerr << "Invalid compare scale: " << value << "\n";
+                return 1;
+            }
+            options.startupCompareDifferenceScale = scale;
             continue;
         }
         if (argument == "--pt-scale") {
