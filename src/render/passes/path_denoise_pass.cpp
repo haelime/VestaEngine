@@ -20,7 +20,7 @@ struct PathDenoisePushConstants {
     float temporalBlend{ 0.88f };
     float normalSigma{ 28.0f };
     float depthSigma{ 220.0f };
-    uint32_t reserved0{ 0 };
+    uint32_t iterations{ 3 };
     uint32_t reserved1{ 0 };
 };
 } // namespace
@@ -49,6 +49,11 @@ void PathDenoisePass::SetStrength(float strength)
 void PathDenoisePass::SetTemporalBlend(float blend)
 {
     _temporalBlend = std::clamp(blend, 0.0f, 0.98f);
+}
+
+void PathDenoisePass::SetIterations(uint32_t iterations)
+{
+    _iterations = std::clamp(iterations, 1u, 5u);
 }
 
 void PathDenoisePass::SetFrameIndex(uint32_t frameIndex)
@@ -158,6 +163,7 @@ void PathDenoisePass::Execute(const RenderGraphContext& context)
         .frameIndex = _frameIndex,
         .strength = _strength,
         .temporalBlend = _temporalBlend,
+        .iterations = _iterations,
     };
 
     VkCommandBuffer commandBuffer = context.GetCommandBuffer();

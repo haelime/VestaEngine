@@ -10,6 +10,7 @@ public:
     void SetOutput(GraphTextureHandle output);
     void SetStrength(float strength);
     void SetTemporalBlend(float blend);
+    void SetIterations(uint32_t iterations);
     void SetFrameIndex(uint32_t frameIndex);
 
     [[nodiscard]] std::string_view Name() const override { return "PathDenoisePass"; }
@@ -25,6 +26,7 @@ private:
     GraphTextureHandle _output{};
     float _strength{ 0.65f };
     float _temporalBlend{ 0.88f };
+    uint32_t _iterations{ 3 };
     uint32_t _frameIndex{ 0 };
     ImageHandle _historyImage{};
     VkExtent3D _historyExtent{};

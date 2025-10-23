@@ -2445,6 +2445,11 @@ void VestaEngine::build_debug_ui()
             if (ImGui::SliderFloat("PT Denoiser Temporal", &settings.pathTraceDenoiserTemporalBlend, 0.0f, 0.98f, "%.2f")) {
                 _renderer.ResetAccumulation();
             }
+            int denoiserIterations = static_cast<int>(settings.pathTraceDenoiserIterations);
+            if (ImGui::SliderInt("PT Denoiser Iterations", &denoiserIterations, 1, 5)) {
+                settings.pathTraceDenoiserIterations = static_cast<uint32_t>(std::clamp(denoiserIterations, 1, 5));
+                _renderer.ResetAccumulation();
+            }
         }
         if (ImGui::Button("Reset PT Accumulation")) {
             _renderer.ResetAccumulation();

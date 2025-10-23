@@ -208,6 +208,7 @@ struct RendererSettings {
     bool enablePathTraceDenoiser{ true };
     float pathTraceDenoiserStrength{ 0.65f };
     float pathTraceDenoiserTemporalBlend{ 0.88f };
+    uint32_t pathTraceDenoiserIterations{ 3 };
     glm::vec4 lightDirectionAndIntensity{ -0.4f, -1.0f, -0.3f, 2.0f };
     float environmentIntensity{ 1.0f };
     float environmentRotationDegrees{ 0.0f };

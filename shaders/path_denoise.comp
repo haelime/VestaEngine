@@ -17,7 +17,7 @@ layout(push_constant) uniform PathDenoisePushConstants {
     float temporalBlend;
     float normalSigma;
     float depthSigma;
-    uint reserved0;
+    uint iterations;
     uint reserved1;
 } pc;
 
@@ -38,30 +38,37 @@ void main()
     vec3 centerNormal = imageLoad(storageImages[nonuniformEXT(int(pc.normalGuideImageIndex))], pixel).rgb * 2.0 - 1.0;
     float centerDepth = imageLoad(storageImages[nonuniformEXT(int(pc.depthGuideImageIndex))], pixel).r;
     float centerLum = luminance(center);
-    vec3 sum = center;
-    float weightSum = 1.0;
+    vec3 filtered = center;
+    uint iterationCount = clamp(pc.iterations, 1u, 5u);
+    for (uint iteration = 0u; iteration < iterationCount; ++iteration) {
+        int stepWidth = int(1u << iteration);
+        vec3 sum = filtered;
+        float weightSum = 1.0;
 
-    for (int y = -2; y <= 2; ++y) {
-        for (int x = -2; x <= 2; ++x) {
-            if (x == 0 && y == 0) {
-                continue;
+        for (int y = -2; y <= 2; ++y) {
+            for (int x = -2; x <= 2; ++x) {
+                if (x == 0 && y == 0) {
+                    continue;
+                }
+
+                ivec2 samplePixel = clamp(pixel + ivec2(x, y) * stepWidth, ivec2(0), size - ivec2(1));
+                vec3 sampleColor = imageLoad(storageImages[nonuniformEXT(int(pc.inputImageIndex))], samplePixel).rgb;
+                vec3 sampleNormal = imageLoad(storageImages[nonuniformEXT(int(pc.normalGuideImageIndex))], samplePixel).rgb * 2.0 - 1.0;
+                float sampleDepth = imageLoad(storageImages[nonuniformEXT(int(pc.depthGuideImageIndex))], samplePixel).r;
+                float spatial = exp(-float(x * x + y * y) * 0.35);
+                float range = exp(-abs(luminance(sampleColor) - centerLum) * 6.0);
+                float normalWeight = exp(-(1.0 - clamp(dot(centerNormal, sampleNormal), 0.0, 1.0)) * pc.normalSigma);
+                float depthWeight = exp(-abs(sampleDepth - centerDepth) * pc.depthSigma);
+                float weight = spatial * range * normalWeight * depthWeight;
+                sum += sampleColor * weight;
+                weightSum += weight;
             }
-
-            ivec2 samplePixel = clamp(pixel + ivec2(x, y), ivec2(0), size - ivec2(1));
-            vec3 sampleColor = imageLoad(storageImages[nonuniformEXT(int(pc.inputImageIndex))], samplePixel).rgb;
-            vec3 sampleNormal = imageLoad(storageImages[nonuniformEXT(int(pc.normalGuideImageIndex))], samplePixel).rgb * 2.0 - 1.0;
-            float sampleDepth = imageLoad(storageImages[nonuniformEXT(int(pc.depthGuideImageIndex))], samplePixel).r;
-            float spatial = exp(-float(x * x + y * y) * 0.35);
-            float range = exp(-abs(luminance(sampleColor) - centerLum) * 6.0);
-            float normalWeight = exp(-(1.0 - clamp(dot(centerNormal, sampleNormal), 0.0, 1.0)) * pc.normalSigma);
-            float depthWeight = exp(-abs(sampleDepth - centerDepth) * pc.depthSigma);
-            float weight = spatial * range * normalWeight * depthWeight;
-            sum += sampleColor * weight;
-            weightSum += weight;
         }
+        vec3 iterationColor = sum / max(weightSum, 1.0e-4);
+        float iterationStrength = clamp(pc.strength, 0.0, 1.0) / float(iterationCount);
+        filtered = mix(filtered, iterationColor, iterationStrength);
     }
 
-    vec3 filtered = sum / max(weightSum, 1.0e-4);
     vec3 spatialColor = mix(center, filtered, clamp(pc.strength, 0.0, 1.0));
     vec3 historyColor = imageLoad(storageImages[nonuniformEXT(int(pc.historyImageIndex))], pixel).rgb;
     vec3 outputColor = pc.frameIndex == 0u

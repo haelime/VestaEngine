@@ -513,6 +513,7 @@ void ConfigurePathDenoisePass(Renderer& renderer, IRenderPass& pass, const Rende
     denoisePass.SetOutput(resources.pathTraceDenoised);
     denoisePass.SetStrength(renderer.GetSettings().pathTraceDenoiserStrength);
     denoisePass.SetTemporalBlend(renderer.GetSettings().pathTraceDenoiserTemporalBlend);
+    denoisePass.SetIterations(renderer.GetSettings().pathTraceDenoiserIterations);
     denoisePass.SetFrameIndex(renderer.GetPathTraceFrameIndex());
 }
 
