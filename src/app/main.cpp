@@ -14,6 +14,9 @@ void PrintUsage()
         << "  --preset <recommended|performance|balanced|quality>\n"
         << "  --mode <composite|raster|deferred|gaussian|pathtrace>\n"
         << "  --compare <off|split|difference>\n"
+        << "  --debug-view <final|albedo|normal|world-position|depth|uv|material-id|object-id|roughness|metallic|emissive>\n"
+        << "  --pt-debug <final|albedo|normal|depth|direct|indirect>\n"
+        << "  --gaussian-debug <final|alpha|revealage|overdraw|depth|tile-occupancy>\n"
         << "  --compare-split <0.05-0.95>\n"
         << "  --compare-scale <value>\n"
         << "  --pt-backend <auto|compute|hardwarert>\n"
@@ -86,6 +89,44 @@ std::optional<vesta::render::CompareMode> ParseCompareMode(std::string_view valu
     if (value == "difference" || value == "diff" || value == "heatmap") {
         return vesta::render::CompareMode::DifferenceHeatmap;
     }
+    return std::nullopt;
+}
+
+std::optional<vesta::render::RendererDebugView> ParseDebugView(std::string_view value)
+{
+    if (value == "final") { return vesta::render::RendererDebugView::FinalColor; }
+    if (value == "albedo" || value == "base-color") { return vesta::render::RendererDebugView::Albedo; }
+    if (value == "normal") { return vesta::render::RendererDebugView::Normal; }
+    if (value == "world-position" || value == "position") { return vesta::render::RendererDebugView::WorldPosition; }
+    if (value == "depth" || value == "linear-depth") { return vesta::render::RendererDebugView::Depth; }
+    if (value == "uv") { return vesta::render::RendererDebugView::UV; }
+    if (value == "material-id") { return vesta::render::RendererDebugView::MaterialId; }
+    if (value == "object-id") { return vesta::render::RendererDebugView::ObjectId; }
+    if (value == "roughness") { return vesta::render::RendererDebugView::Roughness; }
+    if (value == "metallic") { return vesta::render::RendererDebugView::Metallic; }
+    if (value == "emissive") { return vesta::render::RendererDebugView::Emissive; }
+    return std::nullopt;
+}
+
+std::optional<vesta::render::PathTraceDebugView> ParsePathTraceDebugView(std::string_view value)
+{
+    if (value == "final") { return vesta::render::PathTraceDebugView::Final; }
+    if (value == "albedo") { return vesta::render::PathTraceDebugView::Albedo; }
+    if (value == "normal") { return vesta::render::PathTraceDebugView::Normal; }
+    if (value == "depth") { return vesta::render::PathTraceDebugView::Depth; }
+    if (value == "direct") { return vesta::render::PathTraceDebugView::Direct; }
+    if (value == "indirect") { return vesta::render::PathTraceDebugView::Indirect; }
+    return std::nullopt;
+}
+
+std::optional<vesta::render::GaussianDebugView> ParseGaussianDebugView(std::string_view value)
+{
+    if (value == "final") { return vesta::render::GaussianDebugView::Final; }
+    if (value == "alpha") { return vesta::render::GaussianDebugView::Alpha; }
+    if (value == "revealage") { return vesta::render::GaussianDebugView::Revealage; }
+    if (value == "overdraw" || value == "overdraw-heatmap") { return vesta::render::GaussianDebugView::OverdrawHeatmap; }
+    if (value == "depth") { return vesta::render::GaussianDebugView::Depth; }
+    if (value == "tile-occupancy" || value == "tiles") { return vesta::render::GaussianDebugView::TileOccupancy; }
     return std::nullopt;
 }
 
@@ -176,6 +217,36 @@ int main(int argc, char* argv[])
                 return 1;
             }
             options.startupDisplayMode = vesta::render::RendererDisplayMode::Composite;
+            continue;
+        }
+        if (argument == "--debug-view") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) { return 1; }
+            options.startupDebugView = ParseDebugView(value);
+            if (!options.startupDebugView.has_value()) {
+                std::cerr << "Unknown debug view: " << value << "\n";
+                return 1;
+            }
+            continue;
+        }
+        if (argument == "--pt-debug") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) { return 1; }
+            options.startupPathTraceDebugView = ParsePathTraceDebugView(value);
+            if (!options.startupPathTraceDebugView.has_value()) {
+                std::cerr << "Unknown PT debug view: " << value << "\n";
+                return 1;
+            }
+            continue;
+        }
+        if (argument == "--gaussian-debug") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) { return 1; }
+            options.startupGaussianDebugView = ParseGaussianDebugView(value);
+            if (!options.startupGaussianDebugView.has_value()) {
+                std::cerr << "Unknown Gaussian debug view: " << value << "\n";
+                return 1;
+            }
             continue;
         }
         if (argument == "--compare-split") {

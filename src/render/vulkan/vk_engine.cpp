@@ -696,6 +696,18 @@ void VestaEngine::init_renderer()
         settings.displayMode = vesta::render::RendererDisplayMode::Composite;
         resetAccumulation = true;
     }
+    if (_launchOptions.startupDebugView.has_value()) {
+        settings.debugView = *_launchOptions.startupDebugView;
+        resetAccumulation = true;
+    }
+    if (_launchOptions.startupPathTraceDebugView.has_value()) {
+        settings.pathTraceDebugView = *_launchOptions.startupPathTraceDebugView;
+        resetAccumulation = true;
+    }
+    if (_launchOptions.startupGaussianDebugView.has_value()) {
+        settings.gaussianDebugView = *_launchOptions.startupGaussianDebugView;
+        resetAccumulation = true;
+    }
     if (_launchOptions.startupCompareSplitPosition.has_value()) {
         settings.compareSplitPosition = std::clamp(*_launchOptions.startupCompareSplitPosition, 0.05f, 0.95f);
         resetAccumulation = true;

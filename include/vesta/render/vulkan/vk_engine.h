@@ -24,6 +24,9 @@ struct EngineLaunchOptions {
     std::optional<vesta::render::RendererPreset> startupPreset;
     std::optional<vesta::render::RendererDisplayMode> startupDisplayMode;
     std::optional<vesta::render::CompareMode> startupCompareMode;
+    std::optional<vesta::render::RendererDebugView> startupDebugView;
+    std::optional<vesta::render::PathTraceDebugView> startupPathTraceDebugView;
+    std::optional<vesta::render::GaussianDebugView> startupGaussianDebugView;
     std::optional<float> startupCompareSplitPosition;
     std::optional<float> startupCompareDifferenceScale;
     std::optional<vesta::render::PathTraceBackend> startupPathTraceBackend;

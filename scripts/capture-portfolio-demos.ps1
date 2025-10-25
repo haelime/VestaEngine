@@ -30,7 +30,15 @@ $runs = @(
     },
     @{
         Name = "04_gaussian_debug"
-        Args = @("--scene", "assets\demo\garden_input.ply", "--mode", "gaussian")
+        Args = @("--scene", "assets\demo\garden_input.ply", "--mode", "gaussian", "--gaussian-debug", "overdraw")
+    },
+    @{
+        Name = "05_raster_normal_debug"
+        Args = @("--scene", "assets\demo\DamagedHelmet.glb", "--mode", "raster", "--debug-view", "normal")
+    },
+    @{
+        Name = "06_pathtrace_indirect_aov"
+        Args = @("--scene", "assets\demo\DamagedHelmet.glb", "--mode", "pathtrace", "--pt-debug", "indirect")
     }
 )
 
