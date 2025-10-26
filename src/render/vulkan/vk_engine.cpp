@@ -161,6 +161,54 @@ const char* PathTraceDebugViewLabel(vesta::render::PathTraceDebugView view)
     }
 }
 
+const char* RendererDebugViewLabel(vesta::render::RendererDebugView view)
+{
+    switch (view) {
+    case vesta::render::RendererDebugView::Albedo:
+        return "Albedo";
+    case vesta::render::RendererDebugView::Normal:
+        return "Normal";
+    case vesta::render::RendererDebugView::WorldPosition:
+        return "World Position";
+    case vesta::render::RendererDebugView::Depth:
+        return "Linear Depth";
+    case vesta::render::RendererDebugView::UV:
+        return "UV";
+    case vesta::render::RendererDebugView::MaterialId:
+        return "Material ID";
+    case vesta::render::RendererDebugView::ObjectId:
+        return "Object ID";
+    case vesta::render::RendererDebugView::Roughness:
+        return "Roughness";
+    case vesta::render::RendererDebugView::Metallic:
+        return "Metallic";
+    case vesta::render::RendererDebugView::Emissive:
+        return "Emissive";
+    case vesta::render::RendererDebugView::FinalColor:
+    default:
+        return "Final Color";
+    }
+}
+
+const char* GaussianDebugViewLabel(vesta::render::GaussianDebugView view)
+{
+    switch (view) {
+    case vesta::render::GaussianDebugView::Alpha:
+        return "Alpha";
+    case vesta::render::GaussianDebugView::Revealage:
+        return "Revealage";
+    case vesta::render::GaussianDebugView::OverdrawHeatmap:
+        return "Overdraw Heatmap";
+    case vesta::render::GaussianDebugView::Depth:
+        return "Depth";
+    case vesta::render::GaussianDebugView::TileOccupancy:
+        return "Tile Occupancy";
+    case vesta::render::GaussianDebugView::Final:
+    default:
+        return "Final";
+    }
+}
+
 const char* CompareModeLabel(vesta::render::CompareMode mode)
 {
     switch (mode) {
@@ -1197,7 +1245,10 @@ void VestaEngine::finish_benchmark()
     }
 
     if (writeHeader) {
-        output << "timestamp,scene,scene_kind,gpu,resolution,vsync,present_mode,fps_limit_enabled,fps_limit,display_mode,compare_mode,compare_split,compare_difference_scale,requested_backend,active_backend,scene_upload_mode,"
+        output << "timestamp,scene,scene_kind,gpu,resolution,vsync,present_mode,fps_limit_enabled,fps_limit,display_mode,"
+               << "debug_view,path_trace_debug_view,gaussian_debug_view,compare_mode,compare_split,compare_difference_scale,"
+               << "pt_denoiser,pt_denoiser_strength,pt_denoiser_temporal,pt_denoiser_iterations,"
+               << "requested_backend,active_backend,scene_upload_mode,"
                << "gaussian,path_tracing,texture_streaming,indirect_draw,frustum_culling,distance_culling,"
                << "gaussian_trained,gaussian_count,gaussian_sh_degree,gaussian_view_dependent_color,gaussian_antialiasing,"
                << "gaussian_fast_culling,gaussian_opacity,gaussian_mix,gaussian_interactive_preview,"
@@ -1242,9 +1293,16 @@ void VestaEngine::finish_benchmark()
            << (settings.enableFpsLimit ? "true" : "false") << ','
            << settings.fpsLimit << ','
            << DisplayModeLabel(settings.displayMode) << ','
+           << CsvEscape(RendererDebugViewLabel(settings.debugView)) << ','
+           << CsvEscape(PathTraceDebugViewLabel(settings.pathTraceDebugView)) << ','
+           << CsvEscape(GaussianDebugViewLabel(settings.gaussianDebugView)) << ','
            << CsvEscape(CompareModeLabel(settings.compareMode)) << ','
            << settings.compareSplitPosition << ','
            << settings.compareDifferenceScale << ','
+           << (settings.enablePathTraceDenoiser ? "true" : "false") << ','
+           << settings.pathTraceDenoiserStrength << ','
+           << settings.pathTraceDenoiserTemporalBlend << ','
+           << settings.pathTraceDenoiserIterations << ','
            << PathTraceBackendLabel(settings.pathTraceBackend) << ','
            << PathTraceBackendLabel(_renderer.GetActivePathTraceBackend()) << ','
            << CsvEscape(SceneUploadModeLabel(settings.sceneUploadMode)) << ','
@@ -1349,9 +1407,16 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "  \"fps_limit_enabled\": " << (settings.enableFpsLimit ? "true" : "false") << ",\n"
            << "  \"fps_limit\": " << settings.fpsLimit << ",\n"
            << "  \"display_mode\": \"" << DisplayModeLabel(settings.displayMode) << "\",\n"
+           << "  \"debug_view\": \"" << RendererDebugViewLabel(settings.debugView) << "\",\n"
+           << "  \"path_trace_debug_view\": \"" << PathTraceDebugViewLabel(settings.pathTraceDebugView) << "\",\n"
+           << "  \"gaussian_debug_view\": \"" << GaussianDebugViewLabel(settings.gaussianDebugView) << "\",\n"
            << "  \"compare_mode\": \"" << CompareModeLabel(settings.compareMode) << "\",\n"
            << "  \"compare_split\": " << settings.compareSplitPosition << ",\n"
            << "  \"compare_difference_scale\": " << settings.compareDifferenceScale << ",\n"
+           << "  \"path_trace_denoiser\": " << (settings.enablePathTraceDenoiser ? "true" : "false") << ",\n"
+           << "  \"path_trace_denoiser_strength\": " << settings.pathTraceDenoiserStrength << ",\n"
+           << "  \"path_trace_denoiser_temporal\": " << settings.pathTraceDenoiserTemporalBlend << ",\n"
+           << "  \"path_trace_denoiser_iterations\": " << settings.pathTraceDenoiserIterations << ",\n"
            << "  \"path_trace_backend\": \"" << PathTraceBackendLabel(_renderer.GetActivePathTraceBackend()) << "\",\n"
            << "  \"frame_index\": " << _frameNumber << ",\n"
            << "  \"path_trace_frame_index\": " << _renderer.GetPathTraceFrameIndex() << ",\n"
