@@ -1,6 +1,7 @@
 #include <vesta/render/passes/deferred_lighting_pass.h>
 
 #include <array>
+#include <algorithm>
 
 #include <glm/glm.hpp>
 
@@ -25,6 +26,7 @@ struct DeferredLightingPushConstants {
     glm::vec4 cameraPosition{ 0.0f };
     glm::vec4 lightDirectionAndIntensity{ -0.4f, -1.0f, -0.3f, 2.0f };
     glm::vec4 environmentParams{ 1.0f, 0.0f, 0.0f, 0.0f };
+    glm::vec4 ssaoParams{ 1.0f, 0.75f, 1.35f, 0.0f };
 };
 } // namespace
 
@@ -54,6 +56,11 @@ void DeferredLightingPass::SetLight(glm::vec4 lightDirectionAndIntensity)
 void DeferredLightingPass::SetEnvironment(glm::vec4 environmentParams)
 {
     _environmentParams = environmentParams;
+}
+
+void DeferredLightingPass::SetAmbientOcclusion(bool enabled, float radius, float intensity)
+{
+    _ssaoParams = glm::vec4(enabled ? 1.0f : 0.0f, std::max(radius, 0.01f), std::clamp(intensity, 0.0f, 4.0f), 0.0f);
 }
 
 void DeferredLightingPass::Initialize(RenderDevice& device)
@@ -112,6 +119,7 @@ void DeferredLightingPass::Execute(const RenderGraphContext& context)
         .cameraPosition = glm::vec4(_camera->GetPosition(), 1.0f),
         .lightDirectionAndIntensity = _lightDirectionAndIntensity,
         .environmentParams = _environmentParams,
+        .ssaoParams = _ssaoParams,
     };
 
     VkCommandBuffer commandBuffer = context.GetCommandBuffer();

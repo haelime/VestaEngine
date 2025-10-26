@@ -31,6 +31,9 @@ struct EngineLaunchOptions {
     std::optional<float> startupCompareDifferenceScale;
     std::optional<vesta::render::PathTraceBackend> startupPathTraceBackend;
     std::optional<float> startupPathTraceResolutionScale;
+    std::optional<bool> startupSsaoEnabled;
+    std::optional<float> startupSsaoRadius;
+    std::optional<float> startupSsaoIntensity;
     std::optional<BenchmarkConfig> benchmark;
     std::filesystem::path startupLogPath{ "out/startup.log" };
     bool safeStartupMode{ true };

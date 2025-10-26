@@ -209,6 +209,9 @@ struct RendererSettings {
     float pathTraceDenoiserStrength{ 0.65f };
     float pathTraceDenoiserTemporalBlend{ 0.88f };
     uint32_t pathTraceDenoiserIterations{ 3 };
+    bool enableSsao{ true };
+    float ssaoRadius{ 0.75f };
+    float ssaoIntensity{ 1.35f };
     glm::vec4 lightDirectionAndIntensity{ -0.4f, -1.0f, -0.3f, 2.0f };
     float environmentIntensity{ 1.0f };
     float environmentRotationDegrees{ 0.0f };

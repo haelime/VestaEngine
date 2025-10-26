@@ -21,6 +21,9 @@ void PrintUsage()
         << "  --compare-scale <value>\n"
         << "  --pt-backend <auto|compute|hardwarert>\n"
         << "  --pt-scale <0.25-1.0>\n"
+        << "  --ssao <on|off>               Toggle raster screen-space ambient occlusion.\n"
+        << "  --ssao-radius <value>         SSAO world-space sample radius.\n"
+        << "  --ssao-intensity <value>      SSAO darkening strength.\n"
         << "  --benchmark <csv-path>        Run a timed benchmark and exit.\n"
         << "  --screenshot <png-path>       Save a PNG capture during benchmark.\n"
         << "  --benchmark-seconds <value>   Benchmark capture duration.\n"
@@ -138,6 +141,17 @@ bool TryParseFloat(const char* value, float& output)
     } catch (...) {
         return false;
     }
+}
+
+std::optional<bool> ParseToggle(std::string_view value)
+{
+    if (value == "on" || value == "true" || value == "1" || value == "yes") {
+        return true;
+    }
+    if (value == "off" || value == "false" || value == "0" || value == "no") {
+        return false;
+    }
+    return std::nullopt;
 }
 } // namespace
 
@@ -286,6 +300,44 @@ int main(int argc, char* argv[])
                 return 1;
             }
             options.startupPathTraceResolutionScale = scale;
+            continue;
+        }
+        if (argument == "--ssao") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            options.startupSsaoEnabled = ParseToggle(value);
+            if (!options.startupSsaoEnabled.has_value()) {
+                std::cerr << "Invalid SSAO toggle: " << value << "\n";
+                return 1;
+            }
+            continue;
+        }
+        if (argument == "--ssao-radius") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            float radius = 0.0f;
+            if (!TryParseFloat(value, radius) || radius <= 0.0f) {
+                std::cerr << "Invalid SSAO radius: " << value << "\n";
+                return 1;
+            }
+            options.startupSsaoRadius = radius;
+            continue;
+        }
+        if (argument == "--ssao-intensity") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            float intensity = 0.0f;
+            if (!TryParseFloat(value, intensity) || intensity < 0.0f) {
+                std::cerr << "Invalid SSAO intensity: " << value << "\n";
+                return 1;
+            }
+            options.startupSsaoIntensity = intensity;
             continue;
         }
         if (argument == "--benchmark") {

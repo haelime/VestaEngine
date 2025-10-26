@@ -772,6 +772,18 @@ void VestaEngine::init_renderer()
         settings.pathTraceResolutionScale = std::clamp(*_launchOptions.startupPathTraceResolutionScale, 0.25f, 1.0f);
         resetAccumulation = true;
     }
+    if (_launchOptions.startupSsaoEnabled.has_value()) {
+        settings.enableSsao = *_launchOptions.startupSsaoEnabled;
+        resetAccumulation = true;
+    }
+    if (_launchOptions.startupSsaoRadius.has_value()) {
+        settings.ssaoRadius = std::clamp(*_launchOptions.startupSsaoRadius, 0.05f, 5.0f);
+        resetAccumulation = true;
+    }
+    if (_launchOptions.startupSsaoIntensity.has_value()) {
+        settings.ssaoIntensity = std::clamp(*_launchOptions.startupSsaoIntensity, 0.0f, 4.0f);
+        resetAccumulation = true;
+    }
     if (_launchOptions.benchmark.has_value()) {
         settings.frameTimingCapture = true;
         settings.benchmarkOverlay = false;
@@ -1247,6 +1259,7 @@ void VestaEngine::finish_benchmark()
     if (writeHeader) {
         output << "timestamp,scene,scene_kind,gpu,resolution,vsync,present_mode,fps_limit_enabled,fps_limit,display_mode,"
                << "debug_view,path_trace_debug_view,gaussian_debug_view,compare_mode,compare_split,compare_difference_scale,"
+               << "ssao,ssao_radius,ssao_intensity,"
                << "pt_denoiser,pt_denoiser_strength,pt_denoiser_temporal,pt_denoiser_iterations,"
                << "requested_backend,active_backend,scene_upload_mode,"
                << "gaussian,path_tracing,texture_streaming,indirect_draw,frustum_culling,distance_culling,"
@@ -1299,6 +1312,9 @@ void VestaEngine::finish_benchmark()
            << CsvEscape(CompareModeLabel(settings.compareMode)) << ','
            << settings.compareSplitPosition << ','
            << settings.compareDifferenceScale << ','
+           << (settings.enableSsao ? "true" : "false") << ','
+           << settings.ssaoRadius << ','
+           << settings.ssaoIntensity << ','
            << (settings.enablePathTraceDenoiser ? "true" : "false") << ','
            << settings.pathTraceDenoiserStrength << ','
            << settings.pathTraceDenoiserTemporalBlend << ','
@@ -1413,6 +1429,9 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "  \"compare_mode\": \"" << CompareModeLabel(settings.compareMode) << "\",\n"
            << "  \"compare_split\": " << settings.compareSplitPosition << ",\n"
            << "  \"compare_difference_scale\": " << settings.compareDifferenceScale << ",\n"
+           << "  \"ssao\": " << (settings.enableSsao ? "true" : "false") << ",\n"
+           << "  \"ssao_radius\": " << settings.ssaoRadius << ",\n"
+           << "  \"ssao_intensity\": " << settings.ssaoIntensity << ",\n"
            << "  \"path_trace_denoiser\": " << (settings.enablePathTraceDenoiser ? "true" : "false") << ",\n"
            << "  \"path_trace_denoiser_strength\": " << settings.pathTraceDenoiserStrength << ",\n"
            << "  \"path_trace_denoiser_temporal\": " << settings.pathTraceDenoiserTemporalBlend << ",\n"
@@ -1955,8 +1974,14 @@ void VestaEngine::build_debug_ui()
                 ImGui::TableSetColumnIndex(1);
                 ImGui::Text("%.2fx / %.1f deg", settings.environmentIntensity, settings.environmentRotationDegrees);
                 ImGui::TableSetColumnIndex(2);
-                ImGui::TextUnformatted("Camera Look");
+                ImGui::TextUnformatted("SSAO");
                 ImGui::TableSetColumnIndex(3);
+                ImGui::Text("%s / r %.2f / i %.2f", settings.enableSsao ? "On" : "Off", settings.ssaoRadius, settings.ssaoIntensity);
+
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextUnformatted("Camera Look");
+                ImGui::TableSetColumnIndex(1);
                 ImGui::Text("%.2f EV / A %.3f / F %.2f",
                     settings.cameraExposureEv,
                     settings.cameraApertureRadius,
@@ -2489,6 +2514,18 @@ void VestaEngine::build_debug_ui()
         }
         if (ImGui::SliderFloat("Gaussian Mix", &settings.gaussianMix, 0.0f, 1.0f, "%.2f")) {
             _renderer.ResetAccumulation();
+        }
+        ImGui::SeparatorText("Raster Lighting");
+        if (ImGui::Checkbox("SSAO", &settings.enableSsao)) {
+            _renderer.ResetAccumulation();
+        }
+        if (settings.enableSsao) {
+            if (ImGui::SliderFloat("SSAO Radius", &settings.ssaoRadius, 0.05f, 5.0f, "%.2f")) {
+                _renderer.ResetAccumulation();
+            }
+            if (ImGui::SliderFloat("SSAO Intensity", &settings.ssaoIntensity, 0.0f, 4.0f, "%.2f")) {
+                _renderer.ResetAccumulation();
+            }
         }
         if (ImGui::SliderFloat("PT Resolution", &settings.pathTraceResolutionScale, 0.25f, 1.0f, "%.2fx")) {
             _renderer.ResetAccumulation();
