@@ -541,6 +541,9 @@ void ConfigureCompositePass(Renderer& renderer, IRenderPass& pass, const Rendere
         renderer.GetSettings().compareSplitPosition,
         renderer.GetSettings().compareDifferenceScale);
     compositePass.SetExposure(renderer.GetSettings().cameraExposureEv);
+    compositePass.SetAmbientOcclusion(
+        renderer.GetSettings().enableSsao, renderer.GetSettings().ssaoRadius, renderer.GetSettings().ssaoIntensity);
+    compositePass.SetCameraPosition(renderer.GetCamera().GetPosition());
     compositePass.SetInverseViewProjection(renderer.GetCamera().GetInverseViewProjection());
     compositePass.SetDepthRange(renderer.GetCamera().GetNearPlane(), renderer.GetCamera().GetFarPlane());
 }

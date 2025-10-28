@@ -14,7 +14,7 @@ void PrintUsage()
         << "  --preset <recommended|performance|balanced|quality>\n"
         << "  --mode <composite|raster|deferred|gaussian|pathtrace>\n"
         << "  --compare <off|split|difference>\n"
-        << "  --debug-view <final|albedo|normal|world-position|depth|uv|material-id|object-id|roughness|metallic|emissive>\n"
+        << "  --debug-view <final|albedo|normal|world-position|depth|uv|material-id|object-id|roughness|metallic|emissive|ao>\n"
         << "  --pt-debug <final|albedo|normal|depth|direct|indirect>\n"
         << "  --gaussian-debug <final|alpha|revealage|overdraw|depth|tile-occupancy>\n"
         << "  --compare-split <0.05-0.95>\n"
@@ -108,6 +108,7 @@ std::optional<vesta::render::RendererDebugView> ParseDebugView(std::string_view 
     if (value == "roughness") { return vesta::render::RendererDebugView::Roughness; }
     if (value == "metallic") { return vesta::render::RendererDebugView::Metallic; }
     if (value == "emissive") { return vesta::render::RendererDebugView::Emissive; }
+    if (value == "ao" || value == "ambient-occlusion" || value == "ssao") { return vesta::render::RendererDebugView::AmbientOcclusion; }
     return std::nullopt;
 }
 

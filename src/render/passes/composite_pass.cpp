@@ -1,6 +1,7 @@
 #include <vesta/render/passes/composite_pass.h>
 
 #include <array>
+#include <algorithm>
 
 #include <glm/glm.hpp>
 
@@ -21,6 +22,8 @@ struct CompositePushConstants {
     glm::uvec4 gaussianDebug{ kInvalidImageIndex, 0u, 0u, 8u };
     glm::vec4 params{ 0.25f, 0.0f, 0.0f, 0.0f };
     glm::vec4 compareParams{ 0.0f, 0.5f, 4.0f, 0.0f };
+    glm::vec4 ssaoParams{ 1.0f, 0.75f, 1.35f, 0.0f };
+    glm::vec4 cameraPosition{ 0.0f, 0.0f, 0.0f, 1.0f };
     glm::mat4 inverseViewProjection{ 1.0f };
 };
 } // namespace
@@ -83,6 +86,16 @@ void CompositePass::SetCompare(uint32_t compareMode, float splitPosition, float 
 void CompositePass::SetExposure(float exposureEv)
 {
     _exposureEv = exposureEv;
+}
+
+void CompositePass::SetAmbientOcclusion(bool enabled, float radius, float intensity)
+{
+    _ssaoParams = glm::vec4(enabled ? 1.0f : 0.0f, std::max(radius, 0.01f), std::clamp(intensity, 0.0f, 4.0f), 0.0f);
+}
+
+void CompositePass::SetCameraPosition(const glm::vec3& cameraPosition)
+{
+    _cameraPosition = glm::vec4(cameraPosition, 1.0f);
 }
 
 void CompositePass::SetInverseViewProjection(const glm::mat4& inverseViewProjection)
@@ -175,6 +188,8 @@ void CompositePass::Execute(const RenderGraphContext& context)
         .gaussianDebug = glm::uvec4(_gaussianTileRangeBufferIndex, _gaussianTileCountX, _gaussianTileCountY, 8u),
         .params = glm::vec4(_gaussianMix, _exposureEv, _nearPlane, _farPlane),
         .compareParams = glm::vec4(static_cast<float>(_compareMode), _compareSplitPosition, _compareDifferenceScale, 0.0f),
+        .ssaoParams = _ssaoParams,
+        .cameraPosition = _cameraPosition,
         .inverseViewProjection = _inverseViewProjection,
     };
 

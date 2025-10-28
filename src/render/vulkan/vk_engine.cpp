@@ -184,6 +184,8 @@ const char* RendererDebugViewLabel(vesta::render::RendererDebugView view)
         return "Metallic";
     case vesta::render::RendererDebugView::Emissive:
         return "Emissive";
+    case vesta::render::RendererDebugView::AmbientOcclusion:
+        return "Ambient Occlusion";
     case vesta::render::RendererDebugView::FinalColor:
     default:
         return "Final Color";
@@ -2237,6 +2239,7 @@ void VestaEngine::build_debug_ui()
                 "Roughness",
                 "Metallic",
                 "Emissive",
+                "Ambient Occlusion",
             };
             int commonView = static_cast<int>(settings.debugView);
             if (ImGui::Combo("Debug View", &commonView, commonViews, IM_ARRAYSIZE(commonViews))) {

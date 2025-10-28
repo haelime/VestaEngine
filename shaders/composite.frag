@@ -18,6 +18,8 @@ layout(push_constant) uniform CompositePushConstants {
     uvec4 gaussianDebug;
     vec4 params;
     vec4 compareParams;
+    vec4 ssaoParams;
+    vec4 cameraPosition;
     mat4 inverseViewProjection;
 } pc;
 
@@ -81,6 +83,52 @@ vec3 reconstructWorldPosition(ivec2 pixel, ivec2 size, float depth)
     return world.xyz / max(world.w, 0.0001);
 }
 
+float computeScreenSpaceAo(ivec2 pixel, ivec2 size, vec3 worldPosition, vec3 normal, float depth)
+{
+    if (pc.ssaoParams.x < 0.5 || depth >= 0.99999 || !hasImage(pc.imageIndices2.w)) {
+        return 1.0;
+    }
+
+    const vec2 offsets[12] = vec2[](
+        vec2(1.0, 0.0), vec2(-1.0, 0.0), vec2(0.0, 1.0), vec2(0.0, -1.0),
+        vec2(0.707, 0.707), vec2(-0.707, 0.707), vec2(0.707, -0.707), vec2(-0.707, -0.707),
+        vec2(0.383, 0.924), vec2(-0.924, 0.383), vec2(0.924, -0.383), vec2(-0.383, -0.924));
+
+    float viewDistance = max(length(pc.cameraPosition.xyz - worldPosition), 0.25);
+    float radiusPixels = clamp((pc.ssaoParams.y * 95.0) / viewDistance, 2.0, 48.0);
+    float occlusion = 0.0;
+    float weightSum = 0.0;
+
+    for (int sampleIndex = 0; sampleIndex < 12; ++sampleIndex) {
+        vec2 scaledOffset = offsets[sampleIndex] * radiusPixels * (0.45 + 0.11 * float(sampleIndex % 4));
+        ivec2 samplePixel = clamp(pixel + ivec2(round(scaledOffset)), ivec2(0), size - ivec2(1));
+        float sampleDepth = texelFetch(sampledImages[nonuniformEXT(int(pc.imageIndices2.w))], samplePixel, 0).r;
+        if (sampleDepth >= 0.99999) {
+            continue;
+        }
+
+        vec3 sampleWorld = reconstructWorldPosition(samplePixel, size, sampleDepth);
+        vec3 delta = sampleWorld - worldPosition;
+        float distanceToSample = length(delta);
+        if (distanceToSample <= 0.0001 || distanceToSample > pc.ssaoParams.y) {
+            continue;
+        }
+
+        float hemisphereWeight = max(dot(normal, delta / distanceToSample), 0.0);
+        float rangeWeight = smoothstep(pc.ssaoParams.y, 0.0, distanceToSample);
+        float isOccluder = sampleDepth < depth - 0.0008 ? 1.0 : 0.0;
+        float weight = mix(0.35, 1.0, hemisphereWeight) * rangeWeight;
+        occlusion += isOccluder * weight;
+        weightSum += weight;
+    }
+
+    if (weightSum <= 0.0) {
+        return 1.0;
+    }
+
+    return clamp(1.0 - clamp(occlusion / weightSum, 0.0, 1.0) * pc.ssaoParams.z, 0.0, 1.0);
+}
+
 vec3 resolveDebugView(ivec2 pixel)
 {
     uint debugView = pc.imageIndices1.y;
@@ -137,6 +185,17 @@ vec3 resolveDebugView(ivec2 pixel)
     if (debugView == 10u) {
         if (!hasImage(pc.imageIndices2.z)) { return vec3(-1.0); }
         return loadStorage(pc.imageIndices2.z, pixel).rgb;
+    }
+    if (debugView == 11u) {
+        if (!hasImage(pc.imageIndices2.x) || !hasImage(pc.imageIndices2.y) || !hasImage(pc.imageIndices2.w)) { return vec3(-1.0); }
+        ivec2 size = textureSize(sampledImages[nonuniformEXT(int(pc.imageIndices2.w))], 0);
+        ivec2 clampedPixel = clamp(pixel, ivec2(0), size - ivec2(1));
+        float depth = texelFetch(sampledImages[nonuniformEXT(int(pc.imageIndices2.w))], clampedPixel, 0).r;
+        vec4 normalRoughness = loadStorage(pc.imageIndices2.y, clampedPixel);
+        vec3 normal = normalize(normalRoughness.xyz * 2.0 - 1.0);
+        vec3 worldPosition = reconstructWorldPosition(clampedPixel, size, depth);
+        float materialAo = clamp(loadStorage(pc.imageIndices2.x, clampedPixel).a, 0.0, 1.0);
+        return vec3(materialAo * computeScreenSpaceAo(clampedPixel, size, worldPosition, normal, depth));
     }
     return vec3(-1.0);
 }

@@ -24,6 +24,8 @@ public:
     void SetMode(uint32_t mode, float gaussianMix, uint32_t debugView, uint32_t gaussianDebugView);
     void SetCompare(uint32_t compareMode, float splitPosition, float differenceScale);
     void SetExposure(float exposureEv);
+    void SetAmbientOcclusion(bool enabled, float radius, float intensity);
+    void SetCameraPosition(const glm::vec3& cameraPosition);
     void SetInverseViewProjection(const glm::mat4& inverseViewProjection);
     void SetDepthRange(float nearPlane, float farPlane);
 
@@ -56,6 +58,8 @@ private:
     float _compareSplitPosition{ 0.5f };
     float _compareDifferenceScale{ 4.0f };
     float _exposureEv{ 0.0f };
+    glm::vec4 _ssaoParams{ 1.0f, 0.75f, 1.35f, 0.0f };
+    glm::vec4 _cameraPosition{ 0.0f, 0.0f, 0.0f, 1.0f };
     glm::mat4 _inverseViewProjection{ 1.0f };
     float _nearPlane{ 0.05f };
     float _farPlane{ 500.0f };
