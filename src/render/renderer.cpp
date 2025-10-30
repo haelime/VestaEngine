@@ -26,6 +26,7 @@
 #include <vesta/render/passes/geometry_raster_pass.h>
 #include <vesta/render/passes/path_denoise_pass.h>
 #include <vesta/render/passes/path_tracer_pass.h>
+#include <vesta/render/passes/temporal_aa_pass.h>
 #include <vesta/render/vulkan/vk_images.h>
 #include <vesta/render/vulkan/vk_initializers.h>
 #include <vesta/render/vulkan/vk_loader.h>
@@ -114,6 +115,11 @@ bool NeedsPathTracePass(const RendererSettings& settings)
 bool NeedsPathDenoisePass(const RendererSettings& settings)
 {
     return NeedsPathTracePass(settings) && settings.enablePathTraceDenoiser && settings.pathTraceDebugView == PathTraceDebugView::Final;
+}
+
+bool NeedsTemporalAAPass(const RendererSettings& settings)
+{
+    return NeedsDeferredPass(settings) && settings.enableTaa;
 }
 
 bool UsesStreamingUpload(const RendererSettings& settings)
@@ -518,11 +524,22 @@ void ConfigurePathDenoisePass(Renderer& renderer, IRenderPass& pass, const Rende
     denoisePass.SetFrameIndex(renderer.GetPathTraceFrameIndex());
 }
 
+void ConfigureTemporalAAPass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
+{
+    auto& temporalPass = static_cast<TemporalAAPass&>(pass);
+    temporalPass.SetInputs(resources.deferredLighting, resources.gbufferNormal, resources.sceneDepth);
+    temporalPass.SetOutput(resources.temporalLighting);
+    temporalPass.SetEnabled(renderer.GetSettings().enableTaa);
+    temporalPass.SetFeedback(renderer.GetSettings().taaFeedback);
+    temporalPass.SetFrameIndex(renderer.GetPathTraceFrameIndex());
+}
+
 void ConfigureCompositePass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
 {
     auto& compositePass = static_cast<CompositePass&>(pass);
+    const GraphTextureHandle rasterInput = resources.temporalLighting ? resources.temporalLighting : resources.deferredLighting;
     const GraphTextureHandle pathTraceInput = resources.pathTraceDenoised ? resources.pathTraceDenoised : resources.pathTraceOutput;
-    compositePass.SetInputs(resources.deferredLighting, pathTraceInput, resources.gaussianAccum, resources.gaussianReveal, resources.gaussianDebug);
+    compositePass.SetInputs(rasterInput, pathTraceInput, resources.gaussianAccum, resources.gaussianReveal, resources.gaussianDebug);
     compositePass.SetGBufferInputs(
         resources.gbufferAlbedo, resources.gbufferNormal, resources.gbufferMaterial, resources.gbufferDebug, resources.sceneDepth);
     uint32_t gaussianTileRangeBufferIndex = kInvalidResourceIndex;
@@ -1555,6 +1572,9 @@ std::vector<RenderPassDebugInfo> Renderer::GetRenderPassDebugInfo() const
         } else if (entry.id == "path-denoise") {
             info.dispatchCount = 1u;
             info.rayCount = static_cast<uint64_t>(pathTraceDispatchGrid) * 64ull;
+        } else if (entry.id == "temporal-aa") {
+            info.dispatchCount = 1u;
+            info.rayCount = static_cast<uint64_t>(fullResDispatchGrid) * 64ull;
         } else if (entry.id == "composite") {
             info.drawCount = 1u;
         }
@@ -1739,6 +1759,15 @@ void Renderer::InitializeDefaultPasses()
             ConfigurePathDenoisePass(*this, pass, resources);
         },
         .order = 45,
+        .enabled = true,
+    });
+    RegisterPass(RenderPassRegistrationDesc{
+        .id = "temporal-aa",
+        .pass = std::make_unique<TemporalAAPass>(),
+        .configure = [this](IRenderPass& pass, const RendererGraphResources& resources) {
+            ConfigureTemporalAAPass(*this, pass, resources);
+        },
+        .order = 46,
         .enabled = true,
     });
     RegisterPass(RenderPassRegistrationDesc{
@@ -2647,6 +2676,7 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
     const bool useGaussianPass = NeedsGaussianPass(_settings);
     const bool usePathTracePass = NeedsPathTracePass(_settings);
     const bool usePathDenoisePass = NeedsPathDenoisePass(_settings);
+    const bool useTemporalAAPass = NeedsTemporalAAPass(_settings);
     const bool useOfficialGaussianPass = useGaussianPass && _scene.HasTrainedGaussians() && !IsGaussianInteractivePreviewActive();
     const bool useLegacyGaussianPass = useGaussianPass && (!_scene.HasTrainedGaussians() || IsGaussianInteractivePreviewActive());
 
@@ -2693,6 +2723,9 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
     if (useDeferredPass) {
         resources.deferredLighting = graph.CreateTexture("DeferredLighting", storageDesc);
     }
+    if (useTemporalAAPass) {
+        resources.temporalLighting = graph.CreateTexture("TemporalLighting", storageDesc);
+    }
     if (usePathTracePass) {
         resources.pathTraceOutput = graph.CreateTexture("PathTraceOutput", pathTraceDesc);
     }
@@ -2727,6 +2760,9 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
             continue;
         }
         if (id == "path-denoise" && !usePathDenoisePass) {
+            continue;
+        }
+        if (id == "temporal-aa" && !useTemporalAAPass) {
             continue;
         }
 

@@ -34,6 +34,8 @@ struct EngineLaunchOptions {
     std::optional<bool> startupSsaoEnabled;
     std::optional<float> startupSsaoRadius;
     std::optional<float> startupSsaoIntensity;
+    std::optional<bool> startupTaaEnabled;
+    std::optional<float> startupTaaFeedback;
     std::optional<BenchmarkConfig> benchmark;
     std::filesystem::path startupLogPath{ "out/startup.log" };
     bool safeStartupMode{ true };
@@ -146,8 +148,8 @@ private:
         uint32_t stableGaussianFrames{ 0 };
         bool screenshotQueued{ false };
         std::vector<float> frameTimesMs;
-        std::array<float, 7> passGpuMsSums{};
-        std::array<uint32_t, 7> passGpuSampleCounts{};
+        std::array<float, 8> passGpuMsSums{};
+        std::array<uint32_t, 8> passGpuSampleCounts{};
     } _benchmarkState;
     struct StartupState {
         bool safeOverridesActive{ false };

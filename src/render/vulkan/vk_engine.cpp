@@ -43,13 +43,14 @@ VestaEngine& VestaEngine::Get() { return *loadedEngine; }
 
 namespace {
 constexpr size_t kMaxRecentScenePaths = 5;
-constexpr std::array<std::string_view, 7> kBenchmarkPassNames{
+constexpr std::array<std::string_view, 8> kBenchmarkPassNames{
     "GeometryRasterPass",
     "DeferredLightingPass",
     "GaussianSplatPass",
     "OfficialGaussianRasterPass",
     "PathTracerPass",
     "PathDenoisePass",
+    "TemporalAAPass",
     "CompositePass",
 };
 
@@ -786,6 +787,14 @@ void VestaEngine::init_renderer()
         settings.ssaoIntensity = std::clamp(*_launchOptions.startupSsaoIntensity, 0.0f, 4.0f);
         resetAccumulation = true;
     }
+    if (_launchOptions.startupTaaEnabled.has_value()) {
+        settings.enableTaa = *_launchOptions.startupTaaEnabled;
+        resetAccumulation = true;
+    }
+    if (_launchOptions.startupTaaFeedback.has_value()) {
+        settings.taaFeedback = std::clamp(*_launchOptions.startupTaaFeedback, 0.0f, 0.98f);
+        resetAccumulation = true;
+    }
     if (_launchOptions.benchmark.has_value()) {
         settings.frameTimingCapture = true;
         settings.benchmarkOverlay = false;
@@ -1262,6 +1271,7 @@ void VestaEngine::finish_benchmark()
         output << "timestamp,scene,scene_kind,gpu,resolution,vsync,present_mode,fps_limit_enabled,fps_limit,display_mode,"
                << "debug_view,path_trace_debug_view,gaussian_debug_view,compare_mode,compare_split,compare_difference_scale,"
                << "ssao,ssao_radius,ssao_intensity,"
+               << "taa,taa_feedback,"
                << "pt_denoiser,pt_denoiser_strength,pt_denoiser_temporal,pt_denoiser_iterations,"
                << "requested_backend,active_backend,scene_upload_mode,"
                << "gaussian,path_tracing,texture_streaming,indirect_draw,frustum_culling,distance_culling,"
@@ -1275,7 +1285,7 @@ void VestaEngine::finish_benchmark()
                << "gaussian_preprocess_ms,gaussian_scan_ms,gaussian_duplicate_ms,gaussian_sort_ms,gaussian_range_ms,"
                << "gaussian_raster_ms,gaussian_total_build_ms,"
                << "geometry_pass_gpu_ms,deferred_pass_gpu_ms,legacy_gaussian_pass_gpu_ms,official_gaussian_pass_gpu_ms,"
-               << "path_trace_pass_gpu_ms,path_denoise_pass_gpu_ms,composite_pass_gpu_ms\n";
+               << "path_trace_pass_gpu_ms,path_denoise_pass_gpu_ms,temporal_aa_pass_gpu_ms,composite_pass_gpu_ms\n";
     }
 
     const auto now = std::chrono::system_clock::now();
@@ -1317,6 +1327,8 @@ void VestaEngine::finish_benchmark()
            << (settings.enableSsao ? "true" : "false") << ','
            << settings.ssaoRadius << ','
            << settings.ssaoIntensity << ','
+           << (settings.enableTaa ? "true" : "false") << ','
+           << settings.taaFeedback << ','
            << (settings.enablePathTraceDenoiser ? "true" : "false") << ','
            << settings.pathTraceDenoiserStrength << ','
            << settings.pathTraceDenoiserTemporalBlend << ','
@@ -1381,7 +1393,8 @@ void VestaEngine::finish_benchmark()
            << averagePassGpuMs(3) << ','
            << averagePassGpuMs(4) << ','
            << averagePassGpuMs(5) << ','
-           << averagePassGpuMs(6) << '\n';
+           << averagePassGpuMs(6) << ','
+           << averagePassGpuMs(7) << '\n';
 
     fmt::println("Benchmark written to {}", outputPath.string());
 }
@@ -1434,6 +1447,8 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "  \"ssao\": " << (settings.enableSsao ? "true" : "false") << ",\n"
            << "  \"ssao_radius\": " << settings.ssaoRadius << ",\n"
            << "  \"ssao_intensity\": " << settings.ssaoIntensity << ",\n"
+           << "  \"taa\": " << (settings.enableTaa ? "true" : "false") << ",\n"
+           << "  \"taa_feedback\": " << settings.taaFeedback << ",\n"
            << "  \"path_trace_denoiser\": " << (settings.enablePathTraceDenoiser ? "true" : "false") << ",\n"
            << "  \"path_trace_denoiser_strength\": " << settings.pathTraceDenoiserStrength << ",\n"
            << "  \"path_trace_denoiser_temporal\": " << settings.pathTraceDenoiserTemporalBlend << ",\n"
@@ -1982,8 +1997,12 @@ void VestaEngine::build_debug_ui()
 
                 ImGui::TableNextRow();
                 ImGui::TableSetColumnIndex(0);
-                ImGui::TextUnformatted("Camera Look");
+                ImGui::TextUnformatted("Temporal AA");
                 ImGui::TableSetColumnIndex(1);
+                ImGui::Text("%s / %.2f", settings.enableTaa ? "On" : "Off", settings.taaFeedback);
+                ImGui::TableSetColumnIndex(2);
+                ImGui::TextUnformatted("Camera Look");
+                ImGui::TableSetColumnIndex(3);
                 ImGui::Text("%.2f EV / A %.3f / F %.2f",
                     settings.cameraExposureEv,
                     settings.cameraApertureRadius,
@@ -2527,6 +2546,14 @@ void VestaEngine::build_debug_ui()
                 _renderer.ResetAccumulation();
             }
             if (ImGui::SliderFloat("SSAO Intensity", &settings.ssaoIntensity, 0.0f, 4.0f, "%.2f")) {
+                _renderer.ResetAccumulation();
+            }
+        }
+        if (ImGui::Checkbox("TAA", &settings.enableTaa)) {
+            _renderer.ResetAccumulation();
+        }
+        if (settings.enableTaa) {
+            if (ImGui::SliderFloat("TAA Feedback", &settings.taaFeedback, 0.0f, 0.98f, "%.2f")) {
                 _renderer.ResetAccumulation();
             }
         }

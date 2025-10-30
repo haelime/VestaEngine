@@ -24,6 +24,8 @@ void PrintUsage()
         << "  --ssao <on|off>               Toggle raster screen-space ambient occlusion.\n"
         << "  --ssao-radius <value>         SSAO world-space sample radius.\n"
         << "  --ssao-intensity <value>      SSAO darkening strength.\n"
+        << "  --taa <on|off>                Toggle raster temporal anti-aliasing.\n"
+        << "  --taa-feedback <0.0-0.98>     TAA history blend feedback.\n"
         << "  --benchmark <csv-path>        Run a timed benchmark and exit.\n"
         << "  --screenshot <png-path>       Save a PNG capture during benchmark.\n"
         << "  --benchmark-seconds <value>   Benchmark capture duration.\n"
@@ -339,6 +341,31 @@ int main(int argc, char* argv[])
                 return 1;
             }
             options.startupSsaoIntensity = intensity;
+            continue;
+        }
+        if (argument == "--taa") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            options.startupTaaEnabled = ParseToggle(value);
+            if (!options.startupTaaEnabled.has_value()) {
+                std::cerr << "Invalid TAA toggle: " << value << "\n";
+                return 1;
+            }
+            continue;
+        }
+        if (argument == "--taa-feedback") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            float feedback = 0.0f;
+            if (!TryParseFloat(value, feedback) || feedback < 0.0f || feedback > 0.98f) {
+                std::cerr << "Invalid TAA feedback: " << value << "\n";
+                return 1;
+            }
+            options.startupTaaFeedback = feedback;
             continue;
         }
         if (argument == "--benchmark") {

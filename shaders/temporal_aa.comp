@@ -1,0 +1,63 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : enable
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D sampledImages[];
+layout(rgba16f, set = 0, binding = 1) uniform image2D storageImages[];
+
+layout(push_constant) uniform TemporalAAPushConstants {
+    uint inputImageIndex;
+    uint outputImageIndex;
+    uint normalImageIndex;
+    uint depthImageIndex;
+    uint historyImageIndex;
+    uint frameIndex;
+    float feedback;
+    uint enabled;
+} pc;
+
+vec3 clampHistoryToNeighborhood(ivec2 pixel, ivec2 size, vec3 historyColor)
+{
+    vec3 minColor = vec3(1.0e20);
+    vec3 maxColor = vec3(-1.0e20);
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            ivec2 samplePixel = clamp(pixel + ivec2(x, y), ivec2(0), size - ivec2(1));
+            vec3 sampleColor = imageLoad(storageImages[nonuniformEXT(int(pc.inputImageIndex))], samplePixel).rgb;
+            minColor = min(minColor, sampleColor);
+            maxColor = max(maxColor, sampleColor);
+        }
+    }
+    return clamp(historyColor, minColor, maxColor);
+}
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(storageImages[nonuniformEXT(int(pc.outputImageIndex))]);
+    if (pixel.x >= size.x || pixel.y >= size.y) {
+        return;
+    }
+
+    vec3 currentColor = imageLoad(storageImages[nonuniformEXT(int(pc.inputImageIndex))], pixel).rgb;
+    vec4 normalRoughness = imageLoad(storageImages[nonuniformEXT(int(pc.normalImageIndex))], pixel);
+    vec3 currentNormal = normalize(normalRoughness.xyz * 2.0 - 1.0);
+    vec2 uv = (vec2(pixel) + 0.5) / vec2(size);
+    float currentDepth = texture(sampledImages[nonuniformEXT(int(pc.depthImageIndex))], uv).r;
+    vec4 history = imageLoad(storageImages[nonuniformEXT(int(pc.historyImageIndex))], pixel);
+
+    vec3 outputColor = currentColor;
+    if (pc.enabled != 0u && pc.frameIndex > 0u && currentDepth < 0.99999) {
+        vec3 historyColor = clampHistoryToNeighborhood(pixel, size, history.rgb);
+        float historyDepth = history.a;
+        float depthAgreement = smoothstep(0.025, 0.001, abs(currentDepth - historyDepth));
+        float normalConfidence = smoothstep(0.72, 0.98, max(currentNormal.z * currentNormal.z, 0.0));
+        float confidence = depthAgreement * mix(0.55, 1.0, normalConfidence);
+        float blend = clamp(pc.feedback * confidence, 0.0, 0.98);
+        outputColor = mix(currentColor, historyColor, blend);
+    }
+
+    imageStore(storageImages[nonuniformEXT(int(pc.outputImageIndex))], pixel, vec4(outputColor, 1.0));
+    imageStore(storageImages[nonuniformEXT(int(pc.historyImageIndex))], pixel, vec4(outputColor, currentDepth));
+}
