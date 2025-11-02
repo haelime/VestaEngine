@@ -27,6 +27,11 @@ VkImage RenderGraphContext::GetTexture(GraphTextureHandle texture) const
     return _device.GetImage(_resolvedImages.at(texture.index));
 }
 
+ImageHandle RenderGraphContext::GetTextureHandle(GraphTextureHandle texture) const
+{
+    return _resolvedImages.at(texture.index);
+}
+
 VkImageView RenderGraphContext::GetTextureView(GraphTextureHandle texture) const
 {
     return _device.GetImageView(_resolvedImages.at(texture.index));
@@ -103,6 +108,12 @@ RenderGraph::TextureState RenderGraph::ResolveUsage(const TextureResource& resou
             VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
             VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
             VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
+    case ResourceUsage::StorageRead:
+        return TextureState{ true,
+            usage,
+            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+            VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
+            VK_IMAGE_LAYOUT_GENERAL };
     case ResourceUsage::StorageWrite:
         return TextureState{ true,
             usage,

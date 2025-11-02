@@ -1,4 +1,4 @@
-#include <vesta/render/passes/gaussian_splat_pass.h>
+#include <vesta/render/passes/geometry_raster_pass.h>
 
 #include <array>
 
@@ -11,55 +11,44 @@
 
 namespace vesta::render {
 namespace {
-struct GaussianPushConstants {
+struct GeometryPushConstants {
     glm::mat4 viewProjection{ 1.0f };
-    glm::vec4 params{ 6.0f, 0.35f, 0.0f, 0.0f };
 };
 } // namespace
 
-void GaussianSplatPass::SetDepthInput(GraphTextureHandle depth)
+void GeometryRasterPass::SetTargets(GraphTextureHandle albedo, GraphTextureHandle normal, GraphTextureHandle depth)
 {
-    _depthInput = depth;
+    _albedoTarget = albedo;
+    _normalTarget = normal;
+    _depthTarget = depth;
 }
 
-void GaussianSplatPass::SetOutput(GraphTextureHandle output)
-{
-    _output = output;
-}
-
-void GaussianSplatPass::SetScene(const vesta::scene::Scene* scene)
+void GeometryRasterPass::SetScene(const vesta::scene::Scene* scene)
 {
     _scene = scene;
 }
 
-void GaussianSplatPass::SetCamera(const Camera* camera)
+void GeometryRasterPass::SetCamera(const Camera* camera)
 {
     _camera = camera;
 }
 
-void GaussianSplatPass::SetParams(float pointSize, float opacity, bool enabled)
-{
-    _pointSize = pointSize;
-    _opacity = opacity;
-    _enabled = enabled;
-}
-
-void GaussianSplatPass::Initialize(RenderDevice& device)
+void GeometryRasterPass::Initialize(RenderDevice& device)
 {
     if (_pipeline != VK_NULL_HANDLE || device.GetDevice() == VK_NULL_HANDLE) {
         return;
     }
 
     VkDevice vkDevice = device.GetDevice();
-    _vertexShader = vkutil::load_shader_module(vkDevice, vkutil::resolve_runtime_path("shaders/gaussian.vert.spv"));
-    _fragmentShader = vkutil::load_shader_module(vkDevice, vkutil::resolve_runtime_path("shaders/gaussian.frag.spv"));
+    _vertexShader = vkutil::load_shader_module(vkDevice, vkutil::resolve_runtime_path("shaders/geometry.vert.spv"));
+    _fragmentShader = vkutil::load_shader_module(vkDevice, vkutil::resolve_runtime_path("shaders/geometry.frag.spv"));
 
     const std::array<VkDescriptorSetLayout, 0> descriptorSetLayouts{};
     const std::array<VkPushConstantRange, 1> pushConstants{
         VkPushConstantRange{
-            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
             .offset = 0,
-            .size = sizeof(GaussianPushConstants),
+            .size = sizeof(GeometryPushConstants),
         },
     };
     _pipelineLayout = vkutil::create_pipeline_layout(vkDevice, descriptorSetLayouts, pushConstants);
@@ -91,57 +80,66 @@ void GaussianSplatPass::Initialize(RenderDevice& device)
 
     vkutil::GraphicsPipelineDesc pipelineDesc{};
     pipelineDesc.layout = _pipelineLayout;
-    pipelineDesc.colorFormats = { VK_FORMAT_R16G16B16A16_SFLOAT };
+    pipelineDesc.colorFormats = { VK_FORMAT_R16G16B16A16_SFLOAT, VK_FORMAT_R16G16B16A16_SFLOAT };
     pipelineDesc.depthFormat = VK_FORMAT_D32_SFLOAT;
     pipelineDesc.vertexShader = _vertexShader;
     pipelineDesc.fragmentShader = _fragmentShader;
-    pipelineDesc.topology = VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
-    pipelineDesc.cullMode = VK_CULL_MODE_NONE;
+    pipelineDesc.cullMode = VK_CULL_MODE_BACK_BIT;
     pipelineDesc.depthTestEnable = true;
-    pipelineDesc.depthWriteEnable = false;
-    pipelineDesc.blendingEnable = true;
+    pipelineDesc.depthWriteEnable = true;
     pipelineDesc.vertexBindings = { binding };
     pipelineDesc.vertexAttributes = { attributes.begin(), attributes.end() };
 
     _pipeline = vkutil::create_graphics_pipeline(vkDevice, pipelineDesc);
 }
 
-void GaussianSplatPass::Setup(RenderGraphBuilder& builder)
+void GeometryRasterPass::Setup(RenderGraphBuilder& builder)
 {
-    builder.Read(_depthInput, ResourceUsage::DepthRead);
-    builder.Write(_output, ResourceUsage::ColorAttachmentWrite);
+    builder.Write(_albedoTarget, ResourceUsage::ColorAttachmentWrite);
+    builder.Write(_normalTarget, ResourceUsage::ColorAttachmentWrite);
+    builder.Write(_depthTarget, ResourceUsage::DepthAttachmentWrite);
 }
 
-void GaussianSplatPass::Execute(const RenderGraphContext& context)
+void GeometryRasterPass::Execute(const RenderGraphContext& context)
 {
     if (_pipeline == VK_NULL_HANDLE) {
         return;
     }
 
-    VkClearValue colorClear{};
-    colorClear.color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
+    VkClearValue albedoClear{};
+    albedoClear.color = { { 0.02f, 0.02f, 0.03f, 1.0f } };
+    VkClearValue normalClear{};
+    normalClear.color = { { 0.5f, 0.5f, 1.0f, 1.0f } };
 
-    VkRenderingAttachmentInfo colorAttachment{};
-    colorAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    colorAttachment.imageView = context.GetTextureView(_output);
-    colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    colorAttachment.clearValue = colorClear;
+    std::array<VkRenderingAttachmentInfo, 2> colorAttachments{};
+    colorAttachments[0].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    colorAttachments[0].imageView = context.GetTextureView(_albedoTarget);
+    colorAttachments[0].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    colorAttachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAttachments[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachments[0].clearValue = albedoClear;
+
+    colorAttachments[1].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    colorAttachments[1].imageView = context.GetTextureView(_normalTarget);
+    colorAttachments[1].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    colorAttachments[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAttachments[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachments[1].clearValue = normalClear;
 
     VkRenderingAttachmentInfo depthAttachment{};
     depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    depthAttachment.imageView = context.GetTextureView(_depthInput);
-    depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttachment.imageView = context.GetTextureView(_depthTarget);
+    depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    depthAttachment.clearValue.depthStencil.depth = 1.0f;
 
     VkRenderingInfo renderingInfo{};
     renderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
     renderingInfo.renderArea = VkRect2D{ VkOffset2D{ 0, 0 }, context.GetRenderExtent() };
     renderingInfo.layerCount = 1;
-    renderingInfo.colorAttachmentCount = 1;
-    renderingInfo.pColorAttachments = &colorAttachment;
+    renderingInfo.colorAttachmentCount = static_cast<uint32_t>(colorAttachments.size());
+    renderingInfo.pColorAttachments = colorAttachments.data();
     renderingInfo.pDepthAttachment = &depthAttachment;
 
     VkCommandBuffer commandBuffer = context.GetCommandBuffer();
@@ -157,30 +155,34 @@ void GaussianSplatPass::Execute(const RenderGraphContext& context)
 
     vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
     vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
-    if (_enabled && _scene != nullptr && _camera != nullptr && _scene->IsLoaded()) {
+    if (_scene != nullptr && _camera != nullptr && _scene->IsLoaded()) {
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _pipeline);
 
-        GaussianPushConstants pushConstants{
+        GeometryPushConstants pushConstants{
             .viewProjection = _camera->GetViewProjection(),
-            .params = glm::vec4(_pointSize, _opacity, 0.0f, 0.0f),
         };
         vkCmdPushConstants(commandBuffer,
             _pipelineLayout,
-            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            VK_SHADER_STAGE_VERTEX_BIT,
             0,
-            sizeof(GaussianPushConstants),
+            sizeof(GeometryPushConstants),
             &pushConstants);
 
         const VkBuffer vertexBuffer = context.GetDevice().GetBuffer(_scene->GetVertexBuffer());
+        const VkBuffer indexBuffer = context.GetDevice().GetBuffer(_scene->GetIndexBuffer());
         constexpr VkDeviceSize vertexOffset = 0;
         vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertexBuffer, &vertexOffset);
-        vkCmdDraw(commandBuffer, static_cast<uint32_t>(_scene->GetVertices().size()), 1, 0, 0);
+        vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
+        for (const vesta::scene::SceneSurface& surface : _scene->GetSurfaces()) {
+            vkCmdDrawIndexed(commandBuffer, surface.indexCount, 1, surface.firstIndex, 0, 0);
+        }
     }
 
     vkCmdEndRendering(commandBuffer);
 }
 
-void GaussianSplatPass::Shutdown(RenderDevice& device)
+void GeometryRasterPass::Shutdown(RenderDevice& device)
 {
     VkDevice vkDevice = device.GetDevice();
     if (vkDevice == VK_NULL_HANDLE) {
