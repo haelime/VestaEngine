@@ -18,6 +18,8 @@ struct TemporalAAPushConstants {
     uint32_t frameIndex{ 0 };
     float feedback{ 0.88f };
     uint32_t enabled{ 1 };
+    glm::mat4 inverseViewProjection{ 1.0f };
+    glm::mat4 previousViewProjection{ 1.0f };
 };
 } // namespace
 
@@ -46,6 +48,12 @@ void TemporalAAPass::SetFeedback(float feedback)
 void TemporalAAPass::SetFrameIndex(uint32_t frameIndex)
 {
     _frameIndex = frameIndex;
+}
+
+void TemporalAAPass::SetCameraMatrices(const glm::mat4& viewProjection, const glm::mat4& inverseViewProjection)
+{
+    _viewProjection = viewProjection;
+    _inverseViewProjection = inverseViewProjection;
 }
 
 void TemporalAAPass::EnsureHistoryImage(RenderDevice& device, VkExtent3D extent)
@@ -146,6 +154,8 @@ void TemporalAAPass::Execute(const RenderGraphContext& context)
         .frameIndex = _frameIndex,
         .feedback = _feedback,
         .enabled = _enabled ? 1u : 0u,
+        .inverseViewProjection = _inverseViewProjection,
+        .previousViewProjection = _hasPreviousViewProjection ? _previousViewProjection : _viewProjection,
     };
 
     VkCommandBuffer commandBuffer = context.GetCommandBuffer();
@@ -158,6 +168,9 @@ void TemporalAAPass::Execute(const RenderGraphContext& context)
         commandBuffer, _pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(TemporalAAPushConstants), &pushConstants);
 
     vkCmdDispatch(commandBuffer, (outputExtent.width + 7) / 8, (outputExtent.height + 7) / 8, 1);
+
+    _previousViewProjection = _viewProjection;
+    _hasPreviousViewProjection = true;
 }
 
 void TemporalAAPass::Shutdown(RenderDevice& device)

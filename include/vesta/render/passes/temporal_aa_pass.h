@@ -1,5 +1,7 @@
 #pragma once
 
+#include <glm/glm.hpp>
+
 #include <vesta/render/graph/render_graph.h>
 
 namespace vesta::render {
@@ -10,6 +12,7 @@ public:
     void SetEnabled(bool enabled);
     void SetFeedback(float feedback);
     void SetFrameIndex(uint32_t frameIndex);
+    void SetCameraMatrices(const glm::mat4& viewProjection, const glm::mat4& inverseViewProjection);
 
     [[nodiscard]] std::string_view Name() const override { return "TemporalAAPass"; }
     void Initialize(RenderDevice& device) override;
@@ -25,6 +28,10 @@ private:
     bool _enabled{ true };
     float _feedback{ 0.88f };
     uint32_t _frameIndex{ 0 };
+    glm::mat4 _viewProjection{ 1.0f };
+    glm::mat4 _inverseViewProjection{ 1.0f };
+    glm::mat4 _previousViewProjection{ 1.0f };
+    bool _hasPreviousViewProjection{ false };
     ImageHandle _historyImage{};
     VkExtent3D _historyExtent{};
     bool _historyInitialized{ false };

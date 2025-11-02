@@ -532,6 +532,7 @@ void ConfigureTemporalAAPass(Renderer& renderer, IRenderPass& pass, const Render
     temporalPass.SetEnabled(renderer.GetSettings().enableTaa);
     temporalPass.SetFeedback(renderer.GetSettings().taaFeedback);
     temporalPass.SetFrameIndex(renderer.GetPathTraceFrameIndex());
+    temporalPass.SetCameraMatrices(renderer.GetCamera().GetViewProjection(), renderer.GetCamera().GetInverseViewProjection());
 }
 
 void ConfigureCompositePass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)

@@ -15,6 +15,8 @@ layout(push_constant) uniform TemporalAAPushConstants {
     uint frameIndex;
     float feedback;
     uint enabled;
+    mat4 inverseViewProjection;
+    mat4 previousViewProjection;
 } pc;
 
 vec3 clampHistoryToNeighborhood(ivec2 pixel, ivec2 size, vec3 historyColor)
@@ -32,6 +34,14 @@ vec3 clampHistoryToNeighborhood(ivec2 pixel, ivec2 size, vec3 historyColor)
     return clamp(historyColor, minColor, maxColor);
 }
 
+vec3 reconstructWorldPosition(ivec2 pixel, ivec2 size, float depth)
+{
+    vec2 uv = (vec2(pixel) + 0.5) / vec2(size);
+    vec2 ndc = uv * 2.0 - 1.0;
+    vec4 world = pc.inverseViewProjection * vec4(ndc, depth, 1.0);
+    return world.xyz / max(world.w, 0.0001);
+}
+
 void main()
 {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
@@ -45,15 +55,20 @@ void main()
     vec3 currentNormal = normalize(normalRoughness.xyz * 2.0 - 1.0);
     vec2 uv = (vec2(pixel) + 0.5) / vec2(size);
     float currentDepth = texture(sampledImages[nonuniformEXT(int(pc.depthImageIndex))], uv).r;
-    vec4 history = imageLoad(storageImages[nonuniformEXT(int(pc.historyImageIndex))], pixel);
-
     vec3 outputColor = currentColor;
     if (pc.enabled != 0u && pc.frameIndex > 0u && currentDepth < 0.99999) {
+        vec3 worldPosition = reconstructWorldPosition(pixel, size, currentDepth);
+        vec4 previousClip = pc.previousViewProjection * vec4(worldPosition, 1.0);
+        vec3 previousNdc = previousClip.xyz / max(previousClip.w, 0.0001);
+        vec2 previousUv = previousNdc.xy * 0.5 + 0.5;
+        bool validHistory = previousUv.x >= 0.0 && previousUv.y >= 0.0 && previousUv.x <= 1.0 && previousUv.y <= 1.0;
+        ivec2 historyPixel = clamp(ivec2(previousUv * vec2(size)), ivec2(0), size - ivec2(1));
+        vec4 history = imageLoad(storageImages[nonuniformEXT(int(pc.historyImageIndex))], historyPixel);
         vec3 historyColor = clampHistoryToNeighborhood(pixel, size, history.rgb);
         float historyDepth = history.a;
         float depthAgreement = smoothstep(0.025, 0.001, abs(currentDepth - historyDepth));
         float normalConfidence = smoothstep(0.72, 0.98, max(currentNormal.z * currentNormal.z, 0.0));
-        float confidence = depthAgreement * mix(0.55, 1.0, normalConfidence);
+        float confidence = (validHistory ? 1.0 : 0.0) * depthAgreement * mix(0.55, 1.0, normalConfidence);
         float blend = clamp(pc.feedback * confidence, 0.0, 0.98);
         outputColor = mix(currentColor, historyColor, blend);
     }
