@@ -56,6 +56,7 @@ enum class RendererDebugView : uint32_t {
     Metallic = 9,
     Emissive = 10,
     AmbientOcclusion = 11,
+    MotionVector = 12,
 };
 
 enum class GaussianDebugView : uint32_t {

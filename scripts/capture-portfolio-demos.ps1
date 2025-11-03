@@ -49,7 +49,11 @@ $runs = @(
         Args = @("--scene", "assets\demo\DamagedHelmet.glb", "--mode", "raster", "--taa", "on", "--taa-feedback", "0.90")
     },
     @{
-        Name = "09_pathtrace_indirect_aov"
+        Name = "09_raster_motion_vector_debug"
+        Args = @("--scene", "assets\demo\DamagedHelmet.glb", "--mode", "raster", "--debug-view", "motion-vector", "--taa", "on", "--taa-feedback", "0.90")
+    },
+    @{
+        Name = "10_pathtrace_indirect_aov"
         Args = @("--scene", "assets\demo\DamagedHelmet.glb", "--mode", "pathtrace", "--pt-debug", "indirect")
     }
 )

@@ -19,8 +19,8 @@ layout(push_constant) uniform CompositePushConstants {
     vec4 params;
     vec4 compareParams;
     vec4 ssaoParams;
-    vec4 cameraPosition;
     mat4 inverseViewProjection;
+    mat4 previousViewProjection;
 } pc;
 
 layout(location = 0) out vec4 outColor;
@@ -94,7 +94,7 @@ float computeScreenSpaceAo(ivec2 pixel, ivec2 size, vec3 worldPosition, vec3 nor
         vec2(0.707, 0.707), vec2(-0.707, 0.707), vec2(0.707, -0.707), vec2(-0.707, -0.707),
         vec2(0.383, 0.924), vec2(-0.924, 0.383), vec2(0.924, -0.383), vec2(-0.383, -0.924));
 
-    float viewDistance = max(length(pc.cameraPosition.xyz - worldPosition), 0.25);
+    float viewDistance = max(length(worldPosition), 0.25);
     float radiusPixels = clamp((pc.ssaoParams.y * 95.0) / viewDistance, 2.0, 48.0);
     float occlusion = 0.0;
     float weightSum = 0.0;
@@ -196,6 +196,22 @@ vec3 resolveDebugView(ivec2 pixel)
         vec3 worldPosition = reconstructWorldPosition(clampedPixel, size, depth);
         float materialAo = clamp(loadStorage(pc.imageIndices2.x, clampedPixel).a, 0.0, 1.0);
         return vec3(materialAo * computeScreenSpaceAo(clampedPixel, size, worldPosition, normal, depth));
+    }
+    if (debugView == 12u) {
+        if (!hasImage(pc.imageIndices2.w)) { return vec3(-1.0); }
+        ivec2 size = textureSize(sampledImages[nonuniformEXT(int(pc.imageIndices2.w))], 0);
+        ivec2 clampedPixel = clamp(pixel, ivec2(0), size - ivec2(1));
+        float depth = texelFetch(sampledImages[nonuniformEXT(int(pc.imageIndices2.w))], clampedPixel, 0).r;
+        if (depth >= 0.99999) {
+            return vec3(0.5, 0.5, 0.0);
+        }
+        vec2 currentUv = (vec2(clampedPixel) + 0.5) / vec2(size);
+        vec3 worldPosition = reconstructWorldPosition(clampedPixel, size, depth);
+        vec4 previousClip = pc.previousViewProjection * vec4(worldPosition, 1.0);
+        vec3 previousNdc = previousClip.xyz / max(previousClip.w, 0.0001);
+        vec2 previousUv = previousNdc.xy * 0.5 + 0.5;
+        vec2 motion = currentUv - previousUv;
+        return vec3(clamp(motion * 24.0 + 0.5, vec2(0.0), vec2(1.0)), clamp(length(motion) * 48.0, 0.0, 1.0));
     }
     return vec3(-1.0);
 }

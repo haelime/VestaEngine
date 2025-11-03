@@ -23,8 +23,8 @@ struct CompositePushConstants {
     glm::vec4 params{ 0.25f, 0.0f, 0.0f, 0.0f };
     glm::vec4 compareParams{ 0.0f, 0.5f, 4.0f, 0.0f };
     glm::vec4 ssaoParams{ 1.0f, 0.75f, 1.35f, 0.0f };
-    glm::vec4 cameraPosition{ 0.0f, 0.0f, 0.0f, 1.0f };
     glm::mat4 inverseViewProjection{ 1.0f };
+    glm::mat4 previousViewProjection{ 1.0f };
 };
 } // namespace
 
@@ -93,13 +93,9 @@ void CompositePass::SetAmbientOcclusion(bool enabled, float radius, float intens
     _ssaoParams = glm::vec4(enabled ? 1.0f : 0.0f, std::max(radius, 0.01f), std::clamp(intensity, 0.0f, 4.0f), 0.0f);
 }
 
-void CompositePass::SetCameraPosition(const glm::vec3& cameraPosition)
+void CompositePass::SetCameraMatrices(const glm::mat4& viewProjection, const glm::mat4& inverseViewProjection)
 {
-    _cameraPosition = glm::vec4(cameraPosition, 1.0f);
-}
-
-void CompositePass::SetInverseViewProjection(const glm::mat4& inverseViewProjection)
-{
+    _viewProjection = viewProjection;
     _inverseViewProjection = inverseViewProjection;
 }
 
@@ -189,8 +185,8 @@ void CompositePass::Execute(const RenderGraphContext& context)
         .params = glm::vec4(_gaussianMix, _exposureEv, _nearPlane, _farPlane),
         .compareParams = glm::vec4(static_cast<float>(_compareMode), _compareSplitPosition, _compareDifferenceScale, 0.0f),
         .ssaoParams = _ssaoParams,
-        .cameraPosition = _cameraPosition,
         .inverseViewProjection = _inverseViewProjection,
+        .previousViewProjection = _hasPreviousViewProjection ? _previousViewProjection : _viewProjection,
     };
 
     if (_deferredLighting) {
@@ -276,6 +272,9 @@ void CompositePass::Execute(const RenderGraphContext& context)
     vkCmdDraw(commandBuffer, 3, 1, 0, 0);
 
     vkCmdEndRendering(commandBuffer);
+
+    _previousViewProjection = _viewProjection;
+    _hasPreviousViewProjection = true;
 }
 
 void CompositePass::Shutdown(RenderDevice& device)
