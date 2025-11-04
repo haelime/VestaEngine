@@ -7,7 +7,7 @@
 namespace vesta::render {
 class TemporalAAPass final : public IRenderPass {
 public:
-    void SetInputs(GraphTextureHandle input, GraphTextureHandle normalRoughness, GraphTextureHandle depth);
+    void SetInputs(GraphTextureHandle input, GraphTextureHandle normalRoughness, GraphTextureHandle motion, GraphTextureHandle depth);
     void SetOutput(GraphTextureHandle output);
     void SetEnabled(bool enabled);
     void SetFeedback(float feedback);
@@ -23,6 +23,7 @@ public:
 private:
     GraphTextureHandle _input{};
     GraphTextureHandle _normalRoughness{};
+    GraphTextureHandle _motion{};
     GraphTextureHandle _depth{};
     GraphTextureHandle _output{};
     bool _enabled{ true };

@@ -14,19 +14,24 @@ struct TemporalAAPushConstants {
     uint32_t outputImageIndex{ 0 };
     uint32_t normalImageIndex{ 0 };
     uint32_t depthImageIndex{ 0 };
+    uint32_t motionImageIndex{ 0 };
     uint32_t historyImageIndex{ 0 };
     uint32_t frameIndex{ 0 };
     float feedback{ 0.88f };
     uint32_t enabled{ 1 };
+    uint32_t reserved0{ 0 };
+    uint32_t reserved1{ 0 };
+    uint32_t reserved2{ 0 };
     glm::mat4 inverseViewProjection{ 1.0f };
     glm::mat4 previousViewProjection{ 1.0f };
 };
 } // namespace
 
-void TemporalAAPass::SetInputs(GraphTextureHandle input, GraphTextureHandle normalRoughness, GraphTextureHandle depth)
+void TemporalAAPass::SetInputs(GraphTextureHandle input, GraphTextureHandle normalRoughness, GraphTextureHandle motion, GraphTextureHandle depth)
 {
     _input = input;
     _normalRoughness = normalRoughness;
+    _motion = motion;
     _depth = depth;
 }
 
@@ -116,19 +121,21 @@ void TemporalAAPass::Setup(RenderGraphBuilder& builder)
 {
     builder.Read(_input, ResourceUsage::StorageRead);
     builder.Read(_normalRoughness, ResourceUsage::StorageRead);
+    builder.Read(_motion, ResourceUsage::StorageRead);
     builder.Read(_depth, ResourceUsage::SampledRead);
     builder.Write(_output, ResourceUsage::StorageWrite);
 }
 
 void TemporalAAPass::Execute(const RenderGraphContext& context)
 {
-    if (_pipeline == VK_NULL_HANDLE || !_input || !_output || !_normalRoughness || !_depth) {
+    if (_pipeline == VK_NULL_HANDLE || !_input || !_output || !_normalRoughness || !_motion || !_depth) {
         return;
     }
 
     const ImageHandle inputHandle = context.GetTextureHandle(_input);
     const ImageHandle outputHandle = context.GetTextureHandle(_output);
     const ImageHandle normalHandle = context.GetTextureHandle(_normalRoughness);
+    const ImageHandle motionHandle = context.GetTextureHandle(_motion);
     const ImageHandle depthHandle = context.GetTextureHandle(_depth);
     const VkExtent3D outputExtent = context.GetTextureExtent(_output);
     EnsureHistoryImage(context.GetDevice(), outputExtent);
@@ -150,6 +157,7 @@ void TemporalAAPass::Execute(const RenderGraphContext& context)
         .outputImageIndex = context.GetDevice().GetImageResource(outputHandle).bindless.storageImage,
         .normalImageIndex = context.GetDevice().GetImageResource(normalHandle).bindless.storageImage,
         .depthImageIndex = context.GetDevice().GetImageResource(depthHandle).bindless.sampledImage,
+        .motionImageIndex = context.GetDevice().GetImageResource(motionHandle).bindless.storageImage,
         .historyImageIndex = context.GetDevice().GetImageResource(_historyImage).bindless.storageImage,
         .frameIndex = _frameIndex,
         .feedback = _feedback,

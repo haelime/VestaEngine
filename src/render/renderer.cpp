@@ -532,7 +532,7 @@ void ConfigurePathDenoisePass(Renderer& renderer, IRenderPass& pass, const Rende
 void ConfigureTemporalAAPass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
 {
     auto& temporalPass = static_cast<TemporalAAPass&>(pass);
-    temporalPass.SetInputs(resources.deferredLighting, resources.gbufferNormal, resources.sceneDepth);
+    temporalPass.SetInputs(resources.deferredLighting, resources.gbufferNormal, resources.gbufferMotion, resources.sceneDepth);
     temporalPass.SetOutput(resources.temporalLighting);
     temporalPass.SetEnabled(renderer.GetSettings().enableTaa);
     temporalPass.SetFeedback(renderer.GetSettings().taaFeedback);
