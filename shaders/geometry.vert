@@ -12,6 +12,7 @@ layout(location = 6) in uint inObjectIndex;
 
 layout(push_constant) uniform GeometryPushConstants {
     mat4 viewProjection;
+    mat4 previousViewProjection;
     uint materialBufferIndex;
 } pc;
 
@@ -21,9 +22,14 @@ layout(location = 2) out vec4 outColor;
 layout(location = 3) out vec2 outTexCoord;
 layout(location = 4) flat out uint outMaterialIndex;
 layout(location = 5) flat out uint outObjectIndex;
+layout(location = 6) out vec4 outCurrentClip;
+layout(location = 7) out vec4 outPreviousClip;
 
 void main() {
-    gl_Position = pc.viewProjection * vec4(inPosition, 1.0);
+    vec4 worldPosition = vec4(inPosition, 1.0);
+    gl_Position = pc.viewProjection * worldPosition;
+    outCurrentClip = gl_Position;
+    outPreviousClip = pc.previousViewProjection * worldPosition;
     outNormal = normalize(inNormal);
     outTangent = inTangent;
     outColor = inColor;

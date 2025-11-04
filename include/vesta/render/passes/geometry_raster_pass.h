@@ -1,5 +1,7 @@
 #pragma once
 
+#include <glm/glm.hpp>
+
 #include <vesta/render/graph/render_graph.h>
 
 class Camera;
@@ -14,7 +16,12 @@ namespace vesta::render {
 class GeometryRasterPass final : public IRenderPass {
 public:
     void SetTargets(
-        GraphTextureHandle albedo, GraphTextureHandle normal, GraphTextureHandle material, GraphTextureHandle debug, GraphTextureHandle depth);
+        GraphTextureHandle albedo,
+        GraphTextureHandle normal,
+        GraphTextureHandle material,
+        GraphTextureHandle debug,
+        GraphTextureHandle motion,
+        GraphTextureHandle depth);
     void SetScene(const vesta::scene::Scene* scene);
     void SetCamera(const Camera* camera);
     void SetVisibleSurfaceIndices(const std::vector<uint32_t>* visibleSurfaceIndices);
@@ -31,11 +38,14 @@ private:
     GraphTextureHandle _normalTarget{};
     GraphTextureHandle _materialTarget{};
     GraphTextureHandle _debugTarget{};
+    GraphTextureHandle _motionTarget{};
     GraphTextureHandle _depthTarget{};
     const vesta::scene::Scene* _scene{ nullptr };
     const Camera* _camera{ nullptr };
     const std::vector<uint32_t>* _visibleSurfaceIndices{ nullptr };
     bool _useIndirectDraw{ false };
+    glm::mat4 _previousViewProjection{ 1.0f };
+    bool _hasPreviousViewProjection{ false };
     BufferHandle _indirectBuffer{};
     size_t _indirectBufferCapacity{ 0 };
     VkPipelineLayout _pipelineLayout{ VK_NULL_HANDLE };

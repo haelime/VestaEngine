@@ -252,6 +252,7 @@ struct RendererGraphResources {
     GraphTextureHandle gbufferNormal{};
     GraphTextureHandle gbufferMaterial{};
     GraphTextureHandle gbufferDebug{};
+    GraphTextureHandle gbufferMotion{};
     GraphTextureHandle sceneDepth{};
     GraphTextureHandle deferredLighting{};
     GraphTextureHandle temporalLighting{};

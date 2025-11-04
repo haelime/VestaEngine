@@ -16,6 +16,7 @@ namespace {
 // in world space after Scene::LoadFromFile flattens the node hierarchy.
 struct GeometryPushConstants {
     glm::mat4 viewProjection{ 1.0f };
+    glm::mat4 previousViewProjection{ 1.0f };
     uint32_t materialBufferIndex{ kInvalidResourceIndex };
 };
 
@@ -24,12 +25,18 @@ constexpr VmaAllocationCreateFlags kMappedHostFlags =
 } // namespace
 
 void GeometryRasterPass::SetTargets(
-    GraphTextureHandle albedo, GraphTextureHandle normal, GraphTextureHandle material, GraphTextureHandle debug, GraphTextureHandle depth)
+    GraphTextureHandle albedo,
+    GraphTextureHandle normal,
+    GraphTextureHandle material,
+    GraphTextureHandle debug,
+    GraphTextureHandle motion,
+    GraphTextureHandle depth)
 {
     _albedoTarget = albedo;
     _normalTarget = normal;
     _materialTarget = material;
     _debugTarget = debug;
+    _motionTarget = motion;
     _depthTarget = depth;
 }
 
@@ -131,6 +138,7 @@ void GeometryRasterPass::Initialize(RenderDevice& device)
         VK_FORMAT_R16G16B16A16_SFLOAT,
         VK_FORMAT_R16G16B16A16_SFLOAT,
         VK_FORMAT_R16G16B16A16_SFLOAT,
+        VK_FORMAT_R16G16B16A16_SFLOAT,
     };
     pipelineDesc.depthFormat = VK_FORMAT_D32_SFLOAT;
     pipelineDesc.vertexShader = _vertexShader;
@@ -150,6 +158,7 @@ void GeometryRasterPass::Setup(RenderGraphBuilder& builder)
     builder.Write(_normalTarget, ResourceUsage::ColorAttachmentWrite);
     builder.Write(_materialTarget, ResourceUsage::ColorAttachmentWrite);
     builder.Write(_debugTarget, ResourceUsage::ColorAttachmentWrite);
+    builder.Write(_motionTarget, ResourceUsage::ColorAttachmentWrite);
     builder.Write(_depthTarget, ResourceUsage::DepthAttachmentWrite);
 }
 
@@ -167,8 +176,10 @@ void GeometryRasterPass::Execute(const RenderGraphContext& context)
     materialClear.color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
     VkClearValue debugClear{};
     debugClear.color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
+    VkClearValue motionClear{};
+    motionClear.color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
 
-    std::array<VkRenderingAttachmentInfo, 4> colorAttachments{};
+    std::array<VkRenderingAttachmentInfo, 5> colorAttachments{};
     colorAttachments[0].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
     colorAttachments[0].imageView = context.GetTextureView(_albedoTarget);
     colorAttachments[0].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -196,6 +207,13 @@ void GeometryRasterPass::Execute(const RenderGraphContext& context)
     colorAttachments[3].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     colorAttachments[3].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     colorAttachments[3].clearValue = debugClear;
+
+    colorAttachments[4].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    colorAttachments[4].imageView = context.GetTextureView(_motionTarget);
+    colorAttachments[4].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    colorAttachments[4].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAttachments[4].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachments[4].clearValue = motionClear;
 
     VkRenderingAttachmentInfo depthAttachment{};
     depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -231,6 +249,7 @@ void GeometryRasterPass::Execute(const RenderGraphContext& context)
 
         GeometryPushConstants pushConstants{
             .viewProjection = _camera->GetViewProjection(),
+            .previousViewProjection = _hasPreviousViewProjection ? _previousViewProjection : _camera->GetViewProjection(),
             .materialBufferIndex = context.GetDevice().GetBufferResource(_scene->GetMaterialBuffer()).bindless.storageBuffer,
         };
         vkCmdPushConstants(commandBuffer,
@@ -318,6 +337,11 @@ void GeometryRasterPass::Execute(const RenderGraphContext& context)
     }
 
     vkCmdEndRendering(commandBuffer);
+
+    if (_camera != nullptr) {
+        _previousViewProjection = _camera->GetViewProjection();
+        _hasPreviousViewProjection = true;
+    }
 }
 
 void GeometryRasterPass::Shutdown(RenderDevice& device)

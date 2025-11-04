@@ -198,19 +198,8 @@ vec3 resolveDebugView(ivec2 pixel)
         return vec3(materialAo * computeScreenSpaceAo(clampedPixel, size, worldPosition, normal, depth));
     }
     if (debugView == 12u) {
-        if (!hasImage(pc.imageIndices2.w)) { return vec3(-1.0); }
-        ivec2 size = textureSize(sampledImages[nonuniformEXT(int(pc.imageIndices2.w))], 0);
-        ivec2 clampedPixel = clamp(pixel, ivec2(0), size - ivec2(1));
-        float depth = texelFetch(sampledImages[nonuniformEXT(int(pc.imageIndices2.w))], clampedPixel, 0).r;
-        if (depth >= 0.99999) {
-            return vec3(0.5, 0.5, 0.0);
-        }
-        vec2 currentUv = (vec2(clampedPixel) + 0.5) / vec2(size);
-        vec3 worldPosition = reconstructWorldPosition(clampedPixel, size, depth);
-        vec4 previousClip = pc.previousViewProjection * vec4(worldPosition, 1.0);
-        vec3 previousNdc = previousClip.xyz / max(previousClip.w, 0.0001);
-        vec2 previousUv = previousNdc.xy * 0.5 + 0.5;
-        vec2 motion = currentUv - previousUv;
+        if (!hasImage(pc.imageIndices3.y)) { return vec3(-1.0); }
+        vec2 motion = loadStorage(pc.imageIndices3.y, pixel).xy;
         return vec3(clamp(motion * 24.0 + 0.5, vec2(0.0), vec2(1.0)), clamp(length(motion) * 48.0, 0.0, 1.0));
     }
     return vec3(-1.0);

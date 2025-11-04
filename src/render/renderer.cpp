@@ -429,7 +429,12 @@ void ConfigureGeometryRasterPass(Renderer& renderer, IRenderPass& pass, const Re
 {
     auto& rasterPass = static_cast<GeometryRasterPass&>(pass);
     rasterPass.SetTargets(
-        resources.gbufferAlbedo, resources.gbufferNormal, resources.gbufferMaterial, resources.gbufferDebug, resources.sceneDepth);
+        resources.gbufferAlbedo,
+        resources.gbufferNormal,
+        resources.gbufferMaterial,
+        resources.gbufferDebug,
+        resources.gbufferMotion,
+        resources.sceneDepth);
     rasterPass.SetScene(&renderer.GetScene());
     rasterPass.SetCamera(&renderer.GetCamera());
     const bool useVisibilitySet =
@@ -542,7 +547,12 @@ void ConfigureCompositePass(Renderer& renderer, IRenderPass& pass, const Rendere
     const GraphTextureHandle pathTraceInput = resources.pathTraceDenoised ? resources.pathTraceDenoised : resources.pathTraceOutput;
     compositePass.SetInputs(rasterInput, pathTraceInput, resources.gaussianAccum, resources.gaussianReveal, resources.gaussianDebug);
     compositePass.SetGBufferInputs(
-        resources.gbufferAlbedo, resources.gbufferNormal, resources.gbufferMaterial, resources.gbufferDebug, resources.sceneDepth);
+        resources.gbufferAlbedo,
+        resources.gbufferNormal,
+        resources.gbufferMaterial,
+        resources.gbufferDebug,
+        resources.gbufferMotion,
+        resources.sceneDepth);
     uint32_t gaussianTileRangeBufferIndex = kInvalidResourceIndex;
     if (const auto* officialGaussian = renderer.FindPass<OfficialGaussianRasterPass>("official-gaussian-raster")) {
         gaussianTileRangeBufferIndex = officialGaussian->GetTileRangeBindlessStorageIndex();
@@ -2718,6 +2728,7 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
         resources.gbufferNormal = graph.CreateTexture("GBuffer.NormalRoughness", gbufferDesc);
         resources.gbufferMaterial = graph.CreateTexture("GBuffer.Material", gbufferDesc);
         resources.gbufferDebug = graph.CreateTexture("GBuffer.Debug", gbufferDesc);
+        resources.gbufferMotion = graph.CreateTexture("GBuffer.Motion", gbufferDesc);
         resources.sceneDepth = graph.CreateTexture("SceneDepth", depthDesc);
     }
     if (useDeferredPass) {

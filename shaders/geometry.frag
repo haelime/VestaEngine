@@ -17,6 +17,8 @@ layout(location = 2) in vec4 inColor;
 layout(location = 3) in vec2 inTexCoord;
 layout(location = 4) flat in uint inMaterialIndex;
 layout(location = 5) flat in uint inObjectIndex;
+layout(location = 6) in vec4 inCurrentClip;
+layout(location = 7) in vec4 inPreviousClip;
 
 layout(set = 0, binding = 0) uniform sampler2D sampledImages[];
 layout(set = 0, binding = 2, std430) readonly buffer MaterialBuffer {
@@ -32,6 +34,7 @@ layout(location = 0) out vec4 outAlbedoAo;
 layout(location = 1) out vec4 outNormalRoughness;
 layout(location = 2) out vec4 outEmissiveMetallic;
 layout(location = 3) out vec4 outDebug;
+layout(location = 4) out vec4 outMotion;
 
 const uint kInvalidResourceIndex = 0xFFFFFFFFu;
 
@@ -89,4 +92,7 @@ void main() {
     outDebug = vec4(fract(inTexCoord),
         fract(float(inMaterialIndex) * 0.61803398875),
         fract(float(inObjectIndex) * 0.75487766625));
+    vec2 currentNdc = inCurrentClip.xy / max(inCurrentClip.w, 1.0e-4);
+    vec2 previousNdc = inPreviousClip.xy / max(inPreviousClip.w, 1.0e-4);
+    outMotion = vec4((currentNdc - previousNdc) * 0.5, 0.0, 1.0);
 }
