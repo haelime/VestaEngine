@@ -25,7 +25,7 @@ public:
     void cleanup();
 
     // draw loop
-    void draw();
+    void draw(float deltaSeconds);
 
     // run main loop
     void run();

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <vector>
+
 #include <vesta/render/vulkan/vk_types.h>
 
 namespace vkutil {
@@ -11,7 +13,7 @@ struct PipelineShaderStages {
 
 struct GraphicsPipelineDesc {
     VkPipelineLayout layout{ VK_NULL_HANDLE };
-    VkFormat colorFormat{ VK_FORMAT_UNDEFINED };
+    std::vector<VkFormat> colorFormats;
     std::optional<VkFormat> depthFormat{};
     VkShaderModule vertexShader{ VK_NULL_HANDLE };
     VkShaderModule fragmentShader{ VK_NULL_HANDLE };
@@ -22,6 +24,8 @@ struct GraphicsPipelineDesc {
     bool depthTestEnable{ false };
     bool depthWriteEnable{ false };
     bool blendingEnable{ false };
+    std::vector<VkVertexInputBindingDescription> vertexBindings;
+    std::vector<VkVertexInputAttributeDescription> vertexAttributes;
 };
 
 struct ComputePipelineDesc {
