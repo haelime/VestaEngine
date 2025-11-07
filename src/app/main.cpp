@@ -26,6 +26,10 @@ void PrintUsage()
         << "  --ssao-intensity <value>      SSAO darkening strength.\n"
         << "  --taa <on|off>                Toggle raster temporal anti-aliasing.\n"
         << "  --taa-feedback <0.0-0.98>     TAA history blend feedback.\n"
+        << "  --ssr <on|off>                Toggle raster screen-space reflections.\n"
+        << "  --ssr-distance <value>        SSR max ray distance.\n"
+        << "  --ssr-thickness <value>       SSR depth thickness.\n"
+        << "  --ssr-intensity <value>       SSR blend intensity.\n"
         << "  --benchmark <csv-path>        Run a timed benchmark and exit.\n"
         << "  --screenshot <png-path>       Save a PNG capture during benchmark.\n"
         << "  --benchmark-seconds <value>   Benchmark capture duration.\n"
@@ -367,6 +371,57 @@ int main(int argc, char* argv[])
                 return 1;
             }
             options.startupTaaFeedback = feedback;
+            continue;
+        }
+        if (argument == "--ssr") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            options.startupSsrEnabled = ParseToggle(value);
+            if (!options.startupSsrEnabled.has_value()) {
+                std::cerr << "Invalid SSR toggle: " << value << "\n";
+                return 1;
+            }
+            continue;
+        }
+        if (argument == "--ssr-distance") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            float distance = 0.0f;
+            if (!TryParseFloat(value, distance) || distance <= 0.0f) {
+                std::cerr << "Invalid SSR distance: " << value << "\n";
+                return 1;
+            }
+            options.startupSsrMaxDistance = distance;
+            continue;
+        }
+        if (argument == "--ssr-thickness") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            float thickness = 0.0f;
+            if (!TryParseFloat(value, thickness) || thickness <= 0.0f) {
+                std::cerr << "Invalid SSR thickness: " << value << "\n";
+                return 1;
+            }
+            options.startupSsrThickness = thickness;
+            continue;
+        }
+        if (argument == "--ssr-intensity") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            float intensity = 0.0f;
+            if (!TryParseFloat(value, intensity) || intensity < 0.0f) {
+                std::cerr << "Invalid SSR intensity: " << value << "\n";
+                return 1;
+            }
+            options.startupSsrIntensity = intensity;
             continue;
         }
         if (argument == "--benchmark") {

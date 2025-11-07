@@ -23,10 +23,12 @@ struct DeferredLightingPushConstants {
     uint32_t padding1{ 0 };
     uint32_t padding2{ 0 };
     glm::mat4 inverseViewProjection{ 1.0f };
+    glm::mat4 viewProjection{ 1.0f };
     glm::vec4 cameraPosition{ 0.0f };
     glm::vec4 lightDirectionAndIntensity{ -0.4f, -1.0f, -0.3f, 2.0f };
     glm::vec4 environmentParams{ 1.0f, 0.0f, 0.0f, 0.0f };
     glm::vec4 ssaoParams{ 1.0f, 0.75f, 1.35f, 0.0f };
+    glm::vec4 ssrParams{ 1.0f, 18.0f, 0.18f, 0.65f };
 };
 } // namespace
 
@@ -61,6 +63,14 @@ void DeferredLightingPass::SetEnvironment(glm::vec4 environmentParams)
 void DeferredLightingPass::SetAmbientOcclusion(bool enabled, float radius, float intensity)
 {
     _ssaoParams = glm::vec4(enabled ? 1.0f : 0.0f, std::max(radius, 0.01f), std::clamp(intensity, 0.0f, 4.0f), 0.0f);
+}
+
+void DeferredLightingPass::SetScreenSpaceReflections(bool enabled, float maxDistance, float thickness, float intensity)
+{
+    _ssrParams = glm::vec4(enabled ? 1.0f : 0.0f,
+        std::clamp(maxDistance, 0.5f, 100.0f),
+        std::clamp(thickness, 0.01f, 2.0f),
+        std::clamp(intensity, 0.0f, 2.0f));
 }
 
 void DeferredLightingPass::Initialize(RenderDevice& device)
@@ -116,10 +126,12 @@ void DeferredLightingPass::Execute(const RenderGraphContext& context)
         .depthImageIndex = context.GetDevice().GetImageResource(depthHandle).bindless.sampledImage,
         .outputImageIndex = context.GetDevice().GetImageResource(outputHandle).bindless.storageImage,
         .inverseViewProjection = _camera->GetInverseViewProjection(),
+        .viewProjection = _camera->GetViewProjection(),
         .cameraPosition = glm::vec4(_camera->GetPosition(), 1.0f),
         .lightDirectionAndIntensity = _lightDirectionAndIntensity,
         .environmentParams = _environmentParams,
         .ssaoParams = _ssaoParams,
+        .ssrParams = _ssrParams,
     };
 
     VkCommandBuffer commandBuffer = context.GetCommandBuffer();

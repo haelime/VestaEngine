@@ -36,6 +36,10 @@ struct EngineLaunchOptions {
     std::optional<float> startupSsaoIntensity;
     std::optional<bool> startupTaaEnabled;
     std::optional<float> startupTaaFeedback;
+    std::optional<bool> startupSsrEnabled;
+    std::optional<float> startupSsrMaxDistance;
+    std::optional<float> startupSsrThickness;
+    std::optional<float> startupSsrIntensity;
     std::optional<BenchmarkConfig> benchmark;
     std::filesystem::path startupLogPath{ "out/startup.log" };
     bool safeStartupMode{ true };

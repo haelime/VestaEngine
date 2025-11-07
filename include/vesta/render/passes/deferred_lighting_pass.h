@@ -17,6 +17,7 @@ public:
     void SetLight(glm::vec4 lightDirectionAndIntensity);
     void SetEnvironment(glm::vec4 environmentParams);
     void SetAmbientOcclusion(bool enabled, float radius, float intensity);
+    void SetScreenSpaceReflections(bool enabled, float maxDistance, float thickness, float intensity);
 
     [[nodiscard]] std::string_view Name() const override { return "DeferredLightingPass"; }
     void Initialize(RenderDevice& device) override;
@@ -34,6 +35,7 @@ private:
     glm::vec4 _lightDirectionAndIntensity{ -0.4f, -1.0f, -0.3f, 2.0f };
     glm::vec4 _environmentParams{ 1.0f, 0.0f, 0.0f, 0.0f };
     glm::vec4 _ssaoParams{ 1.0f, 0.75f, 1.35f, 0.0f };
+    glm::vec4 _ssrParams{ 1.0f, 18.0f, 0.18f, 0.65f };
     VkPipelineLayout _pipelineLayout{ VK_NULL_HANDLE };
     VkPipeline _pipeline{ VK_NULL_HANDLE };
     VkShaderModule _computeShader{ VK_NULL_HANDLE };

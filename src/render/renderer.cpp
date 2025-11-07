@@ -453,6 +453,8 @@ void ConfigureDeferredLightingPass(Renderer& renderer, IRenderPass& pass, const 
     lightingPass.SetLight(settings.lightDirectionAndIntensity);
     lightingPass.SetEnvironment(glm::vec4(settings.environmentIntensity, glm::radians(settings.environmentRotationDegrees), 0.0f, 0.0f));
     lightingPass.SetAmbientOcclusion(settings.enableSsao, settings.ssaoRadius, settings.ssaoIntensity);
+    lightingPass.SetScreenSpaceReflections(
+        settings.enableSsr, settings.ssrMaxDistance, settings.ssrThickness, settings.ssrIntensity);
     lightingPass.SetOutput(resources.deferredLighting);
 }
 

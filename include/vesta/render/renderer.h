@@ -216,6 +216,10 @@ struct RendererSettings {
     float ssaoIntensity{ 1.35f };
     bool enableTaa{ true };
     float taaFeedback{ 0.88f };
+    bool enableSsr{ true };
+    float ssrMaxDistance{ 18.0f };
+    float ssrThickness{ 0.18f };
+    float ssrIntensity{ 0.65f };
     glm::vec4 lightDirectionAndIntensity{ -0.4f, -1.0f, -0.3f, 2.0f };
     float environmentIntensity{ 1.0f };
     float environmentRotationDegrees{ 0.0f };

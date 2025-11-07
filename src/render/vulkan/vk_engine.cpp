@@ -797,6 +797,22 @@ void VestaEngine::init_renderer()
         settings.taaFeedback = std::clamp(*_launchOptions.startupTaaFeedback, 0.0f, 0.98f);
         resetAccumulation = true;
     }
+    if (_launchOptions.startupSsrEnabled.has_value()) {
+        settings.enableSsr = *_launchOptions.startupSsrEnabled;
+        resetAccumulation = true;
+    }
+    if (_launchOptions.startupSsrMaxDistance.has_value()) {
+        settings.ssrMaxDistance = std::clamp(*_launchOptions.startupSsrMaxDistance, 0.5f, 100.0f);
+        resetAccumulation = true;
+    }
+    if (_launchOptions.startupSsrThickness.has_value()) {
+        settings.ssrThickness = std::clamp(*_launchOptions.startupSsrThickness, 0.01f, 2.0f);
+        resetAccumulation = true;
+    }
+    if (_launchOptions.startupSsrIntensity.has_value()) {
+        settings.ssrIntensity = std::clamp(*_launchOptions.startupSsrIntensity, 0.0f, 2.0f);
+        resetAccumulation = true;
+    }
     if (_launchOptions.benchmark.has_value()) {
         settings.frameTimingCapture = true;
         settings.benchmarkOverlay = false;
@@ -1274,6 +1290,7 @@ void VestaEngine::finish_benchmark()
                << "debug_view,path_trace_debug_view,gaussian_debug_view,compare_mode,compare_split,compare_difference_scale,"
                << "ssao,ssao_radius,ssao_intensity,"
                << "taa,taa_feedback,"
+               << "ssr,ssr_max_distance,ssr_thickness,ssr_intensity,"
                << "pt_denoiser,pt_denoiser_strength,pt_denoiser_temporal,pt_denoiser_iterations,"
                << "requested_backend,active_backend,scene_upload_mode,"
                << "gaussian,path_tracing,texture_streaming,indirect_draw,frustum_culling,distance_culling,"
@@ -1331,6 +1348,10 @@ void VestaEngine::finish_benchmark()
            << settings.ssaoIntensity << ','
            << (settings.enableTaa ? "true" : "false") << ','
            << settings.taaFeedback << ','
+           << (settings.enableSsr ? "true" : "false") << ','
+           << settings.ssrMaxDistance << ','
+           << settings.ssrThickness << ','
+           << settings.ssrIntensity << ','
            << (settings.enablePathTraceDenoiser ? "true" : "false") << ','
            << settings.pathTraceDenoiserStrength << ','
            << settings.pathTraceDenoiserTemporalBlend << ','
@@ -1451,6 +1472,10 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "  \"ssao_intensity\": " << settings.ssaoIntensity << ",\n"
            << "  \"taa\": " << (settings.enableTaa ? "true" : "false") << ",\n"
            << "  \"taa_feedback\": " << settings.taaFeedback << ",\n"
+           << "  \"ssr\": " << (settings.enableSsr ? "true" : "false") << ",\n"
+           << "  \"ssr_max_distance\": " << settings.ssrMaxDistance << ",\n"
+           << "  \"ssr_thickness\": " << settings.ssrThickness << ",\n"
+           << "  \"ssr_intensity\": " << settings.ssrIntensity << ",\n"
            << "  \"path_trace_denoiser\": " << (settings.enablePathTraceDenoiser ? "true" : "false") << ",\n"
            << "  \"path_trace_denoiser_strength\": " << settings.pathTraceDenoiserStrength << ",\n"
            << "  \"path_trace_denoiser_temporal\": " << settings.pathTraceDenoiserTemporalBlend << ",\n"
@@ -2003,8 +2028,14 @@ void VestaEngine::build_debug_ui()
                 ImGui::TableSetColumnIndex(1);
                 ImGui::Text("%s / %.2f", settings.enableTaa ? "On" : "Off", settings.taaFeedback);
                 ImGui::TableSetColumnIndex(2);
-                ImGui::TextUnformatted("Camera Look");
+                ImGui::TextUnformatted("SSR");
                 ImGui::TableSetColumnIndex(3);
+                ImGui::Text("%s / %.1f", settings.enableSsr ? "On" : "Off", settings.ssrMaxDistance);
+
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextUnformatted("Camera Look");
+                ImGui::TableSetColumnIndex(1);
                 ImGui::Text("%.2f EV / A %.3f / F %.2f",
                     settings.cameraExposureEv,
                     settings.cameraApertureRadius,
@@ -2557,6 +2588,20 @@ void VestaEngine::build_debug_ui()
         }
         if (settings.enableTaa) {
             if (ImGui::SliderFloat("TAA Feedback", &settings.taaFeedback, 0.0f, 0.98f, "%.2f")) {
+                _renderer.ResetAccumulation();
+            }
+        }
+        if (ImGui::Checkbox("SSR", &settings.enableSsr)) {
+            _renderer.ResetAccumulation();
+        }
+        if (settings.enableSsr) {
+            if (ImGui::SliderFloat("SSR Distance", &settings.ssrMaxDistance, 0.5f, 100.0f, "%.1f")) {
+                _renderer.ResetAccumulation();
+            }
+            if (ImGui::SliderFloat("SSR Thickness", &settings.ssrThickness, 0.01f, 2.0f, "%.2f")) {
+                _renderer.ResetAccumulation();
+            }
+            if (ImGui::SliderFloat("SSR Intensity", &settings.ssrIntensity, 0.0f, 2.0f, "%.2f")) {
                 _renderer.ResetAccumulation();
             }
         }
