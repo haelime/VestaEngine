@@ -29,6 +29,7 @@ struct DeferredLightingPushConstants {
     glm::vec4 environmentParams{ 1.0f, 0.0f, 0.0f, 0.0f };
     glm::vec4 ssaoParams{ 1.0f, 0.75f, 1.35f, 0.0f };
     glm::vec4 ssrParams{ 1.0f, 18.0f, 0.18f, 0.65f };
+    glm::vec4 ssgiParams{ 1.0f, 1.4f, 0.32f, 10.0f };
 };
 } // namespace
 
@@ -71,6 +72,14 @@ void DeferredLightingPass::SetScreenSpaceReflections(bool enabled, float maxDist
         std::clamp(maxDistance, 0.5f, 100.0f),
         std::clamp(thickness, 0.01f, 2.0f),
         std::clamp(intensity, 0.0f, 2.0f));
+}
+
+void DeferredLightingPass::SetScreenSpaceGlobalIllumination(bool enabled, float radius, float intensity, uint32_t sampleCount)
+{
+    _ssgiParams = glm::vec4(enabled ? 1.0f : 0.0f,
+        std::clamp(radius, 0.05f, 8.0f),
+        std::clamp(intensity, 0.0f, 2.0f),
+        static_cast<float>(std::clamp(sampleCount, 4u, 16u)));
 }
 
 void DeferredLightingPass::Initialize(RenderDevice& device)
@@ -132,6 +141,7 @@ void DeferredLightingPass::Execute(const RenderGraphContext& context)
         .environmentParams = _environmentParams,
         .ssaoParams = _ssaoParams,
         .ssrParams = _ssrParams,
+        .ssgiParams = _ssgiParams,
     };
 
     VkCommandBuffer commandBuffer = context.GetCommandBuffer();

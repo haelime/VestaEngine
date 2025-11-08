@@ -220,6 +220,10 @@ struct RendererSettings {
     float ssrMaxDistance{ 18.0f };
     float ssrThickness{ 0.18f };
     float ssrIntensity{ 0.65f };
+    bool enableSsgi{ true };
+    float ssgiRadius{ 1.4f };
+    float ssgiIntensity{ 0.32f };
+    uint32_t ssgiSampleCount{ 10 };
     glm::vec4 lightDirectionAndIntensity{ -0.4f, -1.0f, -0.3f, 2.0f };
     float environmentIntensity{ 1.0f };
     float environmentRotationDegrees{ 0.0f };

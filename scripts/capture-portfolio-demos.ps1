@@ -57,7 +57,11 @@ $runs = @(
         Args = @("--scene", "assets\demo\DamagedHelmet.glb", "--mode", "raster", "--ssr", "on", "--ssr-distance", "24.0", "--ssr-thickness", "0.22", "--ssr-intensity", "0.85")
     },
     @{
-        Name = "11_pathtrace_indirect_aov"
+        Name = "11_raster_ssgi_lighting"
+        Args = @("--scene", "assets\demo\DamagedHelmet.glb", "--mode", "raster", "--ssgi", "on", "--ssgi-radius", "1.8", "--ssgi-intensity", "0.45", "--ssgi-samples", "12")
+    },
+    @{
+        Name = "12_pathtrace_indirect_aov"
         Args = @("--scene", "assets\demo\DamagedHelmet.glb", "--mode", "pathtrace", "--pt-debug", "indirect")
     }
 )

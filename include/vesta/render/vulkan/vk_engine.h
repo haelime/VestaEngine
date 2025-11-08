@@ -40,6 +40,10 @@ struct EngineLaunchOptions {
     std::optional<float> startupSsrMaxDistance;
     std::optional<float> startupSsrThickness;
     std::optional<float> startupSsrIntensity;
+    std::optional<bool> startupSsgiEnabled;
+    std::optional<float> startupSsgiRadius;
+    std::optional<float> startupSsgiIntensity;
+    std::optional<uint32_t> startupSsgiSamples;
     std::optional<BenchmarkConfig> benchmark;
     std::filesystem::path startupLogPath{ "out/startup.log" };
     bool safeStartupMode{ true };

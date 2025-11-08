@@ -813,6 +813,22 @@ void VestaEngine::init_renderer()
         settings.ssrIntensity = std::clamp(*_launchOptions.startupSsrIntensity, 0.0f, 2.0f);
         resetAccumulation = true;
     }
+    if (_launchOptions.startupSsgiEnabled.has_value()) {
+        settings.enableSsgi = *_launchOptions.startupSsgiEnabled;
+        resetAccumulation = true;
+    }
+    if (_launchOptions.startupSsgiRadius.has_value()) {
+        settings.ssgiRadius = std::clamp(*_launchOptions.startupSsgiRadius, 0.05f, 8.0f);
+        resetAccumulation = true;
+    }
+    if (_launchOptions.startupSsgiIntensity.has_value()) {
+        settings.ssgiIntensity = std::clamp(*_launchOptions.startupSsgiIntensity, 0.0f, 2.0f);
+        resetAccumulation = true;
+    }
+    if (_launchOptions.startupSsgiSamples.has_value()) {
+        settings.ssgiSampleCount = std::clamp(*_launchOptions.startupSsgiSamples, 4u, 16u);
+        resetAccumulation = true;
+    }
     if (_launchOptions.benchmark.has_value()) {
         settings.frameTimingCapture = true;
         settings.benchmarkOverlay = false;
@@ -1291,6 +1307,7 @@ void VestaEngine::finish_benchmark()
                << "ssao,ssao_radius,ssao_intensity,"
                << "taa,taa_feedback,"
                << "ssr,ssr_max_distance,ssr_thickness,ssr_intensity,"
+               << "ssgi,ssgi_radius,ssgi_intensity,ssgi_samples,"
                << "pt_denoiser,pt_denoiser_strength,pt_denoiser_temporal,pt_denoiser_iterations,"
                << "requested_backend,active_backend,scene_upload_mode,"
                << "gaussian,path_tracing,texture_streaming,indirect_draw,frustum_culling,distance_culling,"
@@ -1352,6 +1369,10 @@ void VestaEngine::finish_benchmark()
            << settings.ssrMaxDistance << ','
            << settings.ssrThickness << ','
            << settings.ssrIntensity << ','
+           << (settings.enableSsgi ? "true" : "false") << ','
+           << settings.ssgiRadius << ','
+           << settings.ssgiIntensity << ','
+           << settings.ssgiSampleCount << ','
            << (settings.enablePathTraceDenoiser ? "true" : "false") << ','
            << settings.pathTraceDenoiserStrength << ','
            << settings.pathTraceDenoiserTemporalBlend << ','
@@ -1476,6 +1497,10 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "  \"ssr_max_distance\": " << settings.ssrMaxDistance << ",\n"
            << "  \"ssr_thickness\": " << settings.ssrThickness << ",\n"
            << "  \"ssr_intensity\": " << settings.ssrIntensity << ",\n"
+           << "  \"ssgi\": " << (settings.enableSsgi ? "true" : "false") << ",\n"
+           << "  \"ssgi_radius\": " << settings.ssgiRadius << ",\n"
+           << "  \"ssgi_intensity\": " << settings.ssgiIntensity << ",\n"
+           << "  \"ssgi_samples\": " << settings.ssgiSampleCount << ",\n"
            << "  \"path_trace_denoiser\": " << (settings.enablePathTraceDenoiser ? "true" : "false") << ",\n"
            << "  \"path_trace_denoiser_strength\": " << settings.pathTraceDenoiserStrength << ",\n"
            << "  \"path_trace_denoiser_temporal\": " << settings.pathTraceDenoiserTemporalBlend << ",\n"
@@ -2034,8 +2059,12 @@ void VestaEngine::build_debug_ui()
 
                 ImGui::TableNextRow();
                 ImGui::TableSetColumnIndex(0);
-                ImGui::TextUnformatted("Camera Look");
+                ImGui::TextUnformatted("SSGI");
                 ImGui::TableSetColumnIndex(1);
+                ImGui::Text("%s / r %.2f / %u", settings.enableSsgi ? "On" : "Off", settings.ssgiRadius, settings.ssgiSampleCount);
+                ImGui::TableSetColumnIndex(2);
+                ImGui::TextUnformatted("Camera Look");
+                ImGui::TableSetColumnIndex(3);
                 ImGui::Text("%.2f EV / A %.3f / F %.2f",
                     settings.cameraExposureEv,
                     settings.cameraApertureRadius,
@@ -2602,6 +2631,22 @@ void VestaEngine::build_debug_ui()
                 _renderer.ResetAccumulation();
             }
             if (ImGui::SliderFloat("SSR Intensity", &settings.ssrIntensity, 0.0f, 2.0f, "%.2f")) {
+                _renderer.ResetAccumulation();
+            }
+        }
+        if (ImGui::Checkbox("SSGI", &settings.enableSsgi)) {
+            _renderer.ResetAccumulation();
+        }
+        if (settings.enableSsgi) {
+            if (ImGui::SliderFloat("SSGI Radius", &settings.ssgiRadius, 0.05f, 8.0f, "%.2f")) {
+                _renderer.ResetAccumulation();
+            }
+            if (ImGui::SliderFloat("SSGI Intensity", &settings.ssgiIntensity, 0.0f, 2.0f, "%.2f")) {
+                _renderer.ResetAccumulation();
+            }
+            int ssgiSamples = static_cast<int>(settings.ssgiSampleCount);
+            if (ImGui::SliderInt("SSGI Samples", &ssgiSamples, 4, 16)) {
+                settings.ssgiSampleCount = static_cast<uint32_t>(std::clamp(ssgiSamples, 4, 16));
                 _renderer.ResetAccumulation();
             }
         }

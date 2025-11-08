@@ -30,6 +30,10 @@ void PrintUsage()
         << "  --ssr-distance <value>        SSR max ray distance.\n"
         << "  --ssr-thickness <value>       SSR depth thickness.\n"
         << "  --ssr-intensity <value>       SSR blend intensity.\n"
+        << "  --ssgi <on|off>               Toggle screen-space global illumination.\n"
+        << "  --ssgi-radius <value>         SSGI sample radius.\n"
+        << "  --ssgi-intensity <value>      SSGI bounce strength.\n"
+        << "  --ssgi-samples <4-16>         SSGI sample count.\n"
         << "  --benchmark <csv-path>        Run a timed benchmark and exit.\n"
         << "  --screenshot <png-path>       Save a PNG capture during benchmark.\n"
         << "  --benchmark-seconds <value>   Benchmark capture duration.\n"
@@ -145,6 +149,16 @@ bool TryParseFloat(const char* value, float& output)
 {
     try {
         output = std::stof(value);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+bool TryParseUint(const char* value, uint32_t& output)
+{
+    try {
+        output = static_cast<uint32_t>(std::stoul(value));
         return true;
     } catch (...) {
         return false;
@@ -422,6 +436,57 @@ int main(int argc, char* argv[])
                 return 1;
             }
             options.startupSsrIntensity = intensity;
+            continue;
+        }
+        if (argument == "--ssgi") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            options.startupSsgiEnabled = ParseToggle(value);
+            if (!options.startupSsgiEnabled.has_value()) {
+                std::cerr << "Invalid SSGI toggle: " << value << "\n";
+                return 1;
+            }
+            continue;
+        }
+        if (argument == "--ssgi-radius") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            float radius = 0.0f;
+            if (!TryParseFloat(value, radius) || radius <= 0.0f) {
+                std::cerr << "Invalid SSGI radius: " << value << "\n";
+                return 1;
+            }
+            options.startupSsgiRadius = radius;
+            continue;
+        }
+        if (argument == "--ssgi-intensity") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            float intensity = 0.0f;
+            if (!TryParseFloat(value, intensity) || intensity < 0.0f) {
+                std::cerr << "Invalid SSGI intensity: " << value << "\n";
+                return 1;
+            }
+            options.startupSsgiIntensity = intensity;
+            continue;
+        }
+        if (argument == "--ssgi-samples") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            uint32_t samples = 0u;
+            if (!TryParseUint(value, samples) || samples < 4u || samples > 16u) {
+                std::cerr << "Invalid SSGI sample count: " << value << "\n";
+                return 1;
+            }
+            options.startupSsgiSamples = samples;
             continue;
         }
         if (argument == "--benchmark") {
