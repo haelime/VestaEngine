@@ -16,7 +16,7 @@ void PrintUsage()
         << "  --compare <off|split|difference>\n"
         << "  --debug-view <final|albedo|normal|world-position|depth|uv|material-id|object-id|roughness|metallic|emissive|ao|motion-vector>\n"
         << "  --pt-debug <final|albedo|normal|depth|direct|indirect>\n"
-        << "  --gaussian-debug <final|alpha|revealage|overdraw|depth|tile-occupancy>\n"
+        << "  --gaussian-debug <final|alpha|revealage|overdraw|depth|tile-occupancy|radius|contribution-count>\n"
         << "  --compare-split <0.05-0.95>\n"
         << "  --compare-scale <value>\n"
         << "  --pt-backend <auto|compute|hardwarert>\n"
@@ -142,6 +142,8 @@ std::optional<vesta::render::GaussianDebugView> ParseGaussianDebugView(std::stri
     if (value == "overdraw" || value == "overdraw-heatmap") { return vesta::render::GaussianDebugView::OverdrawHeatmap; }
     if (value == "depth") { return vesta::render::GaussianDebugView::Depth; }
     if (value == "tile-occupancy" || value == "tiles") { return vesta::render::GaussianDebugView::TileOccupancy; }
+    if (value == "radius" || value == "splat-radius") { return vesta::render::GaussianDebugView::SplatRadius; }
+    if (value == "contribution-count" || value == "contributions" || value == "splat-count") { return vesta::render::GaussianDebugView::ContributionCount; }
     return std::nullopt;
 }
 

@@ -271,6 +271,20 @@ vec3 resolveGaussianDebugView(vec4 gaussianColor, ivec2 pixel, vec2 uv)
         float occupancy = clamp(float(range.y - range.x) / 256.0, 0.0, 1.0);
         return heatmap(occupancy);
     }
+    if (gaussianDebugView == 6u) {
+        if (!hasImage(pc.imageIndices1.w)) { return vec3(-1.0); }
+        ivec2 debugSize = imageSize(storageImages[nonuniformEXT(int(pc.imageIndices1.w))]);
+        ivec2 debugPixel = clamp(ivec2(uv * vec2(debugSize)), ivec2(0), debugSize - ivec2(1));
+        vec4 debugValue = imageLoad(storageImages[nonuniformEXT(int(pc.imageIndices1.w))], debugPixel);
+        return heatmap(clamp(debugValue.z / 64.0, 0.0, 1.0));
+    }
+    if (gaussianDebugView == 7u) {
+        if (!hasImage(pc.imageIndices1.w)) { return vec3(-1.0); }
+        ivec2 debugSize = imageSize(storageImages[nonuniformEXT(int(pc.imageIndices1.w))]);
+        ivec2 debugPixel = clamp(ivec2(uv * vec2(debugSize)), ivec2(0), debugSize - ivec2(1));
+        vec4 debugValue = imageLoad(storageImages[nonuniformEXT(int(pc.imageIndices1.w))], debugPixel);
+        return heatmap(clamp(debugValue.w / 48.0, 0.0, 1.0));
+    }
     return vec3(-1.0);
 }
 

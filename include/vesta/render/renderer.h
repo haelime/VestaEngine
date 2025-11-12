@@ -66,6 +66,8 @@ enum class GaussianDebugView : uint32_t {
     OverdrawHeatmap = 3,
     Depth = 4,
     TileOccupancy = 5,
+    SplatRadius = 6,
+    ContributionCount = 7,
 };
 
 enum class CompareMode : uint32_t {

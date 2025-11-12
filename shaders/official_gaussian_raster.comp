@@ -73,6 +73,8 @@ void main()
     vec3 color = vec3(0.0);
     float transmittance = 1.0;
     float nearestDepth = 1.0;
+    float nearestRadius = 0.0;
+    uint contributionCount = 0u;
     vec2 samplePoint = vec2(pixel) + vec2(0.5);
     bool done = false;
     uint localIndex = gl_LocalInvocationIndex;
@@ -124,6 +126,10 @@ void main()
                 }
 
                 nearestDepth = min(nearestDepth, depth);
+                if (depth <= nearestDepth + 1.0e-5) {
+                    nearestRadius = radius;
+                }
+                ++contributionCount;
                 float contribution = transmittance * alpha;
                 color += sColor[entryIndex].rgb * contribution;
                 transmittance *= (1.0 - alpha);
@@ -143,5 +149,5 @@ void main()
     float finalAlpha = clamp(1.0 - transmittance, 0.0, 1.0);
     imageStore(accumOutput, pixel, vec4(color, finalAlpha));
     imageStore(revealOutput, pixel, vec4(1.0 - finalAlpha));
-    imageStore(debugOutput, pixel, vec4(nearestDepth, finalAlpha, 0.0, 1.0));
+    imageStore(debugOutput, pixel, vec4(nearestDepth, finalAlpha, nearestRadius, float(contributionCount)));
 }

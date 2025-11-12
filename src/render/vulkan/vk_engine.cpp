@@ -208,6 +208,10 @@ const char* GaussianDebugViewLabel(vesta::render::GaussianDebugView view)
         return "Depth";
     case vesta::render::GaussianDebugView::TileOccupancy:
         return "Tile Occupancy";
+    case vesta::render::GaussianDebugView::SplatRadius:
+        return "Splat Radius";
+    case vesta::render::GaussianDebugView::ContributionCount:
+        return "Contribution Count";
     case vesta::render::GaussianDebugView::Final:
     default:
         return "Final";
@@ -2336,7 +2340,14 @@ void VestaEngine::build_debug_ui()
                 settings.pathTraceDebugView = static_cast<vesta::render::PathTraceDebugView>(pathTraceDebugView);
             }
             const char* gaussianViews[] = {
-                "Final Splat Image", "Splat Alpha", "Revealage", "Overdraw Heatmap", "Splat Depth", "Tile Occupancy"
+                "Final Splat Image",
+                "Splat Alpha",
+                "Revealage",
+                "Overdraw Heatmap",
+                "Splat Depth",
+                "Tile Occupancy",
+                "Splat Radius",
+                "Contribution Count",
             };
             int gaussianView = static_cast<int>(settings.gaussianDebugView);
             if (ImGui::Combo("Gaussian Debug View", &gaussianView, gaussianViews, IM_ARRAYSIZE(gaussianViews))) {
