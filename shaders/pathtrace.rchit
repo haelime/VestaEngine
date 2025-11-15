@@ -49,8 +49,10 @@ layout(push_constant) uniform PathTracePushConstants {
     uint frameIndex;
     uint emissiveTriangleBufferIndex;
     uint emissiveTriangleCount;
+    uint russianRouletteDepth;
+    float fireflyClamp;
+    uint pathTraceFlags;
     uint reserved0;
-    uint reserved1;
     uvec4 accumulationImageIndices0;
     uvec4 accumulationImageIndices1;
     uvec4 pathTraceParams;

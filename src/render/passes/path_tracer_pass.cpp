@@ -45,13 +45,17 @@ struct HardwarePathTracePushConstants {
     uint32_t frameIndex{ 0 };
     uint32_t emissiveTriangleBufferIndex{ kInvalidResourceIndex };
     uint32_t emissiveTriangleCount{ 0 };
+    uint32_t russianRouletteDepth{ 3 };
+    float fireflyClamp{ 8.0f };
+    uint32_t pathTraceFlags{ 0u };
     uint32_t reserved0{ 0 };
-    uint32_t reserved1{ 0 };
     glm::uvec4 accumulationImageIndices0{ kInvalidResourceIndex };
     glm::uvec4 accumulationImageIndices1{ kInvalidResourceIndex };
     glm::uvec4 pathTraceParams{ 0u, 1u, 4u, 0u }; // debug view, spp, max bounces, reserved
     glm::uvec4 guideImageIndices{ kInvalidResourceIndex };
     uint32_t reserved2{ 0 };
+    uint32_t reserved3{ 0 };
+    uint32_t reserved4{ 0 };
 };
 
 uint32_t AlignUp(uint32_t value, uint32_t alignment)
@@ -140,6 +144,15 @@ void PathTracerPass::SetSamplesPerPixel(uint32_t samplesPerPixel)
 void PathTracerPass::SetMaxBounces(uint32_t maxBounces)
 {
     _maxBounces = std::clamp(maxBounces, 1u, 12u);
+}
+
+void PathTracerPass::SetIntegratorControls(
+    bool nextEventEstimation, bool russianRoulette, uint32_t russianRouletteDepth, float fireflyClamp)
+{
+    _nextEventEstimation = nextEventEstimation;
+    _russianRoulette = russianRoulette;
+    _russianRouletteDepth = std::clamp(russianRouletteDepth, 1u, 12u);
+    _fireflyClamp = std::clamp(fireflyClamp, 0.0f, 64.0f);
 }
 
 void PathTracerPass::SetDebugView(PathTraceDebugView debugView)
@@ -416,6 +429,9 @@ void PathTracerPass::Execute(const RenderGraphContext& context)
                 ? context.GetDevice().GetBufferResource(_scene->GetEmissiveTriangleBuffer()).bindless.storageBuffer
                 : kInvalidResourceIndex,
             .emissiveTriangleCount = static_cast<uint32_t>(_scene->GetEmissiveTriangles().size()),
+            .russianRouletteDepth = _russianRouletteDepth,
+            .fireflyClamp = _fireflyClamp,
+            .pathTraceFlags = (_nextEventEstimation ? 1u : 0u) | (_russianRoulette ? 2u : 0u),
             .accumulationImageIndices0 = glm::uvec4(
                 accumulationIndex(0), accumulationIndex(1), accumulationIndex(2), accumulationIndex(3)),
             .accumulationImageIndices1 = glm::uvec4(accumulationIndex(4), accumulationIndex(5), kInvalidResourceIndex, kInvalidResourceIndex),

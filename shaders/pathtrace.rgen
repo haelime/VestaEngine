@@ -62,8 +62,10 @@ layout(push_constant) uniform PathTracePushConstants {
     uint frameIndex;
     uint emissiveTriangleBufferIndex;
     uint emissiveTriangleCount;
+    uint russianRouletteDepth;
+    float fireflyClamp;
+    uint pathTraceFlags;
     uint reserved0;
-    uint reserved1;
     uvec4 accumulationImageIndices0;
     uvec4 accumulationImageIndices1;
     uvec4 pathTraceParams;
@@ -78,6 +80,8 @@ const uint DEBUG_DEPTH = 3u;
 const uint DEBUG_DIRECT = 4u;
 const uint DEBUG_INDIRECT = 5u;
 const uint kInvalidResourceIndex = 0xFFFFFFFFu;
+const uint PT_FLAG_NEE = 1u;
+const uint PT_FLAG_RUSSIAN_ROULETTE = 2u;
 
 uint accumulationImageIndex(uint debugView)
 {
@@ -391,9 +395,12 @@ vec3 traceSample(vec3 origin, vec3 direction, inout uint rng, out vec3 primaryAl
             primaryDepth = hitT;
         }
 
-        bool lightVisible = visibleToDirectionalLight(hitPosition, normal);
+        bool nextEventEstimation = (pc.pathTraceFlags & PT_FLAG_NEE) != 0u;
+        bool lightVisible = nextEventEstimation && visibleToDirectionalLight(hitPosition, normal);
         vec3 direct = lightVisible ? evaluateDirect(albedo, metallic, roughness, normal, viewDir) : vec3(0.0);
-        direct += sampleEmissiveDirect(hitPosition, normal, viewDir, albedo, metallic, roughness, rng);
+        if (nextEventEstimation) {
+            direct += sampleEmissiveDirect(hitPosition, normal, viewDir, albedo, metallic, roughness, rng);
+        }
         radiance += throughput * (emissive + direct);
         directOut += throughput * direct;
 
@@ -408,10 +415,11 @@ vec3 traceSample(vec3 origin, vec3 direction, inout uint rng, out vec3 primaryAl
             vec3 diffuseWeight = albedo * (1.0 - metallic) * (vec3(1.0) - F);
             throughput *= diffuseWeight / max(1.0 - specularProbability, 0.05);
         }
-        throughput = min(throughput, vec3(8.0));
+        float fireflyClamp = pc.fireflyClamp > 0.0 ? pc.fireflyClamp : 1.0e8;
+        throughput = min(throughput, vec3(fireflyClamp));
         origin = hitPosition + normal * 0.002;
 
-        if (bounce >= 3u) {
+        if ((pc.pathTraceFlags & PT_FLAG_RUSSIAN_ROULETTE) != 0u && bounce >= pc.russianRouletteDepth) {
             float survive = clamp(max(throughput.r, max(throughput.g, throughput.b)), 0.05, 0.95);
             if (rand(rng) > survive) {
                 break;

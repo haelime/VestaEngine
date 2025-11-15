@@ -31,6 +31,10 @@ struct EngineLaunchOptions {
     std::optional<float> startupCompareDifferenceScale;
     std::optional<vesta::render::PathTraceBackend> startupPathTraceBackend;
     std::optional<float> startupPathTraceResolutionScale;
+    std::optional<bool> startupPathTraceNextEventEstimation;
+    std::optional<bool> startupPathTraceRussianRoulette;
+    std::optional<uint32_t> startupPathTraceRussianRouletteDepth;
+    std::optional<float> startupPathTraceFireflyClamp;
     std::optional<bool> startupSsaoEnabled;
     std::optional<float> startupSsaoRadius;
     std::optional<float> startupSsaoIntensity;

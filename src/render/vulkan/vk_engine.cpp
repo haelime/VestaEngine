@@ -781,6 +781,22 @@ void VestaEngine::init_renderer()
         settings.pathTraceResolutionScale = std::clamp(*_launchOptions.startupPathTraceResolutionScale, 0.25f, 1.0f);
         resetAccumulation = true;
     }
+    if (_launchOptions.startupPathTraceNextEventEstimation.has_value()) {
+        settings.pathTraceNextEventEstimation = *_launchOptions.startupPathTraceNextEventEstimation;
+        resetAccumulation = true;
+    }
+    if (_launchOptions.startupPathTraceRussianRoulette.has_value()) {
+        settings.pathTraceRussianRoulette = *_launchOptions.startupPathTraceRussianRoulette;
+        resetAccumulation = true;
+    }
+    if (_launchOptions.startupPathTraceRussianRouletteDepth.has_value()) {
+        settings.pathTraceRussianRouletteDepth = std::clamp(*_launchOptions.startupPathTraceRussianRouletteDepth, 1u, 12u);
+        resetAccumulation = true;
+    }
+    if (_launchOptions.startupPathTraceFireflyClamp.has_value()) {
+        settings.pathTraceFireflyClamp = std::clamp(*_launchOptions.startupPathTraceFireflyClamp, 0.0f, 64.0f);
+        resetAccumulation = true;
+    }
     if (_launchOptions.startupSsaoEnabled.has_value()) {
         settings.enableSsao = *_launchOptions.startupSsaoEnabled;
         resetAccumulation = true;
@@ -1312,6 +1328,7 @@ void VestaEngine::finish_benchmark()
                << "taa,taa_feedback,"
                << "ssr,ssr_max_distance,ssr_thickness,ssr_intensity,"
                << "ssgi,ssgi_radius,ssgi_intensity,ssgi_samples,"
+               << "pt_nee,pt_rr,pt_rr_depth,pt_firefly_clamp,"
                << "pt_denoiser,pt_denoiser_strength,pt_denoiser_temporal,pt_denoiser_iterations,"
                << "requested_backend,active_backend,scene_upload_mode,"
                << "gaussian,path_tracing,texture_streaming,indirect_draw,frustum_culling,distance_culling,"
@@ -1377,6 +1394,10 @@ void VestaEngine::finish_benchmark()
            << settings.ssgiRadius << ','
            << settings.ssgiIntensity << ','
            << settings.ssgiSampleCount << ','
+           << (settings.pathTraceNextEventEstimation ? "true" : "false") << ','
+           << (settings.pathTraceRussianRoulette ? "true" : "false") << ','
+           << settings.pathTraceRussianRouletteDepth << ','
+           << settings.pathTraceFireflyClamp << ','
            << (settings.enablePathTraceDenoiser ? "true" : "false") << ','
            << settings.pathTraceDenoiserStrength << ','
            << settings.pathTraceDenoiserTemporalBlend << ','
@@ -1505,6 +1526,10 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "  \"ssgi_radius\": " << settings.ssgiRadius << ",\n"
            << "  \"ssgi_intensity\": " << settings.ssgiIntensity << ",\n"
            << "  \"ssgi_samples\": " << settings.ssgiSampleCount << ",\n"
+           << "  \"path_trace_next_event_estimation\": " << (settings.pathTraceNextEventEstimation ? "true" : "false") << ",\n"
+           << "  \"path_trace_russian_roulette\": " << (settings.pathTraceRussianRoulette ? "true" : "false") << ",\n"
+           << "  \"path_trace_russian_roulette_depth\": " << settings.pathTraceRussianRouletteDepth << ",\n"
+           << "  \"path_trace_firefly_clamp\": " << settings.pathTraceFireflyClamp << ",\n"
            << "  \"path_trace_denoiser\": " << (settings.enablePathTraceDenoiser ? "true" : "false") << ",\n"
            << "  \"path_trace_denoiser_strength\": " << settings.pathTraceDenoiserStrength << ",\n"
            << "  \"path_trace_denoiser_temporal\": " << settings.pathTraceDenoiserTemporalBlend << ",\n"
@@ -2672,6 +2697,22 @@ void VestaEngine::build_debug_ui()
         int pathTraceMaxBounces = static_cast<int>(settings.pathTraceMaxBounces);
         if (ImGui::SliderInt("PT Max Bounces", &pathTraceMaxBounces, 1, 12)) {
             settings.pathTraceMaxBounces = static_cast<uint32_t>(pathTraceMaxBounces);
+            _renderer.ResetAccumulation();
+        }
+        if (ImGui::Checkbox("PT Next Event Estimation", &settings.pathTraceNextEventEstimation)) {
+            _renderer.ResetAccumulation();
+        }
+        if (ImGui::Checkbox("PT Russian Roulette", &settings.pathTraceRussianRoulette)) {
+            _renderer.ResetAccumulation();
+        }
+        if (settings.pathTraceRussianRoulette) {
+            int russianRouletteDepth = static_cast<int>(settings.pathTraceRussianRouletteDepth);
+            if (ImGui::SliderInt("PT RR Depth", &russianRouletteDepth, 1, 12)) {
+                settings.pathTraceRussianRouletteDepth = static_cast<uint32_t>(std::clamp(russianRouletteDepth, 1, 12));
+                _renderer.ResetAccumulation();
+            }
+        }
+        if (ImGui::SliderFloat("PT Firefly Clamp", &settings.pathTraceFireflyClamp, 0.0f, 64.0f, "%.1f")) {
             _renderer.ResetAccumulation();
         }
 

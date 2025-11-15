@@ -21,6 +21,10 @@ void PrintUsage()
         << "  --compare-scale <value>\n"
         << "  --pt-backend <auto|compute|hardwarert>\n"
         << "  --pt-scale <0.25-1.0>\n"
+        << "  --pt-nee <on|off>             Toggle path tracing next-event estimation.\n"
+        << "  --pt-rr <on|off>              Toggle path tracing Russian roulette termination.\n"
+        << "  --pt-rr-depth <1-12>          Bounce depth where Russian roulette starts.\n"
+        << "  --pt-firefly-clamp <value>    Clamp path throughput/fireflies; 0 disables.\n"
         << "  --ssao <on|off>               Toggle raster screen-space ambient occlusion.\n"
         << "  --ssao-radius <value>         SSAO world-space sample radius.\n"
         << "  --ssao-intensity <value>      SSAO darkening strength.\n"
@@ -324,6 +328,56 @@ int main(int argc, char* argv[])
                 return 1;
             }
             options.startupPathTraceResolutionScale = scale;
+            continue;
+        }
+        if (argument == "--pt-nee") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            options.startupPathTraceNextEventEstimation = ParseToggle(value);
+            if (!options.startupPathTraceNextEventEstimation.has_value()) {
+                std::cerr << "Invalid PT NEE toggle: " << value << "\n";
+                return 1;
+            }
+            continue;
+        }
+        if (argument == "--pt-rr") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            options.startupPathTraceRussianRoulette = ParseToggle(value);
+            if (!options.startupPathTraceRussianRoulette.has_value()) {
+                std::cerr << "Invalid PT Russian roulette toggle: " << value << "\n";
+                return 1;
+            }
+            continue;
+        }
+        if (argument == "--pt-rr-depth") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            uint32_t depth = 0u;
+            if (!TryParseUint(value, depth) || depth < 1u || depth > 12u) {
+                std::cerr << "Invalid PT Russian roulette depth: " << value << "\n";
+                return 1;
+            }
+            options.startupPathTraceRussianRouletteDepth = depth;
+            continue;
+        }
+        if (argument == "--pt-firefly-clamp") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            float clampValue = 0.0f;
+            if (!TryParseFloat(value, clampValue) || clampValue < 0.0f) {
+                std::cerr << "Invalid PT firefly clamp: " << value << "\n";
+                return 1;
+            }
+            options.startupPathTraceFireflyClamp = clampValue;
             continue;
         }
         if (argument == "--ssao") {

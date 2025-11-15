@@ -518,6 +518,10 @@ void ConfigurePathTracerPass(Renderer& renderer, IRenderPass& pass, const Render
         glm::vec4(renderer.GetCamera().GetUp(), settings.cameraFocalDistance));
     pathTracerPass.SetSamplesPerPixel(settings.pathTraceSamplesPerPixel);
     pathTracerPass.SetMaxBounces(settings.pathTraceMaxBounces);
+    pathTracerPass.SetIntegratorControls(settings.pathTraceNextEventEstimation,
+        settings.pathTraceRussianRoulette,
+        settings.pathTraceRussianRouletteDepth,
+        settings.pathTraceFireflyClamp);
     pathTracerPass.SetDebugView(settings.pathTraceDebugView);
 }
 

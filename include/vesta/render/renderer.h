@@ -203,6 +203,10 @@ struct RendererSettings {
     float pathTraceResolutionScale{ 0.5f };
     uint32_t pathTraceSamplesPerPixel{ 1 };
     uint32_t pathTraceMaxBounces{ 4 };
+    bool pathTraceNextEventEstimation{ true };
+    bool pathTraceRussianRoulette{ true };
+    uint32_t pathTraceRussianRouletteDepth{ 3 };
+    float pathTraceFireflyClamp{ 8.0f };
     PathTraceDebugView pathTraceDebugView{ PathTraceDebugView::Final };
     RendererDebugView debugView{ RendererDebugView::FinalColor };
     GaussianDebugView gaussianDebugView{ GaussianDebugView::Final };
