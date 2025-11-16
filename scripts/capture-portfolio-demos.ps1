@@ -75,6 +75,10 @@ $runs = @(
     @{
         Name = "13_pathtrace_integrator_controls"
         Args = @("--scene", "assets\demo\DamagedHelmet.glb", "--mode", "pathtrace", "--pt-backend", "auto", "--pt-nee", "on", "--pt-rr", "on", "--pt-rr-depth", "3", "--pt-firefly-clamp", "6.0")
+    },
+    @{
+        Name = "14_pathtrace_ray_count_heatmap"
+        Args = @("--scene", "assets\demo\DamagedHelmet.glb", "--mode", "pathtrace", "--pt-backend", "auto", "--pt-debug", "ray-count", "--pt-nee", "on", "--pt-rr", "on")
     }
 )
 

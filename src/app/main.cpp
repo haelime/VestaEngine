@@ -15,7 +15,7 @@ void PrintUsage()
         << "  --mode <composite|raster|deferred|gaussian|pathtrace>\n"
         << "  --compare <off|split|difference>\n"
         << "  --debug-view <final|albedo|normal|world-position|depth|uv|material-id|object-id|roughness|metallic|emissive|ao|motion-vector>\n"
-        << "  --pt-debug <final|albedo|normal|depth|direct|indirect>\n"
+        << "  --pt-debug <final|albedo|normal|depth|direct|indirect|ray-count>\n"
         << "  --gaussian-debug <final|alpha|revealage|overdraw|depth|tile-occupancy|radius|contribution-count>\n"
         << "  --compare-split <0.05-0.95>\n"
         << "  --compare-scale <value>\n"
@@ -135,6 +135,9 @@ std::optional<vesta::render::PathTraceDebugView> ParsePathTraceDebugView(std::st
     if (value == "depth") { return vesta::render::PathTraceDebugView::Depth; }
     if (value == "direct") { return vesta::render::PathTraceDebugView::Direct; }
     if (value == "indirect") { return vesta::render::PathTraceDebugView::Indirect; }
+    if (value == "ray-count" || value == "ray-heatmap" || value == "ray-count-heatmap") {
+        return vesta::render::PathTraceDebugView::RayCountHeatmap;
+    }
     return std::nullopt;
 }
 

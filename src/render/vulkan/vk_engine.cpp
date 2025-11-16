@@ -156,6 +156,8 @@ const char* PathTraceDebugViewLabel(vesta::render::PathTraceDebugView view)
         return "Direct";
     case vesta::render::PathTraceDebugView::Indirect:
         return "Indirect";
+    case vesta::render::PathTraceDebugView::RayCountHeatmap:
+        return "Ray Count Heatmap";
     case vesta::render::PathTraceDebugView::Final:
     default:
         return "Final";
@@ -2359,7 +2361,7 @@ void VestaEngine::build_debug_ui()
             }
             ImGui::TextDisabled("Raster GBuffer views are live when the raster pass is active.");
 
-            const char* pathTraceDebugViews[] = { "Final", "Albedo", "Normal", "Depth", "Direct", "Indirect" };
+            const char* pathTraceDebugViews[] = { "Final", "Albedo", "Normal", "Depth", "Direct", "Indirect", "Ray Count Heatmap" };
             int pathTraceDebugView = static_cast<int>(settings.pathTraceDebugView);
             if (ImGui::Combo("Path Tracing AOV", &pathTraceDebugView, pathTraceDebugViews, IM_ARRAYSIZE(pathTraceDebugViews))) {
                 settings.pathTraceDebugView = static_cast<vesta::render::PathTraceDebugView>(pathTraceDebugView);
@@ -2716,7 +2718,7 @@ void VestaEngine::build_debug_ui()
             _renderer.ResetAccumulation();
         }
 
-        const char* pathTraceDebugViews[] = { "Final", "Albedo", "Normal", "Depth", "Direct", "Indirect" };
+        const char* pathTraceDebugViews[] = { "Final", "Albedo", "Normal", "Depth", "Direct", "Indirect", "Ray Count Heatmap" };
         int pathTraceDebugView = static_cast<int>(settings.pathTraceDebugView);
         if (ImGui::Combo("PT Debug View", &pathTraceDebugView, pathTraceDebugViews, IM_ARRAYSIZE(pathTraceDebugViews))) {
             settings.pathTraceDebugView = static_cast<vesta::render::PathTraceDebugView>(pathTraceDebugView);

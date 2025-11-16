@@ -18,5 +18,6 @@ enum class PathTraceDebugView : uint32_t {
     Depth = 3,
     Direct = 4,
     Indirect = 5,
+    RayCountHeatmap = 6,
 };
 } // namespace vesta::render

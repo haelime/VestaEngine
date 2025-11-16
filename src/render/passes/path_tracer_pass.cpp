@@ -168,13 +168,14 @@ void PathTracerPass::EnsureAccumulationImage(RenderDevice& device, VkExtent3D ex
     }
 
     DestroyAccumulationImage(device);
-    constexpr std::array<const char*, 6> kDebugNames{
+    constexpr std::array<const char*, 7> kDebugNames{
         "PathTraceAccum.Final",
         "PathTraceAccum.Albedo",
         "PathTraceAccum.Normal",
         "PathTraceAccum.Depth",
         "PathTraceAccum.Direct",
         "PathTraceAccum.Indirect",
+        "PathTraceAccum.RayCount",
     };
     for (size_t imageIndex = 0; imageIndex < _accumulationImages.size(); ++imageIndex) {
         _accumulationImages[imageIndex] = device.CreateImage(ImageDesc{
@@ -434,7 +435,8 @@ void PathTracerPass::Execute(const RenderGraphContext& context)
             .pathTraceFlags = (_nextEventEstimation ? 1u : 0u) | (_russianRoulette ? 2u : 0u),
             .accumulationImageIndices0 = glm::uvec4(
                 accumulationIndex(0), accumulationIndex(1), accumulationIndex(2), accumulationIndex(3)),
-            .accumulationImageIndices1 = glm::uvec4(accumulationIndex(4), accumulationIndex(5), kInvalidResourceIndex, kInvalidResourceIndex),
+            .accumulationImageIndices1 = glm::uvec4(
+                accumulationIndex(4), accumulationIndex(5), accumulationIndex(6), kInvalidResourceIndex),
             .pathTraceParams = glm::uvec4(static_cast<uint32_t>(_debugView), _samplesPerPixel, _maxBounces, 0u),
             .guideImageIndices = glm::uvec4(
                 _normalGuide ? context.GetDevice().GetImageResource(context.GetTextureHandle(_normalGuide)).bindless.storageImage : kInvalidResourceIndex,
