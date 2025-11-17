@@ -458,6 +458,7 @@ void ConfigureDeferredLightingPass(Renderer& renderer, IRenderPass& pass, const 
     lightingPass.SetScreenSpaceGlobalIllumination(
         settings.enableSsgi, settings.ssgiRadius, settings.ssgiIntensity, settings.ssgiSampleCount);
     lightingPass.SetOutput(resources.deferredLighting);
+    lightingPass.SetDebugOutput(resources.deferredLightingDebug, static_cast<uint32_t>(settings.debugView));
 }
 
 void ConfigureGaussianPass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
@@ -560,6 +561,7 @@ void ConfigureCompositePass(Renderer& renderer, IRenderPass& pass, const Rendere
         resources.gbufferMaterial,
         resources.gbufferDebug,
         resources.gbufferMotion,
+        resources.deferredLightingDebug,
         resources.sceneDepth);
     uint32_t gaussianTileRangeBufferIndex = kInvalidResourceIndex;
     if (const auto* officialGaussian = renderer.FindPass<OfficialGaussianRasterPass>("official-gaussian-raster")) {
@@ -2741,6 +2743,7 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
     }
     if (useDeferredPass) {
         resources.deferredLighting = graph.CreateTexture("DeferredLighting", storageDesc);
+        resources.deferredLightingDebug = graph.CreateTexture("DeferredLighting.DebugAOV", storageDesc);
     }
     if (useTemporalAAPass) {
         resources.temporalLighting = graph.CreateTexture("TemporalLighting", storageDesc);

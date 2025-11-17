@@ -19,8 +19,8 @@ struct DeferredLightingPushConstants {
     uint32_t materialImageIndex{ 0 };
     uint32_t depthImageIndex{ 0 };
     uint32_t outputImageIndex{ 0 };
-    uint32_t padding0{ 0 };
-    uint32_t padding1{ 0 };
+    uint32_t debugOutputImageIndex{ kInvalidResourceIndex };
+    uint32_t debugView{ 0 };
     uint32_t padding2{ 0 };
     glm::mat4 inverseViewProjection{ 1.0f };
     glm::mat4 viewProjection{ 1.0f };
@@ -44,6 +44,12 @@ void DeferredLightingPass::SetInputs(GraphTextureHandle albedo, GraphTextureHand
 void DeferredLightingPass::SetOutput(GraphTextureHandle output)
 {
     _output = output;
+}
+
+void DeferredLightingPass::SetDebugOutput(GraphTextureHandle output, uint32_t debugView)
+{
+    _debugOutput = output;
+    _debugView = debugView;
 }
 
 void DeferredLightingPass::SetCamera(const Camera* camera)
@@ -114,6 +120,9 @@ void DeferredLightingPass::Setup(RenderGraphBuilder& builder)
     builder.Read(_material, ResourceUsage::StorageRead);
     builder.Read(_depth, ResourceUsage::SampledRead);
     builder.Write(_output, ResourceUsage::StorageWrite);
+    if (_debugOutput) {
+        builder.Write(_debugOutput, ResourceUsage::StorageWrite);
+    }
 }
 
 void DeferredLightingPass::Execute(const RenderGraphContext& context)
@@ -127,6 +136,9 @@ void DeferredLightingPass::Execute(const RenderGraphContext& context)
     const ImageHandle materialHandle = context.GetTextureHandle(_material);
     const ImageHandle depthHandle = context.GetTextureHandle(_depth);
     const ImageHandle outputHandle = context.GetTextureHandle(_output);
+    const uint32_t debugOutputImageIndex = _debugOutput
+        ? context.GetDevice().GetImageResource(context.GetTextureHandle(_debugOutput)).bindless.storageImage
+        : kInvalidResourceIndex;
 
     DeferredLightingPushConstants pushConstants{
         .albedoImageIndex = context.GetDevice().GetImageResource(albedoHandle).bindless.storageImage,
@@ -134,6 +146,8 @@ void DeferredLightingPass::Execute(const RenderGraphContext& context)
         .materialImageIndex = context.GetDevice().GetImageResource(materialHandle).bindless.storageImage,
         .depthImageIndex = context.GetDevice().GetImageResource(depthHandle).bindless.sampledImage,
         .outputImageIndex = context.GetDevice().GetImageResource(outputHandle).bindless.storageImage,
+        .debugOutputImageIndex = debugOutputImageIndex,
+        .debugView = _debugView,
         .inverseViewProjection = _camera->GetInverseViewProjection(),
         .viewProjection = _camera->GetViewProjection(),
         .cameraPosition = glm::vec4(_camera->GetPosition(), 1.0f),

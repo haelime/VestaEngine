@@ -57,6 +57,9 @@ enum class RendererDebugView : uint32_t {
     Emissive = 10,
     AmbientOcclusion = 11,
     MotionVector = 12,
+    DirectLighting = 13,
+    IndirectLighting = 14,
+    Reflection = 15,
 };
 
 enum class GaussianDebugView : uint32_t {
@@ -269,6 +272,7 @@ struct RendererGraphResources {
     GraphTextureHandle gbufferMotion{};
     GraphTextureHandle sceneDepth{};
     GraphTextureHandle deferredLighting{};
+    GraphTextureHandle deferredLightingDebug{};
     GraphTextureHandle temporalLighting{};
     GraphTextureHandle pathTraceOutput{};
     GraphTextureHandle pathTraceNormalGuide{};

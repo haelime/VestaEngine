@@ -191,6 +191,12 @@ const char* RendererDebugViewLabel(vesta::render::RendererDebugView view)
         return "Ambient Occlusion";
     case vesta::render::RendererDebugView::MotionVector:
         return "Motion Vector";
+    case vesta::render::RendererDebugView::DirectLighting:
+        return "Direct Lighting";
+    case vesta::render::RendererDebugView::IndirectLighting:
+        return "Indirect Lighting";
+    case vesta::render::RendererDebugView::Reflection:
+        return "Reflection";
     case vesta::render::RendererDebugView::FinalColor:
     default:
         return "Final Color";
@@ -2353,6 +2359,9 @@ void VestaEngine::build_debug_ui()
                 "Emissive",
                 "Ambient Occlusion",
                 "Motion Vector",
+                "Direct Lighting",
+                "Indirect Lighting",
+                "Reflection",
             };
             int commonView = static_cast<int>(settings.debugView);
             if (ImGui::Combo("Debug View", &commonView, commonViews, IM_ARRAYSIZE(commonViews))) {

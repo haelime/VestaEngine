@@ -19,6 +19,7 @@ public:
         GraphTextureHandle material,
         GraphTextureHandle debug,
         GraphTextureHandle motion,
+        GraphTextureHandle lightingDebug,
         GraphTextureHandle depth);
     void SetGaussianDebugResources(uint32_t tileRangeBufferIndex, uint32_t tileCountX, uint32_t tileCountY);
     void SetOutput(GraphTextureHandle output);
@@ -46,6 +47,7 @@ private:
     GraphTextureHandle _gbufferMaterial{};
     GraphTextureHandle _gbufferDebug{};
     GraphTextureHandle _gbufferMotion{};
+    GraphTextureHandle _lightingDebug{};
     GraphTextureHandle _gbufferDepth{};
     GraphTextureHandle _output{};
     uint32_t _mode{ 0 };

@@ -14,8 +14,8 @@ layout(push_constant) uniform DeferredLightingPushConstants {
     uint materialImageIndex;
     uint depthImageIndex;
     uint outputImageIndex;
-    uint padding0;
-    uint padding1;
+    uint debugOutputImageIndex;
+    uint debugView;
     uint padding2;
     mat4 inverseViewProjection;
     mat4 viewProjection;
@@ -28,6 +28,10 @@ layout(push_constant) uniform DeferredLightingPushConstants {
 } pc;
 
 const float PI = 3.14159265359;
+const uint INVALID_IMAGE_INDEX = 0xffffffffu;
+const uint DEBUG_DIRECT_LIGHTING = 13u;
+const uint DEBUG_INDIRECT_LIGHTING = 14u;
+const uint DEBUG_REFLECTION = 15u;
 
 float DistributionGGX(vec3 N, vec3 H, float roughness)
 {
@@ -288,4 +292,15 @@ void main() {
     vec3 lit = ambientDiffuse + ambientSpecular + direct + emissive;
 
     imageStore(storageImages[nonuniformEXT(int(pc.outputImageIndex))], pixel, vec4(lit, 1.0));
+    if (pc.debugOutputImageIndex != INVALID_IMAGE_INDEX) {
+        vec3 debugValue = vec3(0.0);
+        if (pc.debugView == DEBUG_DIRECT_LIGHTING) {
+            debugValue = direct;
+        } else if (pc.debugView == DEBUG_INDIRECT_LIGHTING) {
+            debugValue = ambientDiffuse;
+        } else if (pc.debugView == DEBUG_REFLECTION) {
+            debugValue = ambientSpecular;
+        }
+        imageStore(storageImages[nonuniformEXT(int(pc.debugOutputImageIndex))], pixel, vec4(debugValue, 1.0));
+    }
 }

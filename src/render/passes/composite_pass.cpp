@@ -48,6 +48,7 @@ void CompositePass::SetGBufferInputs(
     GraphTextureHandle material,
     GraphTextureHandle debug,
     GraphTextureHandle motion,
+    GraphTextureHandle lightingDebug,
     GraphTextureHandle depth)
 {
     _gbufferAlbedo = albedo;
@@ -55,6 +56,7 @@ void CompositePass::SetGBufferInputs(
     _gbufferMaterial = material;
     _gbufferDebug = debug;
     _gbufferMotion = motion;
+    _lightingDebug = lightingDebug;
     _gbufferDepth = depth;
 }
 
@@ -169,6 +171,9 @@ void CompositePass::Setup(RenderGraphBuilder& builder)
     if (_gbufferMotion) {
         builder.Read(_gbufferMotion, ResourceUsage::StorageRead);
     }
+    if (_lightingDebug) {
+        builder.Read(_lightingDebug, ResourceUsage::StorageRead);
+    }
     if (_gbufferDepth) {
         builder.Read(_gbufferDepth, ResourceUsage::SampledRead);
     }
@@ -233,6 +238,10 @@ void CompositePass::Execute(const RenderGraphContext& context)
     if (_gbufferMotion) {
         const ImageHandle handle = context.GetTextureHandle(_gbufferMotion);
         pushConstants.imageIndices3.y = context.GetDevice().GetImageResource(handle).bindless.storageImage;
+    }
+    if (_lightingDebug) {
+        const ImageHandle handle = context.GetTextureHandle(_lightingDebug);
+        pushConstants.imageIndices3.z = context.GetDevice().GetImageResource(handle).bindless.storageImage;
     }
     if (_gbufferDepth) {
         const ImageHandle handle = context.GetTextureHandle(_gbufferDepth);

@@ -83,6 +83,8 @@ vec3 reconstructWorldPosition(ivec2 pixel, ivec2 size, float depth)
     return world.xyz / max(world.w, 0.0001);
 }
 
+vec3 applyDisplayTransform(vec3 color);
+
 float computeScreenSpaceAo(ivec2 pixel, ivec2 size, vec3 worldPosition, vec3 normal, float depth)
 {
     if (pc.ssaoParams.x < 0.5 || depth >= 0.99999 || !hasImage(pc.imageIndices2.w)) {
@@ -201,6 +203,10 @@ vec3 resolveDebugView(ivec2 pixel)
         if (!hasImage(pc.imageIndices3.y)) { return vec3(-1.0); }
         vec2 motion = loadStorage(pc.imageIndices3.y, pixel).xy;
         return vec3(clamp(motion * 24.0 + 0.5, vec2(0.0), vec2(1.0)), clamp(length(motion) * 48.0, 0.0, 1.0));
+    }
+    if (debugView == 13u || debugView == 14u || debugView == 15u) {
+        if (!hasImage(pc.imageIndices3.z)) { return vec3(-1.0); }
+        return applyDisplayTransform(loadStorage(pc.imageIndices3.z, pixel).rgb);
     }
     return vec3(-1.0);
 }

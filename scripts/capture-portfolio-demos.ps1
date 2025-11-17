@@ -69,6 +69,18 @@ $runs = @(
         Args = @("--scene", "assets\demo\DamagedHelmet.glb", "--mode", "raster", "--ssgi", "on", "--ssgi-radius", "1.8", "--ssgi-intensity", "0.45", "--ssgi-samples", "12")
     },
     @{
+        Name = "11b_raster_direct_lighting_aov"
+        Args = @("--scene", "assets\demo\DamagedHelmet.glb", "--mode", "raster", "--debug-view", "direct")
+    },
+    @{
+        Name = "11c_raster_indirect_lighting_aov"
+        Args = @("--scene", "assets\demo\DamagedHelmet.glb", "--mode", "raster", "--debug-view", "indirect", "--ssgi", "on", "--ssgi-radius", "1.8", "--ssgi-intensity", "0.45")
+    },
+    @{
+        Name = "11d_raster_reflection_aov"
+        Args = @("--scene", "assets\demo\DamagedHelmet.glb", "--mode", "raster", "--debug-view", "reflection", "--ssr", "on", "--ssr-distance", "24.0", "--ssr-intensity", "0.85")
+    },
+    @{
         Name = "12_pathtrace_indirect_aov"
         Args = @("--scene", "assets\demo\DamagedHelmet.glb", "--mode", "pathtrace", "--pt-debug", "indirect")
     },

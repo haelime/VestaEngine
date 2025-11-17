@@ -14,7 +14,7 @@ void PrintUsage()
         << "  --preset <recommended|performance|balanced|quality>\n"
         << "  --mode <composite|raster|deferred|gaussian|pathtrace>\n"
         << "  --compare <off|split|difference>\n"
-        << "  --debug-view <final|albedo|normal|world-position|depth|uv|material-id|object-id|roughness|metallic|emissive|ao|motion-vector>\n"
+        << "  --debug-view <final|albedo|normal|world-position|depth|uv|material-id|object-id|roughness|metallic|emissive|ao|motion-vector|direct|indirect|reflection>\n"
         << "  --pt-debug <final|albedo|normal|depth|direct|indirect|ray-count>\n"
         << "  --gaussian-debug <final|alpha|revealage|overdraw|depth|tile-occupancy|radius|contribution-count>\n"
         << "  --compare-split <0.05-0.95>\n"
@@ -124,6 +124,9 @@ std::optional<vesta::render::RendererDebugView> ParseDebugView(std::string_view 
     if (value == "emissive") { return vesta::render::RendererDebugView::Emissive; }
     if (value == "ao" || value == "ambient-occlusion" || value == "ssao") { return vesta::render::RendererDebugView::AmbientOcclusion; }
     if (value == "motion-vector" || value == "motion-vectors" || value == "velocity") { return vesta::render::RendererDebugView::MotionVector; }
+    if (value == "direct" || value == "direct-lighting") { return vesta::render::RendererDebugView::DirectLighting; }
+    if (value == "indirect" || value == "indirect-lighting" || value == "gi") { return vesta::render::RendererDebugView::IndirectLighting; }
+    if (value == "reflection" || value == "reflections" || value == "ssr") { return vesta::render::RendererDebugView::Reflection; }
     return std::nullopt;
 }
 

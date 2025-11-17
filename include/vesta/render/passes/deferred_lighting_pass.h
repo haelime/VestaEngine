@@ -13,6 +13,7 @@ class DeferredLightingPass final : public IRenderPass {
 public:
     void SetInputs(GraphTextureHandle albedo, GraphTextureHandle normal, GraphTextureHandle material, GraphTextureHandle depth);
     void SetOutput(GraphTextureHandle output);
+    void SetDebugOutput(GraphTextureHandle output, uint32_t debugView);
     void SetCamera(const Camera* camera);
     void SetLight(glm::vec4 lightDirectionAndIntensity);
     void SetEnvironment(glm::vec4 environmentParams);
@@ -32,6 +33,8 @@ private:
     GraphTextureHandle _material{};
     GraphTextureHandle _depth{};
     GraphTextureHandle _output{};
+    GraphTextureHandle _debugOutput{};
+    uint32_t _debugView{ 0 };
     const Camera* _camera{ nullptr };
     glm::vec4 _lightDirectionAndIntensity{ -0.4f, -1.0f, -0.3f, 2.0f };
     glm::vec4 _environmentParams{ 1.0f, 0.0f, 0.0f, 0.0f };
