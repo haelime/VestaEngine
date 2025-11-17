@@ -1495,6 +1495,17 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
     const auto& scene = _renderer.GetScene();
     const auto extent = _renderer.GetRenderDevice().GetSwapchainExtent();
     const auto& camera = _renderer.GetCamera();
+    const auto& graphTimings = _renderer.GetLastRenderGraphTimings();
+    const std::vector<vesta::render::RenderPassDebugInfo> passDebugInfo = _renderer.GetRenderPassDebugInfo();
+    const auto& device = _renderer.GetRenderDevice();
+    const uint64_t sceneBufferBytes = BufferSizeBytes(device, scene.GetVertexBuffer())
+        + BufferSizeBytes(device, scene.GetIndexBuffer())
+        + BufferSizeBytes(device, scene.GetMaterialBuffer())
+        + BufferSizeBytes(device, scene.GetTriangleBuffer())
+        + BufferSizeBytes(device, scene.GetEmissiveTriangleBuffer())
+        + BufferSizeBytes(device, scene.GetGaussianBuffer());
+    const uint64_t accelerationBytes = BufferSizeBytes(device, scene.GetBottomLevelBuffer()) + BufferSizeBytes(device, scene.GetTopLevelBuffer());
+    const float totalGpuMs = TotalGpuMs(graphTimings);
 
     std::ofstream output(metadataPath, std::ios::trunc);
     if (!output.is_open()) {
@@ -1552,7 +1563,68 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "  \"focal_distance\": " << settings.cameraFocalDistance << ",\n"
            << "  \"camera_fov_degrees\": " << camera.GetFovDegrees() << ",\n"
            << "  \"camera_near\": " << camera.GetNearPlane() << ",\n"
-           << "  \"camera_far\": " << camera.GetFarPlane() << "\n"
+           << "  \"camera_far\": " << camera.GetFarPlane() << ",\n"
+           << "  \"frame_gpu_ms\": " << totalGpuMs << ",\n"
+           << "  \"resource_summary\": {\n"
+           << "    \"vertices\": " << scene.GetVertices().size() << ",\n"
+           << "    \"triangles\": " << scene.GetTriangles().size() << ",\n"
+           << "    \"surfaces\": " << scene.GetSurfaces().size() << ",\n"
+           << "    \"textures_total\": " << scene.GetTextures().size() << ",\n"
+           << "    \"textures_resident\": " << scene.GetResidentTextureCount() << ",\n"
+           << "    \"gaussians\": " << scene.GetGaussianCount() << ",\n"
+           << "    \"scene_buffer_bytes\": " << sceneBufferBytes << ",\n"
+           << "    \"acceleration_structure_bytes\": " << accelerationBytes << ",\n"
+           << "    \"tlas_resident\": " << (scene.HasRayTracingScene() ? "true" : "false") << "\n"
+           << "  },\n"
+           << "  \"render_passes\": [\n";
+    for (size_t passIndex = 0; passIndex < passDebugInfo.size(); ++passIndex) {
+        const auto& pass = passDebugInfo[passIndex];
+        output << "    {\n"
+               << "      \"id\": \"" << JsonEscape(pass.id) << "\",\n"
+               << "      \"name\": \"" << JsonEscape(pass.name) << "\",\n"
+               << "      \"order\": " << pass.order << ",\n"
+               << "      \"enabled\": " << (pass.enabled ? "true" : "false") << ",\n"
+               << "      \"draw_count\": " << pass.drawCount << ",\n"
+               << "      \"dispatch_count\": " << pass.dispatchCount << ",\n"
+               << "      \"triangle_count\": " << pass.triangleCount << ",\n"
+               << "      \"instance_count\": " << pass.instanceCount << ",\n"
+               << "      \"ray_count\": " << pass.rayCount << ",\n"
+               << "      \"splat_count\": " << pass.splatCount << "\n"
+               << "    }" << (passIndex + 1 < passDebugInfo.size() ? "," : "") << "\n";
+    }
+    output << "  ],\n"
+           << "  \"render_graph_timings\": [\n";
+    for (size_t timingIndex = 0; timingIndex < graphTimings.size(); ++timingIndex) {
+        const auto& timing = graphTimings[timingIndex];
+        output << "    {\n"
+               << "      \"name\": \"" << JsonEscape(timing.name) << "\",\n"
+               << "      \"cpu_ms\": " << timing.cpuMs << ",\n"
+               << "      \"gpu_ms\": " << timing.gpuMs << ",\n"
+               << "      \"gpu_timing_valid\": " << (timing.gpuTimingValid ? "true" : "false") << ",\n"
+               << "      \"read_count\": " << timing.readCount << ",\n"
+               << "      \"write_count\": " << timing.writeCount << ",\n"
+               << "      \"barrier_count\": " << timing.barrierCount << ",\n"
+               << "      \"inputs\": [";
+        for (size_t inputIndex = 0; inputIndex < timing.inputs.size(); ++inputIndex) {
+            const auto& access = timing.inputs[inputIndex];
+            output << (inputIndex == 0 ? "" : ", ")
+                   << "{\"name\":\"" << JsonEscape(access.name) << "\",\"usage\":\"" << ResourceUsageLabel(access.usage)
+                   << "\",\"format\":\"" << VkFormatLabel(access.format) << "\",\"resolution\":\""
+                   << access.extent.width << "x" << access.extent.height << "\"}";
+        }
+        output << "],\n"
+               << "      \"outputs\": [";
+        for (size_t outputIndex = 0; outputIndex < timing.outputs.size(); ++outputIndex) {
+            const auto& access = timing.outputs[outputIndex];
+            output << (outputIndex == 0 ? "" : ", ")
+                   << "{\"name\":\"" << JsonEscape(access.name) << "\",\"usage\":\"" << ResourceUsageLabel(access.usage)
+                   << "\",\"format\":\"" << VkFormatLabel(access.format) << "\",\"resolution\":\""
+                   << access.extent.width << "x" << access.extent.height << "\"}";
+        }
+        output << "]\n"
+               << "    }" << (timingIndex + 1 < graphTimings.size() ? "," : "") << "\n";
+    }
+    output << "  ]\n"
            << "}\n";
     log_startup_event("Capture metadata written: " + metadataPath.string());
     return true;
