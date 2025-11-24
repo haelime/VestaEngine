@@ -84,6 +84,7 @@ vec3 reconstructWorldPosition(ivec2 pixel, ivec2 size, float depth)
 }
 
 vec3 applyDisplayTransform(vec3 color);
+vec3 heatmap(float value);
 
 float computeScreenSpaceAo(ivec2 pixel, ivec2 size, vec3 worldPosition, vec3 normal, float depth)
 {
@@ -207,6 +208,28 @@ vec3 resolveDebugView(ivec2 pixel)
     if (debugView == 13u || debugView == 14u || debugView == 15u) {
         if (!hasImage(pc.imageIndices3.z)) { return vec3(-1.0); }
         return applyDisplayTransform(loadStorage(pc.imageIndices3.z, pixel).rgb);
+    }
+    if (debugView == 16u) {
+        if (!hasImage(pc.imageIndices0.y)) { return vec3(-1.0); }
+        ivec2 baseSize = ivec2(1);
+        if (hasImage(pc.imageIndices0.x)) {
+            baseSize = imageSize(storageImages[nonuniformEXT(int(pc.imageIndices0.x))]);
+        }
+        vec2 uv = (vec2(pixel) + 0.5) / vec2(baseSize);
+        ivec2 pathTraceSize = imageSize(storageImages[nonuniformEXT(int(pc.imageIndices0.y))]);
+        ivec2 pathTracePixel = clamp(ivec2(uv * vec2(pathTraceSize)), ivec2(0), pathTraceSize - ivec2(1));
+        return applyDisplayTransform(imageLoad(storageImages[nonuniformEXT(int(pc.imageIndices0.y))], pathTracePixel).rgb);
+    }
+    if (debugView == 17u) {
+        if (!hasImage(pc.imageIndices0.x) || !hasImage(pc.imageIndices0.y)) { return vec3(-1.0); }
+        ivec2 deferredSize = imageSize(storageImages[nonuniformEXT(int(pc.imageIndices0.x))]);
+        ivec2 deferredPixel = clamp(pixel, ivec2(0), deferredSize - ivec2(1));
+        vec2 uv = (vec2(deferredPixel) + 0.5) / vec2(deferredSize);
+        ivec2 pathTraceSize = imageSize(storageImages[nonuniformEXT(int(pc.imageIndices0.y))]);
+        ivec2 pathTracePixel = clamp(ivec2(uv * vec2(pathTraceSize)), ivec2(0), pathTraceSize - ivec2(1));
+        vec3 rasterDisplay = applyDisplayTransform(imageLoad(storageImages[nonuniformEXT(int(pc.imageIndices0.x))], deferredPixel).rgb);
+        vec3 pathDisplay = applyDisplayTransform(imageLoad(storageImages[nonuniformEXT(int(pc.imageIndices0.y))], pathTracePixel).rgb);
+        return heatmap(length(rasterDisplay - pathDisplay) * pc.compareParams.z);
     }
     return vec3(-1.0);
 }

@@ -60,6 +60,8 @@ enum class RendererDebugView : uint32_t {
     DirectLighting = 13,
     IndirectLighting = 14,
     Reflection = 15,
+    DenoisedResult = 16,
+    DifferenceFromReference = 17,
 };
 
 enum class GaussianDebugView : uint32_t {

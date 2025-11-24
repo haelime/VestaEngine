@@ -197,6 +197,10 @@ const char* RendererDebugViewLabel(vesta::render::RendererDebugView view)
         return "Indirect Lighting";
     case vesta::render::RendererDebugView::Reflection:
         return "Reflection";
+    case vesta::render::RendererDebugView::DenoisedResult:
+        return "Denoised Result";
+    case vesta::render::RendererDebugView::DifferenceFromReference:
+        return "Difference from Reference";
     case vesta::render::RendererDebugView::FinalColor:
     default:
         return "Final Color";
@@ -2434,6 +2438,8 @@ void VestaEngine::build_debug_ui()
                 "Direct Lighting",
                 "Indirect Lighting",
                 "Reflection",
+                "Denoised Result",
+                "Difference from Reference",
             };
             int commonView = static_cast<int>(settings.debugView);
             if (ImGui::Combo("Debug View", &commonView, commonViews, IM_ARRAYSIZE(commonViews))) {

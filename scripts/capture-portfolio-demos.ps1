@@ -91,6 +91,14 @@ $runs = @(
     @{
         Name = "14_pathtrace_ray_count_heatmap"
         Args = @("--scene", "assets\demo\DamagedHelmet.glb", "--mode", "pathtrace", "--pt-backend", "auto", "--pt-debug", "ray-count", "--pt-nee", "on", "--pt-rr", "on")
+    },
+    @{
+        Name = "15_pathtrace_denoised_debug"
+        Args = @("--scene", "assets\demo\DamagedHelmet.glb", "--mode", "composite", "--debug-view", "denoised", "--pt-backend", "auto")
+    },
+    @{
+        Name = "16_raster_path_difference_debug"
+        Args = @("--scene", "assets\demo\DamagedHelmet.glb", "--mode", "composite", "--debug-view", "difference-reference", "--compare-scale", "6.0", "--pt-backend", "auto")
     }
 )
 
