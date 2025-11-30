@@ -201,6 +201,10 @@ const char* RendererDebugViewLabel(vesta::render::RendererDebugView view)
         return "Denoised Result";
     case vesta::render::RendererDebugView::DifferenceFromReference:
         return "Difference from Reference";
+    case vesta::render::RendererDebugView::Wireframe:
+        return "Wireframe";
+    case vesta::render::RendererDebugView::MipLevel:
+        return "Mip Level";
     case vesta::render::RendererDebugView::FinalColor:
     default:
         return "Final Color";
@@ -2440,6 +2444,8 @@ void VestaEngine::build_debug_ui()
                 "Reflection",
                 "Denoised Result",
                 "Difference from Reference",
+                "Wireframe",
+                "Mip Level",
             };
             int commonView = static_cast<int>(settings.debugView);
             if (ImGui::Combo("Debug View", &commonView, commonViews, IM_ARRAYSIZE(commonViews))) {

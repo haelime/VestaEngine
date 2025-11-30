@@ -14,7 +14,7 @@ void PrintUsage()
         << "  --preset <recommended|performance|balanced|quality>\n"
         << "  --mode <composite|raster|deferred|gaussian|pathtrace>\n"
         << "  --compare <off|split|difference>\n"
-        << "  --debug-view <final|albedo|normal|world-position|depth|uv|material-id|object-id|roughness|metallic|emissive|ao|motion-vector|direct|indirect|reflection|denoised|difference-reference>\n"
+        << "  --debug-view <final|albedo|normal|world-position|depth|uv|material-id|object-id|roughness|metallic|emissive|ao|motion-vector|direct|indirect|reflection|denoised|difference-reference|wireframe|mip-level>\n"
         << "  --pt-debug <final|albedo|normal|depth|direct|indirect|ray-count>\n"
         << "  --gaussian-debug <final|alpha|revealage|overdraw|depth|tile-occupancy|radius|contribution-count>\n"
         << "  --compare-split <0.05-0.95>\n"
@@ -131,6 +131,8 @@ std::optional<vesta::render::RendererDebugView> ParseDebugView(std::string_view 
     if (value == "difference-reference" || value == "difference-from-reference" || value == "reference-difference" || value == "diff-reference") {
         return vesta::render::RendererDebugView::DifferenceFromReference;
     }
+    if (value == "wireframe" || value == "edge" || value == "edge-overlay") { return vesta::render::RendererDebugView::Wireframe; }
+    if (value == "mip-level" || value == "miplevel" || value == "mip") { return vesta::render::RendererDebugView::MipLevel; }
     return std::nullopt;
 }
 

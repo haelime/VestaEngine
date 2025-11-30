@@ -62,6 +62,8 @@ enum class RendererDebugView : uint32_t {
     Reflection = 15,
     DenoisedResult = 16,
     DifferenceFromReference = 17,
+    Wireframe = 18,
+    MipLevel = 19,
 };
 
 enum class GaussianDebugView : uint32_t {

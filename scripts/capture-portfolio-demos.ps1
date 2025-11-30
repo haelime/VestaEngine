@@ -99,6 +99,14 @@ $runs = @(
     @{
         Name = "16_raster_path_difference_debug"
         Args = @("--scene", "assets\demo\DamagedHelmet.glb", "--mode", "composite", "--debug-view", "difference-reference", "--compare-scale", "6.0", "--pt-backend", "auto")
+    },
+    @{
+        Name = "17_raster_wireframe_debug"
+        Args = @("--scene", "assets\demo\DamagedHelmet.glb", "--mode", "raster", "--debug-view", "wireframe")
+    },
+    @{
+        Name = "18_raster_mip_level_debug"
+        Args = @("--scene", "assets\demo\DamagedHelmet.glb", "--mode", "raster", "--debug-view", "mip-level")
     }
 )
 

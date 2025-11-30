@@ -132,6 +132,34 @@ float computeScreenSpaceAo(ivec2 pixel, ivec2 size, vec3 worldPosition, vec3 nor
     return clamp(1.0 - clamp(occlusion / weightSum, 0.0, 1.0) * pc.ssaoParams.z, 0.0, 1.0);
 }
 
+float resolveGBufferEdgeMask(ivec2 pixel)
+{
+    if (!hasImage(pc.imageIndices2.y) || !hasImage(pc.imageIndices2.w) || !hasImage(pc.imageIndices3.x)) {
+        return -1.0;
+    }
+
+    ivec2 size = textureSize(sampledImages[nonuniformEXT(int(pc.imageIndices2.w))], 0);
+    ivec2 centerPixel = clamp(pixel, ivec2(0), size - ivec2(1));
+    float centerDepth = texelFetch(sampledImages[nonuniformEXT(int(pc.imageIndices2.w))], centerPixel, 0).r;
+    vec3 centerNormal = normalize(loadStorage(pc.imageIndices2.y, centerPixel).xyz * 2.0 - 1.0);
+    vec2 centerIds = loadStorage(pc.imageIndices3.x, centerPixel).ba;
+
+    const ivec2 offsets[4] = ivec2[](ivec2(1, 0), ivec2(-1, 0), ivec2(0, 1), ivec2(0, -1));
+    float edge = 0.0;
+    for (int offsetIndex = 0; offsetIndex < 4; ++offsetIndex) {
+        ivec2 samplePixel = clamp(centerPixel + offsets[offsetIndex], ivec2(0), size - ivec2(1));
+        float sampleDepth = texelFetch(sampledImages[nonuniformEXT(int(pc.imageIndices2.w))], samplePixel, 0).r;
+        vec3 sampleNormal = normalize(loadStorage(pc.imageIndices2.y, samplePixel).xyz * 2.0 - 1.0);
+        vec2 sampleIds = loadStorage(pc.imageIndices3.x, samplePixel).ba;
+
+        float depthEdge = abs(centerDepth - sampleDepth) * 160.0;
+        float normalEdge = (1.0 - clamp(dot(centerNormal, sampleNormal), 0.0, 1.0)) * 3.5;
+        float idEdge = any(greaterThan(abs(centerIds - sampleIds), vec2(0.001))) ? 1.0 : 0.0;
+        edge = max(edge, max(max(depthEdge, normalEdge), idEdge));
+    }
+    return smoothstep(0.035, 0.22, edge);
+}
+
 vec3 resolveDebugView(ivec2 pixel)
 {
     uint debugView = pc.imageIndices1.y;
@@ -230,6 +258,20 @@ vec3 resolveDebugView(ivec2 pixel)
         vec3 rasterDisplay = applyDisplayTransform(imageLoad(storageImages[nonuniformEXT(int(pc.imageIndices0.x))], deferredPixel).rgb);
         vec3 pathDisplay = applyDisplayTransform(imageLoad(storageImages[nonuniformEXT(int(pc.imageIndices0.y))], pathTracePixel).rgb);
         return heatmap(length(rasterDisplay - pathDisplay) * pc.compareParams.z);
+    }
+    if (debugView == 18u) {
+        float edge = resolveGBufferEdgeMask(pixel);
+        if (edge < 0.0) { return vec3(-1.0); }
+        return mix(vec3(0.015), vec3(1.0), edge);
+    }
+    if (debugView == 19u) {
+        if (!hasImage(pc.imageIndices3.x)) { return vec3(-1.0); }
+        vec2 uv = loadStorage(pc.imageIndices3.x, pixel).rg;
+        vec2 dx = dFdx(uv);
+        vec2 dy = dFdy(uv);
+        float footprint = max(length(dx), length(dy));
+        float estimatedMip = log2(max(footprint * 2048.0, 1.0));
+        return heatmap(clamp(estimatedMip / 10.0, 0.0, 1.0));
     }
     return vec3(-1.0);
 }
