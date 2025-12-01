@@ -413,6 +413,17 @@ uint64_t TextureAssetBytes(const vesta::scene::SceneTextureAsset& texture)
     return static_cast<uint64_t>(texture.width) * texture.height * 4ull;
 }
 
+uint32_t FullMipCount(uint32_t width, uint32_t height)
+{
+    uint32_t levels = 1;
+    uint32_t size = std::max(width, height);
+    while (size > 1) {
+        size >>= 1u;
+        ++levels;
+    }
+    return levels;
+}
+
 std::string BufferUsageLabel(VkBufferUsageFlags usage)
 {
     std::string label;
@@ -436,6 +447,58 @@ std::string BufferUsageLabel(VkBufferUsageFlags usage)
     append(VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR, "AS");
     append(VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR, "ASInput");
     return label.empty() ? "Unknown" : label;
+}
+
+std::string BufferGroupLabel(const char* name, VkBufferUsageFlags usage)
+{
+    if ((usage & VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_STORAGE_BIT_KHR) != 0) {
+        return "Acceleration";
+    }
+    if ((usage & VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT) != 0) {
+        return "Uniform";
+    }
+    if ((usage & VK_BUFFER_USAGE_VERTEX_BUFFER_BIT) != 0) {
+        return "Vertex";
+    }
+    if ((usage & VK_BUFFER_USAGE_INDEX_BUFFER_BIT) != 0) {
+        return "Index";
+    }
+    if (std::string_view(name).find("Readback") != std::string_view::npos ||
+        ((usage & VK_BUFFER_USAGE_TRANSFER_SRC_BIT) != 0 && (usage & VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) == 0)) {
+        return "Readback";
+    }
+    if ((usage & VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) != 0) {
+        return "Storage";
+    }
+    return "Other";
+}
+
+std::string TextureSemanticLabel(const vesta::scene::Scene& scene, size_t textureIndex)
+{
+    std::string label;
+    auto append = [&](std::string_view semantic) {
+        if (label.find(semantic) != std::string::npos) {
+            return;
+        }
+        if (!label.empty()) {
+            label += " | ";
+        }
+        label += semantic;
+    };
+    auto match = [&](uint32_t index, std::string_view semantic) {
+        if (index == textureIndex) {
+            append(semantic);
+        }
+    };
+
+    for (const auto& material : scene.GetMaterials()) {
+        match(material.textureIndices0.x, "BaseColor");
+        match(material.textureIndices0.y, "MetallicRoughness");
+        match(material.textureIndices0.z, "Normal");
+        match(material.textureIndices0.w, "Occlusion");
+        match(material.textureIndices1.x, "Emissive");
+    }
+    return label.empty() ? "Sampled" : label;
 }
 
 void DrawRenderGraphResourceList(const char* label,
@@ -521,11 +584,18 @@ void DrawBufferResourceRow(const char* name,
     ImGui::TableSetColumnIndex(4);
     if (handle) {
         const auto& buffer = device.GetBufferResource(handle);
-        ImGui::TextUnformatted(BufferUsageLabel(buffer.desc.usage).c_str());
+        ImGui::TextUnformatted(BufferGroupLabel(name, buffer.desc.usage).c_str());
     } else {
         ImGui::TextUnformatted("-");
     }
     ImGui::TableSetColumnIndex(5);
+    if (handle) {
+        const auto& buffer = device.GetBufferResource(handle);
+        ImGui::TextUnformatted(BufferUsageLabel(buffer.desc.usage).c_str());
+    } else {
+        ImGui::TextUnformatted("-");
+    }
+    ImGui::TableSetColumnIndex(6);
     if (handle) {
         const auto& buffer = device.GetBufferResource(handle);
         if (buffer.bindless.storageBuffer != vesta::render::kInvalidResourceIndex) {
@@ -536,7 +606,7 @@ void DrawBufferResourceRow(const char* name,
     } else {
         ImGui::TextUnformatted("-");
     }
-    ImGui::TableSetColumnIndex(6);
+    ImGui::TableSetColumnIndex(7);
     if (handle) {
         ImGui::Text("%u", handle.index);
     } else {
@@ -3302,9 +3372,17 @@ void VestaEngine::build_debug_ui()
                             ImGui::TableSetColumnIndex(3);
                             ImGui::TextUnformatted(texture.srgb ? "RGBA8_sRGB" : "RGBA8");
                             ImGui::TableSetColumnIndex(4);
-                            ImGui::TextUnformatted("1");
+                            uint32_t residentMipCount = 0;
+                            if (scene.HasResidentTexture(textureIndex)) {
+                                const vesta::render::ImageHandle image = scene.GetTextureImage(textureIndex);
+                                if (image) {
+                                    residentMipCount = device.GetImageResource(image).desc.mipLevels;
+                                }
+                            }
+                            ImGui::Text("%u/%u", std::max(residentMipCount, 1u), FullMipCount(texture.width, texture.height));
                             ImGui::TableSetColumnIndex(5);
-                            ImGui::TextUnformatted("Sampled");
+                            const std::string usage = TextureSemanticLabel(scene, textureIndex);
+                            ImGui::TextUnformatted(usage.c_str());
                             ImGui::TableSetColumnIndex(6);
                             ImGui::Text("%.2f MiB", MiB(TextureAssetBytes(texture)));
                             ImGui::TableSetColumnIndex(7);
@@ -3321,11 +3399,12 @@ void VestaEngine::build_debug_ui()
                     ImGui::EndTabItem();
                 }
                 if (ImGui::BeginTabItem("Buffers")) {
-                    if (ImGui::BeginTable("BufferTable", 7, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+                    if (ImGui::BeginTable("BufferTable", 8, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
                         ImGui::TableSetupColumn("Name");
                         ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 74.0f);
                         ImGui::TableSetupColumn("GPU", ImGuiTableColumnFlags_WidthFixed, 78.0f);
                         ImGui::TableSetupColumn("Logical", ImGuiTableColumnFlags_WidthFixed, 78.0f);
+                        ImGui::TableSetupColumn("Group", ImGuiTableColumnFlags_WidthFixed, 86.0f);
                         ImGui::TableSetupColumn("Usage");
                         ImGui::TableSetupColumn("Bindless", ImGuiTableColumnFlags_WidthFixed, 68.0f);
                         ImGui::TableSetupColumn("Handle", ImGuiTableColumnFlags_WidthFixed, 58.0f);
@@ -3364,11 +3443,12 @@ void VestaEngine::build_debug_ui()
                         rtSupport.rayQueryFeatures.rayQuery == VK_TRUE ? "Yes" : "No",
                         rtSupport.rayTracingPipelineFeatures.rayTracingPipeline == VK_TRUE ? "Yes" : "No");
                     ImGui::Separator();
-                    if (ImGui::BeginTable("AccelerationTable", 7, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+                    if (ImGui::BeginTable("AccelerationTable", 8, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
                         ImGui::TableSetupColumn("Name");
                         ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 74.0f);
                         ImGui::TableSetupColumn("GPU", ImGuiTableColumnFlags_WidthFixed, 78.0f);
                         ImGui::TableSetupColumn("Logical", ImGuiTableColumnFlags_WidthFixed, 78.0f);
+                        ImGui::TableSetupColumn("Group", ImGuiTableColumnFlags_WidthFixed, 86.0f);
                         ImGui::TableSetupColumn("Usage");
                         ImGui::TableSetupColumn("Bindless", ImGuiTableColumnFlags_WidthFixed, 68.0f);
                         ImGui::TableSetupColumn("Handle", ImGuiTableColumnFlags_WidthFixed, 58.0f);
