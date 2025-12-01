@@ -62,6 +62,14 @@ void DeferredLightingPass::SetLight(glm::vec4 lightDirectionAndIntensity)
     _lightDirectionAndIntensity = lightDirectionAndIntensity;
 }
 
+void DeferredLightingPass::SetPointLight(bool enabled, glm::vec4 positionAndIntensity)
+{
+    _pointLightPositionAndIntensity = glm::vec4(positionAndIntensity.x,
+        positionAndIntensity.y,
+        positionAndIntensity.z,
+        enabled ? std::max(positionAndIntensity.w, 0.0f) : 0.0f);
+}
+
 void DeferredLightingPass::SetEnvironment(glm::vec4 environmentParams)
 {
     _environmentParams = environmentParams;
@@ -140,6 +148,13 @@ void DeferredLightingPass::Execute(const RenderGraphContext& context)
         ? context.GetDevice().GetImageResource(context.GetTextureHandle(_debugOutput)).bindless.storageImage
         : kInvalidResourceIndex;
 
+    glm::vec4 cameraPosition = glm::vec4(_camera->GetPosition(), _pointLightPositionAndIntensity.w);
+    glm::vec4 environmentParams = _environmentParams;
+    environmentParams.z = _pointLightPositionAndIntensity.x;
+    environmentParams.w = _pointLightPositionAndIntensity.y;
+    glm::vec4 ssaoParams = _ssaoParams;
+    ssaoParams.w = _pointLightPositionAndIntensity.z;
+
     DeferredLightingPushConstants pushConstants{
         .albedoImageIndex = context.GetDevice().GetImageResource(albedoHandle).bindless.storageImage,
         .normalImageIndex = context.GetDevice().GetImageResource(normalHandle).bindless.storageImage,
@@ -150,10 +165,10 @@ void DeferredLightingPass::Execute(const RenderGraphContext& context)
         .debugView = _debugView,
         .inverseViewProjection = _camera->GetInverseViewProjection(),
         .viewProjection = _camera->GetViewProjection(),
-        .cameraPosition = glm::vec4(_camera->GetPosition(), 1.0f),
+        .cameraPosition = cameraPosition,
         .lightDirectionAndIntensity = _lightDirectionAndIntensity,
-        .environmentParams = _environmentParams,
-        .ssaoParams = _ssaoParams,
+        .environmentParams = environmentParams,
+        .ssaoParams = ssaoParams,
         .ssrParams = _ssrParams,
         .ssgiParams = _ssgiParams,
     };

@@ -451,6 +451,7 @@ void ConfigureDeferredLightingPass(Renderer& renderer, IRenderPass& pass, const 
     lightingPass.SetInputs(resources.gbufferAlbedo, resources.gbufferNormal, resources.gbufferMaterial, resources.sceneDepth);
     lightingPass.SetCamera(&renderer.GetCamera());
     lightingPass.SetLight(settings.lightDirectionAndIntensity);
+    lightingPass.SetPointLight(settings.enablePointLight, settings.pointLightPositionAndIntensity);
     lightingPass.SetEnvironment(glm::vec4(settings.environmentIntensity, glm::radians(settings.environmentRotationDegrees), 0.0f, 0.0f));
     lightingPass.SetAmbientOcclusion(settings.enableSsao, settings.ssaoRadius, settings.ssaoIntensity);
     lightingPass.SetScreenSpaceReflections(
@@ -780,6 +781,20 @@ void Renderer::Update(float deltaSeconds)
 
     _frameTimeMs = deltaSeconds * 1000.0f;
     _smoothedFrameTimeMs = _smoothedFrameTimeMs <= 0.0f ? _frameTimeMs : (_smoothedFrameTimeMs * 0.9f + _frameTimeMs * 0.1f);
+    if (_settings.animationPlaying) {
+        const float scaledDelta = deltaSeconds * std::clamp(_settings.animationTimeScale, 0.0f, 8.0f);
+        _settings.animationTimeSeconds += scaledDelta;
+        if (_settings.animateDirectionalLight) {
+            const float t = _settings.animationTimeSeconds * 0.65f;
+            const glm::vec3 direction = glm::normalize(glm::vec3(std::cos(t) * 0.65f, -1.0f, std::sin(t) * 0.65f));
+            _settings.lightDirectionAndIntensity = glm::vec4(direction, _settings.lightDirectionAndIntensity.w);
+            _pathTraceFrameIndex = 0;
+        }
+        if (_settings.animateEnvironment) {
+            _settings.environmentRotationDegrees = std::fmod(_settings.environmentRotationDegrees + scaledDelta * 12.0f, 360.0f);
+            _pathTraceFrameIndex = 0;
+        }
+    }
     if (_settings.frameTimingCapture || _settings.benchmarkOverlay) {
         _frameTimeHistoryMs[_frameTimeHistoryHead] = _frameTimeMs;
         _frameTimeHistoryHead = (_frameTimeHistoryHead + 1) % _frameTimeHistoryMs.size();

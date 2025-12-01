@@ -3123,6 +3123,9 @@ void VestaEngine::build_debug_ui()
                     ImGui::EndTabItem();
                 }
                 if (ImGui::BeginTabItem("Light")) {
+                    if (ImGui::Button("Select Directional")) {
+                        _renderer.SelectDirectionalLight();
+                    }
                     float lightDirection[3] = {
                         settings.lightDirectionAndIntensity.x,
                         settings.lightDirectionAndIntensity.y,
@@ -3139,6 +3142,17 @@ void VestaEngine::build_debug_ui()
                     if (ImGui::SliderFloat("Intensity", &settings.lightDirectionAndIntensity.w, 0.0f, 8.0f, "%.2f")) {
                         _renderer.ResetAccumulation();
                     }
+                    ImGui::SeparatorText("Point Light");
+                    if (ImGui::Checkbox("Point Enabled", &settings.enablePointLight)) {
+                        _renderer.ResetAccumulation();
+                    }
+                    if (ImGui::DragFloat3("Point Position", &settings.pointLightPositionAndIntensity.x, 0.05f, -100.0f, 100.0f, "%.2f")) {
+                        _renderer.ResetAccumulation();
+                    }
+                    if (ImGui::SliderFloat("Point Intensity", &settings.pointLightPositionAndIntensity.w, 0.0f, 64.0f, "%.2f")) {
+                        _renderer.ResetAccumulation();
+                    }
+                    ImGui::Text("Color %.2f %.2f %.2f  Radius %.1f", 1.0f, 0.82f, 0.55f, 8.0f);
                     ImGui::SeparatorText("Environment");
                     if (ImGui::SliderFloat("Env Intensity", &settings.environmentIntensity, 0.0f, 4.0f, "%.2f")) {
                         _renderer.ResetAccumulation();
@@ -3147,6 +3161,23 @@ void VestaEngine::build_debug_ui()
                         _renderer.ResetAccumulation();
                     }
                     ImGui::TextUnformatted("Source Procedural Sky");
+                    ImGui::EndTabItem();
+                }
+                if (ImGui::BeginTabItem("Animation")) {
+                    ImGui::Checkbox("Play", &settings.animationPlaying);
+                    ImGui::SameLine();
+                    if (ImGui::Button("Stop")) {
+                        settings.animationPlaying = false;
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Reset Time")) {
+                        settings.animationTimeSeconds = 0.0f;
+                        _renderer.ResetAccumulation();
+                    }
+                    ImGui::SliderFloat("Time Scale", &settings.animationTimeScale, 0.0f, 4.0f, "%.2fx");
+                    ImGui::InputFloat("Time", &settings.animationTimeSeconds, 0.1f, 1.0f, "%.2f s");
+                    ImGui::Checkbox("Animate Directional Light", &settings.animateDirectionalLight);
+                    ImGui::Checkbox("Animate Environment", &settings.animateEnvironment);
                     ImGui::EndTabItem();
                 }
                 if (ImGui::BeginTabItem("Materials")) {

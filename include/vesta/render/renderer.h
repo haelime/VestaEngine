@@ -237,7 +237,14 @@ struct RendererSettings {
     float ssgiRadius{ 1.4f };
     float ssgiIntensity{ 0.32f };
     uint32_t ssgiSampleCount{ 10 };
+    bool animationPlaying{ false };
+    float animationTimeScale{ 1.0f };
+    float animationTimeSeconds{ 0.0f };
+    bool animateDirectionalLight{ false };
+    bool animateEnvironment{ false };
     glm::vec4 lightDirectionAndIntensity{ -0.4f, -1.0f, -0.3f, 2.0f };
+    bool enablePointLight{ false };
+    glm::vec4 pointLightPositionAndIntensity{ 0.0f, 2.0f, 0.0f, 4.0f };
     float environmentIntensity{ 1.0f };
     float environmentRotationDegrees{ 0.0f };
     float cameraExposureEv{ 0.0f };
