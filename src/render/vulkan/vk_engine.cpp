@@ -16,6 +16,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cctype>
 #include <ctime>
 #include <fstream>
 #include <functional>
@@ -3513,21 +3514,30 @@ void VestaEngine::build_debug_ui()
                     bool perf{ false };
                     bool validation{ false };
                     bool resource{ false };
+                    bool shader{ false };
+                    bool device{ false };
                     bool error{ false };
                 };
 
+                std::string lower = line;
+                std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
+                    return static_cast<char>(std::tolower(c));
+                });
                 return Classification{
                     line.find("[PERF]") != std::string::npos,
                     line.find("[VALIDATION]") != std::string::npos,
                     line.find("[RESOURCE]") != std::string::npos,
-                    line.find("failed") != std::string::npos || line.find("[ERROR]") != std::string::npos,
+                    lower.find("shader") != std::string::npos || lower.find(".spv") != std::string::npos,
+                    lower.find("device lost") != std::string::npos || lower.find("vk_error_device_lost") != std::string::npos ||
+                        lower.find("crash") != std::string::npos,
+                    lower.find("failed") != std::string::npos || line.find("[ERROR]") != std::string::npos,
                 };
             };
             auto lineMatchesFilters = [&](const std::string& line) {
                 const auto cls = classifyLogLine(line);
-                const bool isInfo = !cls.perf && !cls.validation && !cls.resource && !cls.error;
+                const bool isInfo = !cls.perf && !cls.validation && !cls.resource && !cls.shader && !cls.device && !cls.error;
                 if ((isInfo && !_logShowInfo) || (cls.perf && !_logShowPerformance) || (cls.validation && !_logShowValidation) ||
-                    (cls.resource && !_logShowResources) || (cls.error && !_logShowErrors)) {
+                    (cls.resource && !_logShowResources) || ((cls.shader || cls.device || cls.error) && !_logShowErrors)) {
                     return false;
                 }
                 const std::string_view filter{ _logFilterText.data() };
@@ -3537,6 +3547,8 @@ void VestaEngine::build_debug_ui()
             int perfWarnings = 0;
             int validationWarnings = 0;
             int resourceWarnings = 0;
+            int shaderMessages = 0;
+            int deviceMessages = 0;
             int errors = 0;
             int visibleLines = 0;
             for (const std::string& line : _logConsoleLines) {
@@ -3544,15 +3556,19 @@ void VestaEngine::build_debug_ui()
                 perfWarnings += cls.perf ? 1 : 0;
                 validationWarnings += cls.validation ? 1 : 0;
                 resourceWarnings += cls.resource ? 1 : 0;
+                shaderMessages += cls.shader ? 1 : 0;
+                deviceMessages += cls.device ? 1 : 0;
                 errors += cls.error ? 1 : 0;
                 visibleLines += lineMatchesFilters(line) ? 1 : 0;
             }
-            ImGui::Text("Visible %d/%zu  Perf %d  Validation %d  Resource %d  Errors %d",
+            ImGui::Text("Visible %d/%zu  Perf %d  Validation %d  Resource %d  Shader %d  Device %d  Errors %d",
                 visibleLines,
                 _logConsoleLines.size(),
                 perfWarnings,
                 validationWarnings,
                 resourceWarnings,
+                shaderMessages,
+                deviceMessages,
                 errors);
             ImGui::Separator();
             ImGui::Checkbox("Info", &_logShowInfo);
@@ -3605,7 +3621,13 @@ void VestaEngine::build_debug_ui()
                     continue;
                 }
                 const auto cls = classifyLogLine(line);
-                if (cls.perf) {
+                if (cls.device) {
+                    ImGui::TextColored(ImVec4(1.0f, 0.18f, 0.18f, 1.0f), "%s", line.c_str());
+                } else if (cls.shader && cls.error) {
+                    ImGui::TextColored(ImVec4(1.0f, 0.44f, 0.24f, 1.0f), "%s", line.c_str());
+                } else if (cls.shader) {
+                    ImGui::TextColored(ImVec4(0.72f, 0.58f, 1.0f, 1.0f), "%s", line.c_str());
+                } else if (cls.perf) {
                     ImGui::TextColored(ImVec4(1.0f, 0.78f, 0.28f, 1.0f), "%s", line.c_str());
                 } else if (cls.validation || cls.resource) {
                     ImGui::TextColored(ImVec4(0.45f, 0.74f, 1.0f, 1.0f), "%s", line.c_str());
