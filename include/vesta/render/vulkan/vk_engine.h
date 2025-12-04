@@ -53,7 +53,7 @@ struct EngineLaunchOptions {
     bool safeStartupMode{ true };
     bool deferRayTracingBuildUntilAfterFirstPresent{ true };
     bool enableUi{ true };
-    bool showDebugUi{ true };
+    bool showDebugUi{ false };
 };
 
 [[nodiscard]] inline vesta::render::RendererSettings ApplyStartupSafeRendererSettings(
@@ -87,15 +87,15 @@ public:
     struct SDL_Window* _window{ nullptr };
     struct ImGuiContext* _imguiContext{ nullptr };
     bool _imguiInitialized{ false };
-    bool _showDebugUi{ true };
+    bool _showDebugUi{ false };
     bool _showDetailedStats{ false };
-    bool _showFrameOverview{ true };
-    bool _showRenderGraphPanel{ true };
-    bool _showGpuProfilerPanel{ true };
-    bool _showDebugVisualizationPanel{ true };
-    bool _showSceneInspectorPanel{ true };
-    bool _showResourceInspectorPanel{ true };
-    bool _showLogConsolePanel{ true };
+    bool _showFrameOverview{ false };
+    bool _showRenderGraphPanel{ false };
+    bool _showGpuProfilerPanel{ false };
+    bool _showDebugVisualizationPanel{ false };
+    bool _showSceneInspectorPanel{ false };
+    bool _showResourceInspectorPanel{ false };
+    bool _showLogConsolePanel{ false };
     bool _logShowInfo{ true };
     bool _logShowPerformance{ true };
     bool _logShowValidation{ true };
