@@ -2419,7 +2419,11 @@ void VestaEngine::build_debug_ui()
             ImGui::Text("Triangles %zu", scene.GetTriangles().size());
             ImGui::Text("Estimated Ray Work %llu", static_cast<unsigned long long>(totalRayWork));
             ImGui::Text("Visible Surfaces %u / %zu", _renderer.GetVisibleSurfaceCount(), scene.GetSurfaces().size());
-            ImGui::Text("Gaussians %u visible/projection %u", scene.GetGaussianCount(), _renderer.GetOfficialGaussianProjectedCount());
+            const uint32_t totalGaussians = scene.GetGaussianCount();
+            const uint32_t projectedGaussians = _renderer.GetOfficialGaussianProjectedCount();
+            const uint32_t culledGaussians = projectedGaussians <= totalGaussians ? totalGaussians - projectedGaussians : 0u;
+            ImGui::Text("Gaussians %u projected / %u total", projectedGaussians, totalGaussians);
+            ImGui::Text("Culled Gaussians %u", culledGaussians);
             ImGui::Text("Splats rendered %u", _renderer.GetOfficialGaussianDuplicateCount());
             ImGui::Text("VRAM Dedicated %u MiB", device.GetDedicatedVideoMemoryMiB());
             if (ImGui::BeginTable("GpuPassTiming", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
@@ -2656,7 +2660,12 @@ void VestaEngine::build_debug_ui()
             ImGui::Text("Gaussian AA %s", settings.gaussianAntialiasing ? "On" : "Off");
             ImGui::Text("Gaussian Fast Culling %s", settings.gaussianFastCulling ? "On" : "Off");
             if (scene.HasTrainedGaussians()) {
-                ImGui::Text("Projected %u", _renderer.GetOfficialGaussianProjectedCount());
+                const uint32_t totalGaussians = scene.GetGaussianCount();
+                const uint32_t projectedGaussians = _renderer.GetOfficialGaussianProjectedCount();
+                const uint32_t culledGaussians = projectedGaussians <= totalGaussians ? totalGaussians - projectedGaussians : 0u;
+                const float cullRatio = totalGaussians > 0u ? static_cast<float>(culledGaussians) / static_cast<float>(totalGaussians) : 0.0f;
+                ImGui::Text("Projected %u / %u", projectedGaussians, totalGaussians);
+                ImGui::Text("Culled %u (%.1f%%)", culledGaussians, cullRatio * 100.0f);
                 ImGui::Text("Duplicates %u", _renderer.GetOfficialGaussianDuplicateCount());
                 ImGui::Text("Padded Duplicates %u", _renderer.GetOfficialGaussianPaddedDuplicateCount());
                 ImGui::Text("Tiles %u", _renderer.GetOfficialGaussianTileCount());
@@ -3492,11 +3501,26 @@ void VestaEngine::build_debug_ui()
                     ImGui::EndTabItem();
                 }
                 if (ImGui::BeginTabItem("Gaussian")) {
+                    const uint64_t gaussianSourceBytes =
+                        static_cast<uint64_t>(scene.GetGaussians().size()) * sizeof(vesta::scene::GaussianPrimitive);
+                    const uint64_t gaussianGpuBytes = BufferSizeBytes(device, scene.GetGaussianBuffer());
+                    const uint32_t totalGaussians = scene.GetGaussianCount();
+                    const uint32_t projectedGaussians = _renderer.GetOfficialGaussianProjectedCount();
+                    const uint32_t culledGaussians = projectedGaussians <= totalGaussians ? totalGaussians - projectedGaussians : 0u;
                     ImGui::Text("Position/Covariance/SH/Opacity buffer %s", scene.GetGaussianBuffer() ? "Resident" : "Missing");
-                    ImGui::Text("Sort Keys %u duplicates", _renderer.GetOfficialGaussianDuplicateCount());
-                    ImGui::Text("Tile/Bin Count %u", _renderer.GetOfficialGaussianTileCount());
-                    ImGui::Text("Memory Source %.2f MiB",
-                        static_cast<double>(scene.GetGaussians().size() * sizeof(vesta::scene::GaussianPrimitive)) / (1024.0 * 1024.0));
+                    ImGui::Text("Total %u  Projected %u  Culled %u", totalGaussians, projectedGaussians, culledGaussians);
+                    ImGui::Text("Sort Keys %u duplicates  Padded %u",
+                        _renderer.GetOfficialGaussianDuplicateCount(),
+                        _renderer.GetOfficialGaussianPaddedDuplicateCount());
+                    ImGui::Text("Tile/Bin Count %u  Avg Tiles %.2f",
+                        _renderer.GetOfficialGaussianTileCount(),
+                        _renderer.GetOfficialGaussianAverageTilesTouched());
+                    ImGui::Text("Memory Source %.2f MiB  GPU %.2f MiB", MiB(gaussianSourceBytes), MiB(gaussianGpuBytes));
+                    ImGui::Text("Stages %.3f preprocess  %.3f duplicate  %.3f sort  %.3f raster ms",
+                        _renderer.GetOfficialGaussianPreprocessMs(),
+                        _renderer.GetOfficialGaussianDuplicateMs(),
+                        _renderer.GetOfficialGaussianSortMs(),
+                        _renderer.GetOfficialGaussianRasterMs());
                     ImGui::EndTabItem();
                 }
                 ImGui::EndTabBar();
