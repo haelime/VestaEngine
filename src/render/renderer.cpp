@@ -26,6 +26,7 @@
 #include <vesta/render/passes/geometry_raster_pass.h>
 #include <vesta/render/passes/path_denoise_pass.h>
 #include <vesta/render/passes/path_tracer_pass.h>
+#include <vesta/render/passes/shadow_map_pass.h>
 #include <vesta/render/passes/temporal_aa_pass.h>
 #include <vesta/render/vulkan/vk_images.h>
 #include <vesta/render/vulkan/vk_initializers.h>
@@ -444,6 +445,14 @@ void ConfigureGeometryRasterPass(Renderer& renderer, IRenderPass& pass, const Re
     rasterPass.SetUseIndirectDraw(renderer.GetSettings().useIndirectDraw);
 }
 
+void ConfigureShadowMapPass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
+{
+    auto& shadowPass = static_cast<ShadowMapPass&>(pass);
+    shadowPass.SetOutput(resources.shadowMap);
+    shadowPass.SetScene(&renderer.GetScene());
+    shadowPass.SetLight(renderer.GetSettings().lightDirectionAndIntensity);
+}
+
 void ConfigureDeferredLightingPass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
 {
     auto& lightingPass = static_cast<DeferredLightingPass&>(pass);
@@ -571,6 +580,7 @@ void ConfigureCompositePass(Renderer& renderer, IRenderPass& pass, const Rendere
     const VkExtent2D extent = renderer.GetRenderDevice().GetSwapchainExtent();
     compositePass.SetGaussianDebugResources(
         gaussianTileRangeBufferIndex, (extent.width + 7u) / 8u, (extent.height + 7u) / 8u);
+    compositePass.SetShadowMap(resources.shadowMap);
     compositePass.SetOutput(resources.swapchainTarget);
     compositePass.SetMode(static_cast<uint32_t>(renderer.GetSettings().displayMode),
         renderer.GetSettings().gaussianMix,
@@ -1770,6 +1780,15 @@ void Renderer::InitializeDefaultPasses()
         .enabled = true,
     });
     RegisterPass(RenderPassRegistrationDesc{
+        .id = "shadow-map",
+        .pass = std::make_unique<ShadowMapPass>(),
+        .configure = [this](IRenderPass& pass, const RendererGraphResources& resources) {
+            ConfigureShadowMapPass(*this, pass, resources);
+        },
+        .order = 15,
+        .enabled = true,
+    });
+    RegisterPass(RenderPassRegistrationDesc{
         .id = "official-gaussian-raster",
         .pass = std::make_unique<OfficialGaussianRasterPass>(),
         .configure = [this](IRenderPass& pass, const RendererGraphResources& resources) {
@@ -2707,6 +2726,7 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
 
     RenderGraph graph;
     const bool useGeometryPass = NeedsGeometryPass(_settings);
+    const bool useShadowMapPass = useGeometryPass && _settings.enableShadowMap && _scene.HasRasterGeometry();
     const bool useDeferredPass = NeedsDeferredPass(_settings);
     const bool useGaussianPass = NeedsGaussianPass(_settings);
     const bool usePathTracePass = NeedsPathTracePass(_settings);
@@ -2738,6 +2758,10 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
     depthDesc.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     depthDesc.registerBindlessSampled = true;
 
+    ImageDesc shadowDesc = depthDesc;
+    shadowDesc.extent = VkExtent3D{ _settings.shadowMapSize, _settings.shadowMapSize, 1 };
+    shadowDesc.debugName = "ShadowMap";
+
     ImageDesc storageDesc{};
     storageDesc.extent = renderExtent;
     storageDesc.format = VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -2755,6 +2779,9 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
         resources.gbufferDebug = graph.CreateTexture("GBuffer.Debug", gbufferDesc);
         resources.gbufferMotion = graph.CreateTexture("GBuffer.Motion", gbufferDesc);
         resources.sceneDepth = graph.CreateTexture("SceneDepth", depthDesc);
+    }
+    if (useShadowMapPass) {
+        resources.shadowMap = graph.CreateTexture("ShadowMap", shadowDesc);
     }
     if (useDeferredPass) {
         resources.deferredLighting = graph.CreateTexture("DeferredLighting", storageDesc);
@@ -2782,6 +2809,9 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
     for (RegisteredPassEntry* entry : _passExecutionPlan) {
         const std::string_view id = entry->id;
         if (id == "geometry-raster" && !useGeometryPass) {
+            continue;
+        }
+        if (id == "shadow-map" && !useShadowMapPass) {
             continue;
         }
         if (id == "deferred-lighting" && !useDeferredPass) {

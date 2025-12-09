@@ -44,8 +44,9 @@ VestaEngine& VestaEngine::Get() { return *loadedEngine; }
 
 namespace {
 constexpr size_t kMaxRecentScenePaths = 5;
-constexpr std::array<std::string_view, 8> kBenchmarkPassNames{
+constexpr std::array<std::string_view, 9> kBenchmarkPassNames{
     "GeometryRasterPass",
+    "ShadowMapPass",
     "DeferredLightingPass",
     "GaussianSplatPass",
     "OfficialGaussianRasterPass",
@@ -206,6 +207,8 @@ const char* RendererDebugViewLabel(vesta::render::RendererDebugView view)
         return "Wireframe";
     case vesta::render::RendererDebugView::MipLevel:
         return "Mip Level";
+    case vesta::render::RendererDebugView::ShadowMap:
+        return "Shadow Map";
     case vesta::render::RendererDebugView::FinalColor:
     default:
         return "Final Color";
@@ -1428,7 +1431,7 @@ void VestaEngine::finish_benchmark()
                << "gaussian_projected,gaussian_duplicates,gaussian_padded_duplicates,gaussian_tiles,gaussian_avg_tiles_touched,gaussian_rebuilds,"
                << "gaussian_preprocess_ms,gaussian_scan_ms,gaussian_duplicate_ms,gaussian_sort_ms,gaussian_range_ms,"
                << "gaussian_raster_ms,gaussian_total_build_ms,"
-               << "geometry_pass_gpu_ms,deferred_pass_gpu_ms,legacy_gaussian_pass_gpu_ms,official_gaussian_pass_gpu_ms,"
+               << "geometry_pass_gpu_ms,shadow_pass_gpu_ms,deferred_pass_gpu_ms,legacy_gaussian_pass_gpu_ms,official_gaussian_pass_gpu_ms,"
                << "path_trace_pass_gpu_ms,path_denoise_pass_gpu_ms,temporal_aa_pass_gpu_ms,composite_pass_gpu_ms\n";
     }
 
@@ -1550,7 +1553,8 @@ void VestaEngine::finish_benchmark()
            << averagePassGpuMs(4) << ','
            << averagePassGpuMs(5) << ','
            << averagePassGpuMs(6) << ','
-           << averagePassGpuMs(7) << '\n';
+           << averagePassGpuMs(7) << ','
+           << averagePassGpuMs(8) << '\n';
 
     fmt::println("Benchmark written to {}", outputPath.string());
 }
@@ -2521,6 +2525,7 @@ void VestaEngine::build_debug_ui()
                 "Difference from Reference",
                 "Wireframe",
                 "Mip Level",
+                "Shadow Map",
             };
             int commonView = static_cast<int>(settings.debugView);
             if (ImGui::Combo("Debug View", &commonView, commonViews, IM_ARRAYSIZE(commonViews))) {
@@ -2916,6 +2921,15 @@ void VestaEngine::build_debug_ui()
             }
         }
         if (ImGui::Button("Reset PT Accumulation")) {
+            _renderer.ResetAccumulation();
+        }
+
+        if (ImGui::Checkbox("Shadow Map", &settings.enableShadowMap)) {
+            _renderer.ResetAccumulation();
+        }
+        int shadowMapSize = static_cast<int>(settings.shadowMapSize);
+        if (ImGui::SliderInt("Shadow Size", &shadowMapSize, 512, 4096)) {
+            settings.shadowMapSize = static_cast<uint32_t>(std::clamp(shadowMapSize, 512, 4096));
             _renderer.ResetAccumulation();
         }
 

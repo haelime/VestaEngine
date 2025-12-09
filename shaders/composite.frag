@@ -273,6 +273,18 @@ vec3 resolveDebugView(ivec2 pixel)
         float estimatedMip = log2(max(footprint * 2048.0, 1.0));
         return heatmap(clamp(estimatedMip / 10.0, 0.0, 1.0));
     }
+    if (debugView == 20u) {
+        if (!hasImage(pc.imageIndices3.w)) { return vec3(-1.0); }
+        ivec2 shadowSize = textureSize(sampledImages[nonuniformEXT(int(pc.imageIndices3.w))], 0);
+        ivec2 baseSize = ivec2(1);
+        if (hasImage(pc.imageIndices0.x)) {
+            baseSize = imageSize(storageImages[nonuniformEXT(int(pc.imageIndices0.x))]);
+        }
+        vec2 uv = (vec2(pixel) + 0.5) / vec2(baseSize);
+        ivec2 shadowPixel = clamp(ivec2(uv * vec2(shadowSize)), ivec2(0), shadowSize - ivec2(1));
+        float depth = texelFetch(sampledImages[nonuniformEXT(int(pc.imageIndices3.w))], shadowPixel, 0).r;
+        return vec3(1.0 - clamp(depth, 0.0, 1.0));
+    }
     return vec3(-1.0);
 }
 

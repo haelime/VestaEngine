@@ -67,6 +67,11 @@ void CompositePass::SetGaussianDebugResources(uint32_t tileRangeBufferIndex, uin
     _gaussianTileCountY = tileCountY;
 }
 
+void CompositePass::SetShadowMap(GraphTextureHandle shadowMap)
+{
+    _shadowMap = shadowMap;
+}
+
 void CompositePass::SetOutput(GraphTextureHandle output)
 {
     _output = output;
@@ -177,6 +182,9 @@ void CompositePass::Setup(RenderGraphBuilder& builder)
     if (_gbufferDepth) {
         builder.Read(_gbufferDepth, ResourceUsage::SampledRead);
     }
+    if (_shadowMap) {
+        builder.Read(_shadowMap, ResourceUsage::SampledRead);
+    }
     builder.Write(_output, ResourceUsage::ColorAttachmentWrite);
 }
 
@@ -246,6 +254,10 @@ void CompositePass::Execute(const RenderGraphContext& context)
     if (_gbufferDepth) {
         const ImageHandle handle = context.GetTextureHandle(_gbufferDepth);
         pushConstants.imageIndices2.w = context.GetDevice().GetImageResource(handle).bindless.sampledImage;
+    }
+    if (_shadowMap) {
+        const ImageHandle handle = context.GetTextureHandle(_shadowMap);
+        pushConstants.imageIndices3.w = context.GetDevice().GetImageResource(handle).bindless.sampledImage;
     }
 
     VkClearValue clearValue{};

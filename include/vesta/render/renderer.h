@@ -64,6 +64,7 @@ enum class RendererDebugView : uint32_t {
     DifferenceFromReference = 17,
     Wireframe = 18,
     MipLevel = 19,
+    ShadowMap = 20,
 };
 
 enum class GaussianDebugView : uint32_t {
@@ -237,6 +238,8 @@ struct RendererSettings {
     float ssgiRadius{ 1.4f };
     float ssgiIntensity{ 0.32f };
     uint32_t ssgiSampleCount{ 10 };
+    bool enableShadowMap{ true };
+    uint32_t shadowMapSize{ 2048 };
     bool animationPlaying{ false };
     float animationTimeScale{ 1.0f };
     float animationTimeSeconds{ 0.0f };
@@ -282,6 +285,7 @@ struct RendererGraphResources {
     GraphTextureHandle gbufferDebug{};
     GraphTextureHandle gbufferMotion{};
     GraphTextureHandle sceneDepth{};
+    GraphTextureHandle shadowMap{};
     GraphTextureHandle deferredLighting{};
     GraphTextureHandle deferredLightingDebug{};
     GraphTextureHandle temporalLighting{};
