@@ -111,6 +111,10 @@ $runs = @(
     @{
         Name = "19_raster_shadow_map_debug"
         Args = @("--scene", "assets\demo\DamagedHelmet.glb", "--mode", "raster", "--debug-view", "shadow-map")
+    },
+    @{
+        Name = "20_raster_overdraw_debug"
+        Args = @("--scene", "assets\demo\DamagedHelmet.glb", "--mode", "raster", "--debug-view", "overdraw")
     }
 )
 

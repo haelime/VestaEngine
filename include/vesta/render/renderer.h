@@ -65,6 +65,7 @@ enum class RendererDebugView : uint32_t {
     Wireframe = 18,
     MipLevel = 19,
     ShadowMap = 20,
+    Overdraw = 21,
 };
 
 enum class GaussianDebugView : uint32_t {
@@ -286,6 +287,7 @@ struct RendererGraphResources {
     GraphTextureHandle gbufferMotion{};
     GraphTextureHandle sceneDepth{};
     GraphTextureHandle shadowMap{};
+    GraphTextureHandle overdraw{};
     GraphTextureHandle deferredLighting{};
     GraphTextureHandle deferredLightingDebug{};
     GraphTextureHandle temporalLighting{};

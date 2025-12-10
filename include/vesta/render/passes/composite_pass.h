@@ -23,6 +23,7 @@ public:
         GraphTextureHandle depth);
     void SetGaussianDebugResources(uint32_t tileRangeBufferIndex, uint32_t tileCountX, uint32_t tileCountY);
     void SetShadowMap(GraphTextureHandle shadowMap);
+    void SetOverdraw(GraphTextureHandle overdraw);
     void SetOutput(GraphTextureHandle output);
     void SetMode(uint32_t mode, float gaussianMix, uint32_t debugView, uint32_t gaussianDebugView);
     void SetCompare(uint32_t compareMode, float splitPosition, float differenceScale);
@@ -51,6 +52,7 @@ private:
     GraphTextureHandle _lightingDebug{};
     GraphTextureHandle _gbufferDepth{};
     GraphTextureHandle _shadowMap{};
+    GraphTextureHandle _overdraw{};
     GraphTextureHandle _output{};
     uint32_t _mode{ 0 };
     uint32_t _debugView{ 0 };

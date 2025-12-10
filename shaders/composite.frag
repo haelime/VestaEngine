@@ -15,12 +15,12 @@ layout(push_constant) uniform CompositePushConstants {
     uvec4 imageIndices1;
     uvec4 imageIndices2;
     uvec4 imageIndices3;
+    uvec4 imageIndices4;
     uvec4 gaussianDebug;
     vec4 params;
     vec4 compareParams;
     vec4 ssaoParams;
     mat4 inverseViewProjection;
-    mat4 previousViewProjection;
 } pc;
 
 layout(location = 0) out vec4 outColor;
@@ -274,16 +274,21 @@ vec3 resolveDebugView(ivec2 pixel)
         return heatmap(clamp(estimatedMip / 10.0, 0.0, 1.0));
     }
     if (debugView == 20u) {
-        if (!hasImage(pc.imageIndices3.w)) { return vec3(-1.0); }
-        ivec2 shadowSize = textureSize(sampledImages[nonuniformEXT(int(pc.imageIndices3.w))], 0);
+        if (!hasImage(pc.imageIndices4.x)) { return vec3(-1.0); }
+        ivec2 shadowSize = textureSize(sampledImages[nonuniformEXT(int(pc.imageIndices4.x))], 0);
         ivec2 baseSize = ivec2(1);
         if (hasImage(pc.imageIndices0.x)) {
             baseSize = imageSize(storageImages[nonuniformEXT(int(pc.imageIndices0.x))]);
         }
         vec2 uv = (vec2(pixel) + 0.5) / vec2(baseSize);
         ivec2 shadowPixel = clamp(ivec2(uv * vec2(shadowSize)), ivec2(0), shadowSize - ivec2(1));
-        float depth = texelFetch(sampledImages[nonuniformEXT(int(pc.imageIndices3.w))], shadowPixel, 0).r;
+        float depth = texelFetch(sampledImages[nonuniformEXT(int(pc.imageIndices4.x))], shadowPixel, 0).r;
         return vec3(1.0 - clamp(depth, 0.0, 1.0));
+    }
+    if (debugView == 21u) {
+        if (!hasImage(pc.imageIndices4.y)) { return vec3(-1.0); }
+        vec3 overdrawValue = loadStorage(pc.imageIndices4.y, pixel).rgb;
+        return heatmap(clamp(overdrawValue.r, 0.0, 1.0));
     }
     return vec3(-1.0);
 }

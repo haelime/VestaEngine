@@ -23,6 +23,7 @@
 #include <vesta/render/passes/deferred_lighting_pass.h>
 #include <vesta/render/passes/gaussian_splat_pass.h>
 #include <vesta/render/passes/official_gaussian_raster_pass.h>
+#include <vesta/render/passes/overdraw_pass.h>
 #include <vesta/render/passes/geometry_raster_pass.h>
 #include <vesta/render/passes/path_denoise_pass.h>
 #include <vesta/render/passes/path_tracer_pass.h>
@@ -453,6 +454,14 @@ void ConfigureShadowMapPass(Renderer& renderer, IRenderPass& pass, const Rendere
     shadowPass.SetLight(renderer.GetSettings().lightDirectionAndIntensity);
 }
 
+void ConfigureOverdrawPass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
+{
+    auto& overdrawPass = static_cast<OverdrawPass&>(pass);
+    overdrawPass.SetOutput(resources.overdraw);
+    overdrawPass.SetScene(&renderer.GetScene());
+    overdrawPass.SetCamera(&renderer.GetCamera());
+}
+
 void ConfigureDeferredLightingPass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
 {
     auto& lightingPass = static_cast<DeferredLightingPass&>(pass);
@@ -581,6 +590,7 @@ void ConfigureCompositePass(Renderer& renderer, IRenderPass& pass, const Rendere
     compositePass.SetGaussianDebugResources(
         gaussianTileRangeBufferIndex, (extent.width + 7u) / 8u, (extent.height + 7u) / 8u);
     compositePass.SetShadowMap(resources.shadowMap);
+    compositePass.SetOverdraw(resources.overdraw);
     compositePass.SetOutput(resources.swapchainTarget);
     compositePass.SetMode(static_cast<uint32_t>(renderer.GetSettings().displayMode),
         renderer.GetSettings().gaussianMix,
@@ -1789,6 +1799,15 @@ void Renderer::InitializeDefaultPasses()
         .enabled = true,
     });
     RegisterPass(RenderPassRegistrationDesc{
+        .id = "overdraw",
+        .pass = std::make_unique<OverdrawPass>(),
+        .configure = [this](IRenderPass& pass, const RendererGraphResources& resources) {
+            ConfigureOverdrawPass(*this, pass, resources);
+        },
+        .order = 16,
+        .enabled = true,
+    });
+    RegisterPass(RenderPassRegistrationDesc{
         .id = "official-gaussian-raster",
         .pass = std::make_unique<OfficialGaussianRasterPass>(),
         .configure = [this](IRenderPass& pass, const RendererGraphResources& resources) {
@@ -2727,6 +2746,7 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
     RenderGraph graph;
     const bool useGeometryPass = NeedsGeometryPass(_settings);
     const bool useShadowMapPass = useGeometryPass && _settings.enableShadowMap && _scene.HasRasterGeometry();
+    const bool useOverdrawPass = useGeometryPass && _settings.debugView == RendererDebugView::Overdraw && _scene.HasRasterGeometry();
     const bool useDeferredPass = NeedsDeferredPass(_settings);
     const bool useGaussianPass = NeedsGaussianPass(_settings);
     const bool usePathTracePass = NeedsPathTracePass(_settings);
@@ -2783,6 +2803,9 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
     if (useShadowMapPass) {
         resources.shadowMap = graph.CreateTexture("ShadowMap", shadowDesc);
     }
+    if (useOverdrawPass) {
+        resources.overdraw = graph.CreateTexture("RasterOverdraw", storageDesc);
+    }
     if (useDeferredPass) {
         resources.deferredLighting = graph.CreateTexture("DeferredLighting", storageDesc);
         resources.deferredLightingDebug = graph.CreateTexture("DeferredLighting.DebugAOV", storageDesc);
@@ -2812,6 +2835,9 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
             continue;
         }
         if (id == "shadow-map" && !useShadowMapPass) {
+            continue;
+        }
+        if (id == "overdraw" && !useOverdrawPass) {
             continue;
         }
         if (id == "deferred-lighting" && !useDeferredPass) {

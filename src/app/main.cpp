@@ -14,7 +14,7 @@ void PrintUsage()
         << "  --preset <recommended|performance|balanced|quality>\n"
         << "  --mode <composite|raster|deferred|gaussian|pathtrace>\n"
         << "  --compare <off|split|difference>\n"
-        << "  --debug-view <final|albedo|normal|world-position|depth|uv|material-id|object-id|roughness|metallic|emissive|ao|motion-vector|direct|indirect|reflection|denoised|difference-reference|wireframe|mip-level|shadow-map>\n"
+        << "  --debug-view <final|albedo|normal|world-position|depth|uv|material-id|object-id|roughness|metallic|emissive|ao|motion-vector|direct|indirect|reflection|denoised|difference-reference|wireframe|mip-level|shadow-map|overdraw>\n"
         << "  --pt-debug <final|albedo|normal|depth|direct|indirect|ray-count>\n"
         << "  --gaussian-debug <final|alpha|revealage|overdraw|depth|tile-occupancy|radius|contribution-count>\n"
         << "  --compare-split <0.05-0.95>\n"
@@ -134,6 +134,7 @@ std::optional<vesta::render::RendererDebugView> ParseDebugView(std::string_view 
     if (value == "wireframe" || value == "edge" || value == "edge-overlay") { return vesta::render::RendererDebugView::Wireframe; }
     if (value == "mip-level" || value == "miplevel" || value == "mip") { return vesta::render::RendererDebugView::MipLevel; }
     if (value == "shadow-map" || value == "shadow" || value == "shadows") { return vesta::render::RendererDebugView::ShadowMap; }
+    if (value == "overdraw" || value == "raster-overdraw") { return vesta::render::RendererDebugView::Overdraw; }
     return std::nullopt;
 }
 

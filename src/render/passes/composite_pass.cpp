@@ -19,12 +19,12 @@ struct CompositePushConstants {
     glm::uvec4 imageIndices1{ 0u, 0u, 0u, 0u };
     glm::uvec4 imageIndices2{ kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex };
     glm::uvec4 imageIndices3{ kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex };
+    glm::uvec4 imageIndices4{ kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex };
     glm::uvec4 gaussianDebug{ kInvalidImageIndex, 0u, 0u, 8u };
     glm::vec4 params{ 0.25f, 0.0f, 0.0f, 0.0f };
     glm::vec4 compareParams{ 0.0f, 0.5f, 4.0f, 0.0f };
     glm::vec4 ssaoParams{ 1.0f, 0.75f, 1.35f, 0.0f };
     glm::mat4 inverseViewProjection{ 1.0f };
-    glm::mat4 previousViewProjection{ 1.0f };
 };
 } // namespace
 
@@ -70,6 +70,11 @@ void CompositePass::SetGaussianDebugResources(uint32_t tileRangeBufferIndex, uin
 void CompositePass::SetShadowMap(GraphTextureHandle shadowMap)
 {
     _shadowMap = shadowMap;
+}
+
+void CompositePass::SetOverdraw(GraphTextureHandle overdraw)
+{
+    _overdraw = overdraw;
 }
 
 void CompositePass::SetOutput(GraphTextureHandle output)
@@ -185,6 +190,9 @@ void CompositePass::Setup(RenderGraphBuilder& builder)
     if (_shadowMap) {
         builder.Read(_shadowMap, ResourceUsage::SampledRead);
     }
+    if (_overdraw) {
+        builder.Read(_overdraw, ResourceUsage::StorageRead);
+    }
     builder.Write(_output, ResourceUsage::ColorAttachmentWrite);
 }
 
@@ -199,12 +207,12 @@ void CompositePass::Execute(const RenderGraphContext& context)
         .imageIndices1 = glm::uvec4(_mode, _debugView, _gaussianDebugView, kInvalidImageIndex),
         .imageIndices2 = glm::uvec4(kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex),
         .imageIndices3 = glm::uvec4(kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex),
+        .imageIndices4 = glm::uvec4(kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex),
         .gaussianDebug = glm::uvec4(_gaussianTileRangeBufferIndex, _gaussianTileCountX, _gaussianTileCountY, 8u),
         .params = glm::vec4(_gaussianMix, _exposureEv, _nearPlane, _farPlane),
         .compareParams = glm::vec4(static_cast<float>(_compareMode), _compareSplitPosition, _compareDifferenceScale, 0.0f),
         .ssaoParams = _ssaoParams,
         .inverseViewProjection = _inverseViewProjection,
-        .previousViewProjection = _hasPreviousViewProjection ? _previousViewProjection : _viewProjection,
     };
 
     if (_deferredLighting) {
@@ -257,7 +265,11 @@ void CompositePass::Execute(const RenderGraphContext& context)
     }
     if (_shadowMap) {
         const ImageHandle handle = context.GetTextureHandle(_shadowMap);
-        pushConstants.imageIndices3.w = context.GetDevice().GetImageResource(handle).bindless.sampledImage;
+        pushConstants.imageIndices4.x = context.GetDevice().GetImageResource(handle).bindless.sampledImage;
+    }
+    if (_overdraw) {
+        const ImageHandle handle = context.GetTextureHandle(_overdraw);
+        pushConstants.imageIndices4.y = context.GetDevice().GetImageResource(handle).bindless.storageImage;
     }
 
     VkClearValue clearValue{};
@@ -302,9 +314,6 @@ void CompositePass::Execute(const RenderGraphContext& context)
     vkCmdDraw(commandBuffer, 3, 1, 0, 0);
 
     vkCmdEndRendering(commandBuffer);
-
-    _previousViewProjection = _viewProjection;
-    _hasPreviousViewProjection = true;
 }
 
 void CompositePass::Shutdown(RenderDevice& device)
