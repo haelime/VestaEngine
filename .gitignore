@@ -3,6 +3,7 @@
 /x64
 /.vs
 /assets/brickadia
+/assets/benchmark_scenes/
 *.vcxproj.user
 
 # CMake build trees
