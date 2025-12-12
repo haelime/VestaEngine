@@ -47,7 +47,13 @@ set_property(TARGET engine PROPERTY CXX_STANDARD 20)
 target_compile_definitions(engine PUBLIC GLM_FORCE_DEPTH_ZERO_TO_ONE)
 target_include_directories(engine PUBLIC "${PROJECT_SOURCE_DIR}/include")
 
+if(MSVC)
+  # Parallel compilation can contend on the shared engine PDB under Ninja.
+  target_compile_options(engine PRIVATE /FS)
+endif()
+
 target_link_libraries(engine PUBLIC vma Vulkan::Vulkan fmt::fmt SDL2::SDL2 vkbootstrap glm fastgltf::fastgltf)
+target_link_libraries(engine PUBLIC imgui)
 
 target_precompile_headers(engine PUBLIC <optional> <vector> <memory> <string> <vector> <unordered_map> <vulkan/vulkan.h>)
 
