@@ -254,6 +254,17 @@ const char* CompareModeLabel(vesta::render::CompareMode mode)
     }
 }
 
+const char* RasterPipelineModeLabel(vesta::render::RasterPipelineMode mode)
+{
+    switch (mode) {
+    case vesta::render::RasterPipelineMode::Forward:
+        return "Forward";
+    case vesta::render::RasterPipelineMode::Deferred:
+    default:
+        return "Deferred";
+    }
+}
+
 std::optional<size_t> BenchmarkPassIndex(std::string_view passName)
 {
     for (size_t index = 0; index < kBenchmarkPassNames.size(); ++index) {
@@ -1741,6 +1752,9 @@ void VestaEngine::init_imgui()
 
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+#if defined(IMGUI_HAS_DOCK)
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+#endif
     io.IniFilename = nullptr;
 
     ImGuiStyle& style = ImGui::GetStyle();
@@ -1864,8 +1878,39 @@ void VestaEngine::begin_imgui_frame(float deltaSeconds)
     ImGui_ImplVulkan_NewFrame();
     ImGui::NewFrame();
     build_main_menu_bar();
+    build_debug_dockspace();
     build_debug_ui();
     ImGui::Render();
+}
+
+void VestaEngine::build_debug_dockspace()
+{
+    if (!_imguiInitialized || !_showDebugUi) {
+        return;
+    }
+
+    ImGui::SetCurrentContext(_imguiContext);
+#if defined(IMGUI_HAS_DOCK)
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(viewport->WorkPos);
+    ImGui::SetNextWindowSize(viewport->WorkSize);
+    ImGui::SetNextWindowViewport(viewport->ID);
+
+    ImGuiWindowFlags windowFlags = ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar |
+        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus |
+        ImGuiWindowFlags_NoBackground;
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    if (ImGui::Begin("VestaEngine Debug DockSpace", nullptr, windowFlags)) {
+        const ImGuiID dockspaceId = ImGui::GetID("VestaEngineDebugDockSpace");
+        ImGui::DockSpace(dockspaceId, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(3);
+#endif
 }
 
 void VestaEngine::build_main_menu_bar()
@@ -2117,6 +2162,7 @@ void VestaEngine::build_main_menu_bar()
             ImGui::MenuItem("Render Graph", nullptr, &_showRenderGraphPanel);
             ImGui::MenuItem("GPU Profiler", nullptr, &_showGpuProfilerPanel);
             ImGui::MenuItem("Debug Visualization", nullptr, &_showDebugVisualizationPanel);
+            ImGui::MenuItem("Render Mode Control", nullptr, &_showRenderModeControlPanel);
             ImGui::MenuItem("Scene Inspector", nullptr, &_showSceneInspectorPanel);
             ImGui::MenuItem("Resource Inspector", nullptr, &_showResourceInspectorPanel);
             ImGui::MenuItem("Log Console", nullptr, &_showLogConsolePanel);
@@ -2578,6 +2624,8 @@ void VestaEngine::build_debug_ui()
         }
         ImGui::End();
     }
+
+    build_render_mode_control_panel();
 
     ImGui::SetNextWindowPos(ImVec2(18.0f, 18.0f), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(420.0f, 0.0f), ImGuiCond_FirstUseEver);
@@ -3687,6 +3735,312 @@ void VestaEngine::build_debug_ui()
         }
         ImGui::End();
     }
+}
+
+void VestaEngine::build_render_mode_control_panel()
+{
+    if (!_imguiInitialized || !_showDebugUi || !_showRenderModeControlPanel) {
+        return;
+    }
+
+    ImGui::SetNextWindowPos(ImVec2(852.0f, 18.0f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(520.0f, 430.0f), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("Render Mode Control", &_showRenderModeControlPanel, ImGuiWindowFlags_NoSavedSettings)) {
+        auto& settings = _renderer.GetSettings();
+        ImGui::Text("Mode %s  Compare %s  Raster %s",
+            DisplayModeLabel(settings.displayMode),
+            CompareModeLabel(settings.compareMode),
+            RasterPipelineModeLabel(settings.rasterPipelineMode));
+        ImGui::Text("Debug %s  PT %s  Gaussian %s",
+            RendererDebugViewLabel(settings.debugView),
+            PathTraceDebugViewLabel(settings.pathTraceDebugView),
+            GaussianDebugViewLabel(settings.gaussianDebugView));
+        ImGui::Separator();
+
+        if (ImGui::BeginTabBar("RenderModeControlTabs")) {
+            if (ImGui::BeginTabItem("Demos")) {
+                draw_killer_demo_panel();
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Rasterizer")) {
+                draw_rasterizer_debug_panel();
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Path Tracing")) {
+                draw_path_tracing_debug_panel();
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Gaussian")) {
+                draw_gaussian_splatting_debug_panel();
+                ImGui::EndTabItem();
+            }
+            ImGui::EndTabBar();
+        }
+    }
+    ImGui::End();
+}
+
+void VestaEngine::draw_killer_demo_panel()
+{
+    auto& settings = _renderer.GetSettings();
+
+    if (ImGui::Button("Demo 1: Raster / Path Split")) {
+        settings.displayMode = vesta::render::RendererDisplayMode::Composite;
+        settings.compareMode = vesta::render::CompareMode::RasterPathSplit;
+        settings.compareSplitPosition = 0.5f;
+        settings.enableRaster = true;
+        settings.enablePathTracing = true;
+        settings.enableGaussian = false;
+        settings.debugView = vesta::render::RendererDebugView::FinalColor;
+        settings.pathTraceDebugView = vesta::render::PathTraceDebugView::Final;
+        settings.hybridDepthCompositeDebug = false;
+        _showFrameOverview = true;
+        _showRenderGraphPanel = true;
+        _showGpuProfilerPanel = true;
+        _showDebugVisualizationPanel = true;
+        _renderer.ResetAccumulation();
+        log_startup_event("Killer demo 1 armed: raster/path split comparison");
+    }
+    ImGui::TextDisabled("Shows direct/indirect lighting and shadow quality differences through split-screen compare.");
+
+    if (ImGui::Button("Demo 2: Real-time GI")) {
+        settings.displayMode = vesta::render::RendererDisplayMode::DeferredLighting;
+        settings.compareMode = vesta::render::CompareMode::Off;
+        settings.enableRaster = true;
+        settings.enableGaussian = false;
+        settings.enablePathTracing = false;
+        settings.enableSsgi = true;
+        settings.ssgiIntensity = std::max(settings.ssgiIntensity, 0.55f);
+        settings.debugView = vesta::render::RendererDebugView::IndirectLighting;
+        settings.animateDirectionalLight = true;
+        settings.showGiProbeOverlay = true;
+        _showFrameOverview = true;
+        _showSceneInspectorPanel = true;
+        _showDebugVisualizationPanel = true;
+        _renderer.ResetAccumulation();
+        log_startup_event("Killer demo 2 armed: dynamic light GI response");
+    }
+    ImGui::TextDisabled("Enables SSGI, moving light, indirect-light AOV, and GI probe overlay state.");
+
+    if (ImGui::Button("Demo 3: Gaussian Deep Debug")) {
+        settings.displayMode = vesta::render::RendererDisplayMode::Gaussian;
+        settings.enableRaster = false;
+        settings.enableGaussian = true;
+        settings.enablePathTracing = false;
+        settings.gaussianDebugView = vesta::render::GaussianDebugView::TileOccupancy;
+        settings.gaussianShowTileGrid = true;
+        settings.gaussianShowSpatialBounds = true;
+        settings.gaussianShowCovarianceEllipsoids = true;
+        _showGpuProfilerPanel = true;
+        _showDebugVisualizationPanel = true;
+        _showResourceInspectorPanel = true;
+        _renderer.ResetAccumulation();
+        log_startup_event("Killer demo 3 armed: gaussian tile occupancy and spatial debug");
+    }
+    ImGui::TextDisabled("Focuses tile occupancy, splat buffers, covariance ellipsoid and spatial bounds controls.");
+
+    if (ImGui::Button("Demo 4: Hybrid Depth Composite")) {
+        settings.displayMode = vesta::render::RendererDisplayMode::Composite;
+        settings.compareMode = vesta::render::CompareMode::Off;
+        settings.enableRaster = true;
+        settings.enableGaussian = true;
+        settings.enablePathTracing = false;
+        settings.debugView = vesta::render::RendererDebugView::Depth;
+        settings.gaussianDebugView = vesta::render::GaussianDebugView::Depth;
+        settings.hybridDepthCompositeDebug = true;
+        _showRenderGraphPanel = true;
+        _showResourceInspectorPanel = true;
+        _showDebugVisualizationPanel = true;
+        _renderer.ResetAccumulation();
+        log_startup_event("Killer demo 4 armed: gaussian/raster hybrid depth composite");
+    }
+    ImGui::TextDisabled("Highlights Gaussian depth and raster depth resources used by the composite pass.");
+}
+
+void VestaEngine::draw_rasterizer_debug_panel()
+{
+    auto& settings = _renderer.GetSettings();
+
+    if (ImGui::Checkbox("Enable Rasterizer", &settings.enableRaster)) {
+        _renderer.ResetAccumulation();
+    }
+    const char* pipelineModes[] = { "Forward", "Deferred" };
+    int pipelineMode = static_cast<int>(settings.rasterPipelineMode);
+    if (ImGui::Combo("Pipeline", &pipelineMode, pipelineModes, IM_ARRAYSIZE(pipelineModes))) {
+        settings.rasterPipelineMode = static_cast<vesta::render::RasterPipelineMode>(pipelineMode);
+        _renderer.ResetAccumulation();
+    }
+
+    ImGui::Checkbox("G-Buffer Preview Strip", &settings.showGBufferPreview);
+    ImGui::Checkbox("Shadow Cascade Overlay", &settings.showShadowCascadeOverlay);
+    int cascadeCount = static_cast<int>(settings.shadowCascadeCount);
+    if (ImGui::SliderInt("Shadow Cascades", &cascadeCount, 1, 4)) {
+        settings.shadowCascadeCount = static_cast<uint32_t>(std::clamp(cascadeCount, 1, 4));
+        _renderer.ResetAccumulation();
+    }
+    if (ImGui::SliderFloat("Cascade Split Lambda", &settings.shadowCascadeLambda, 0.0f, 1.0f, "%.2f")) {
+        _renderer.ResetAccumulation();
+    }
+    int shadowMapSize = static_cast<int>(settings.shadowMapSize);
+    if (ImGui::SliderInt("Shadow Map Size", &shadowMapSize, 512, 4096)) {
+        settings.shadowMapSize = static_cast<uint32_t>(std::clamp(shadowMapSize, 512, 4096));
+        _renderer.ResetAccumulation();
+    }
+
+    ImGui::SeparatorText("Culling");
+    ImGui::Checkbox("Frustum Culling", &settings.enableFrustumCulling);
+    ImGui::Checkbox("Distance Culling", &settings.enableDistanceCulling);
+    ImGui::Checkbox("Indirect Draw", &settings.useIndirectDraw);
+    ImGui::SliderFloat("Distance Scale", &settings.distanceCullScale, 1.0f, 12.0f, "%.1f");
+
+    ImGui::SeparatorText("G-Buffer / Raster AOV");
+    if (ImGui::Button("Albedo")) { settings.debugView = vesta::render::RendererDebugView::Albedo; }
+    ImGui::SameLine();
+    if (ImGui::Button("Normal")) { settings.debugView = vesta::render::RendererDebugView::Normal; }
+    ImGui::SameLine();
+    if (ImGui::Button("Depth")) { settings.debugView = vesta::render::RendererDebugView::Depth; }
+    if (ImGui::Button("Roughness")) { settings.debugView = vesta::render::RendererDebugView::Roughness; }
+    ImGui::SameLine();
+    if (ImGui::Button("Overdraw")) { settings.debugView = vesta::render::RendererDebugView::Overdraw; }
+    ImGui::SameLine();
+    if (ImGui::Button("Wireframe")) { settings.debugView = vesta::render::RendererDebugView::Wireframe; }
+}
+
+void VestaEngine::draw_path_tracing_debug_panel()
+{
+    auto& settings = _renderer.GetSettings();
+
+    if (ImGui::Checkbox("Enable Path Tracing", &settings.enablePathTracing)) {
+        _renderer.ResetAccumulation();
+    }
+    const char* backendModes[] = { "Auto", "Compute", "Hardware RT" };
+    int backendMode = static_cast<int>(settings.pathTraceBackend);
+    if (ImGui::Combo("Backend", &backendMode, backendModes, IM_ARRAYSIZE(backendModes))) {
+        settings.pathTraceBackend = static_cast<vesta::render::PathTraceBackend>(backendMode);
+        _renderer.ResetAccumulation();
+    }
+    if (ImGui::SliderFloat("Resolution Scale", &settings.pathTraceResolutionScale, 0.25f, 1.0f, "%.2fx")) {
+        _renderer.ResetAccumulation();
+    }
+    int spp = static_cast<int>(settings.pathTraceSamplesPerPixel);
+    if (ImGui::SliderInt("Samples Per Pixel", &spp, 1, 64)) {
+        settings.pathTraceSamplesPerPixel = static_cast<uint32_t>(std::clamp(spp, 1, 64));
+        _renderer.ResetAccumulation();
+    }
+    int maxBounces = static_cast<int>(settings.pathTraceMaxBounces);
+    if (ImGui::SliderInt("Max Bounces", &maxBounces, 1, 16)) {
+        settings.pathTraceMaxBounces = static_cast<uint32_t>(std::clamp(maxBounces, 1, 16));
+        _renderer.ResetAccumulation();
+    }
+    if (ImGui::Checkbox("Denoising", &settings.enablePathTraceDenoiser)) {
+        _renderer.ResetAccumulation();
+    }
+    if (settings.enablePathTraceDenoiser) {
+        ImGui::SliderFloat("Denoiser Strength", &settings.pathTraceDenoiserStrength, 0.0f, 1.0f, "%.2f");
+        ImGui::SliderFloat("Temporal Blend", &settings.pathTraceDenoiserTemporalBlend, 0.0f, 0.98f, "%.2f");
+    }
+    if (ImGui::Checkbox("Next Event Estimation", &settings.pathTraceNextEventEstimation)) {
+        _renderer.ResetAccumulation();
+    }
+    if (ImGui::Checkbox("Russian Roulette", &settings.pathTraceRussianRoulette)) {
+        _renderer.ResetAccumulation();
+    }
+    if (ImGui::SliderFloat("Firefly Clamp", &settings.pathTraceFireflyClamp, 0.0f, 64.0f, "%.1f")) {
+        _renderer.ResetAccumulation();
+    }
+
+    ImGui::SeparatorText("Debug Views");
+    const char* debugViews[] = { "Final", "Albedo", "Normal", "Depth", "Direct", "Indirect", "Ray Cost Heatmap" };
+    int debugView = static_cast<int>(settings.pathTraceDebugView);
+    if (ImGui::Combo("Path Trace AOV", &debugView, debugViews, IM_ARRAYSIZE(debugViews))) {
+        settings.pathTraceDebugView = static_cast<vesta::render::PathTraceDebugView>(debugView);
+    }
+    if (ImGui::Button("Ray Cost Heatmap")) {
+        settings.pathTraceDebugView = vesta::render::PathTraceDebugView::RayCountHeatmap;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Reset Accumulation")) {
+        _renderer.ResetAccumulation();
+        log_startup_event("Path tracing accumulation reset from mode panel");
+    }
+    ImGui::Text("Accumulated Frames %u", _renderer.GetPathTraceFrameIndex());
+}
+
+void VestaEngine::draw_gaussian_splatting_debug_panel()
+{
+    auto& settings = _renderer.GetSettings();
+    const auto& scene = _renderer.GetScene();
+
+    if (ImGui::Checkbox("Enable Gaussian Splatting", &settings.enableGaussian)) {
+        _renderer.ResetAccumulation();
+    }
+    if (ImGui::SliderFloat("Opacity", &settings.gaussianOpacity, 0.05f, 1.0f, "%.2f")) {
+        _renderer.ResetAccumulation();
+    }
+    if (ImGui::SliderFloat("Hybrid Mix", &settings.gaussianMix, 0.0f, 1.0f, "%.2f")) {
+        _renderer.ResetAccumulation();
+    }
+    int shDegree = static_cast<int>(settings.gaussianShDegree);
+    if (ImGui::SliderInt("SH Degree", &shDegree, 0, 3)) {
+        settings.gaussianShDegree = static_cast<uint32_t>(std::clamp(shDegree, 0, 3));
+        _renderer.ResetAccumulation();
+    }
+    if (ImGui::Checkbox("View-dependent Color", &settings.gaussianViewDependentColor)) {
+        _renderer.ResetAccumulation();
+    }
+    if (ImGui::Checkbox("Antialiasing", &settings.gaussianAntialiasing)) {
+        _renderer.ResetAccumulation();
+    }
+    if (ImGui::Checkbox("Fast Culling", &settings.gaussianFastCulling)) {
+        _renderer.ResetAccumulation();
+    }
+
+    ImGui::SeparatorText("Splat Counters");
+    const uint32_t totalSplats = scene.GetGaussianCount();
+    const uint32_t visibleSplats = _renderer.GetOfficialGaussianProjectedCount();
+    const uint32_t culledSplats = visibleSplats <= totalSplats ? totalSplats - visibleSplats : 0u;
+    const float sortCpuMs = std::max(0.0f, _renderer.GetOfficialGaussianTotalBuildMs() - _renderer.GetOfficialGaussianSortMs());
+    ImGui::Text("Total / Visible / Culled %u / %u / %u", totalSplats, visibleSplats, culledSplats);
+    ImGui::Text("Depth Sort CPU / GPU %.3f / %.3f ms", sortCpuMs, _renderer.GetOfficialGaussianSortMs());
+    ImGui::Text("Preprocess %.3f  Duplicate %.3f  Range %.3f  Raster %.3f ms",
+        _renderer.GetOfficialGaussianPreprocessMs(),
+        _renderer.GetOfficialGaussianDuplicateMs(),
+        _renderer.GetOfficialGaussianRangeMs(),
+        _renderer.GetOfficialGaussianRasterMs());
+    ImGui::Text("Tile Occupancy %u tiles  %.2f avg tiles/splat",
+        _renderer.GetOfficialGaussianTileCount(),
+        _renderer.GetOfficialGaussianAverageTilesTouched());
+    ImGui::Text("Duplicated / Padded Splats %u / %u",
+        _renderer.GetOfficialGaussianDuplicateCount(),
+        _renderer.GetOfficialGaussianPaddedDuplicateCount());
+
+    ImGui::SeparatorText("Debug Views");
+    const char* gaussianViews[] = {
+        "Final",
+        "Alpha",
+        "Revealage",
+        "Overdraw Heatmap",
+        "Depth",
+        "Tile Occupancy",
+        "Splat Radius",
+        "Contribution Count",
+    };
+    int gaussianView = static_cast<int>(settings.gaussianDebugView);
+    if (ImGui::Combo("Gaussian AOV", &gaussianView, gaussianViews, IM_ARRAYSIZE(gaussianViews))) {
+        settings.gaussianDebugView = static_cast<vesta::render::GaussianDebugView>(gaussianView);
+        _renderer.ResetAccumulation();
+    }
+    if (ImGui::Button("Overdraw Heatmap")) {
+        settings.gaussianDebugView = vesta::render::GaussianDebugView::OverdrawHeatmap;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Tile Occupancy")) {
+        settings.gaussianDebugView = vesta::render::GaussianDebugView::TileOccupancy;
+        settings.gaussianShowTileGrid = true;
+    }
+    ImGui::Checkbox("Tile Grid Overlay", &settings.gaussianShowTileGrid);
+    ImGui::Checkbox("Covariance Ellipsoids", &settings.gaussianShowCovarianceEllipsoids);
+    ImGui::Checkbox("Spatial Bounds", &settings.gaussianShowSpatialBounds);
 }
 
 bool VestaEngine::should_forward_event_to_renderer(const SDL_Event& event) const

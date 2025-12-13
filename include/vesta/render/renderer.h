@@ -85,6 +85,11 @@ enum class CompareMode : uint32_t {
     DifferenceHeatmap = 2,
 };
 
+enum class RasterPipelineMode : uint32_t {
+    Forward = 0,
+    Deferred = 1,
+};
+
 enum class SceneLoadState : uint32_t {
     Idle = 0,
     Parsing = 1,
@@ -222,6 +227,16 @@ struct RendererSettings {
     CompareMode compareMode{ CompareMode::Off };
     float compareSplitPosition{ 0.5f };
     float compareDifferenceScale{ 4.0f };
+    RasterPipelineMode rasterPipelineMode{ RasterPipelineMode::Deferred };
+    bool showGBufferPreview{ false };
+    bool showShadowCascadeOverlay{ false };
+    uint32_t shadowCascadeCount{ 4 };
+    float shadowCascadeLambda{ 0.65f };
+    bool showGiProbeOverlay{ false };
+    bool gaussianShowTileGrid{ false };
+    bool gaussianShowCovarianceEllipsoids{ false };
+    bool gaussianShowSpatialBounds{ false };
+    bool hybridDepthCompositeDebug{ false };
     bool enablePathTraceDenoiser{ true };
     float pathTraceDenoiserStrength{ 0.65f };
     float pathTraceDenoiserTemporalBlend{ 0.88f };

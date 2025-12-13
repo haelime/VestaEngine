@@ -93,6 +93,7 @@ public:
     bool _showRenderGraphPanel{ false };
     bool _showGpuProfilerPanel{ false };
     bool _showDebugVisualizationPanel{ false };
+    bool _showRenderModeControlPanel{ false };
     bool _showSceneInspectorPanel{ false };
     bool _showResourceInspectorPanel{ false };
     bool _showLogConsolePanel{ false };
@@ -136,7 +137,13 @@ private:
     void clear_texture_preview_descriptors();
     void begin_imgui_frame(float deltaSeconds);
     void build_main_menu_bar();
+    void build_debug_dockspace();
     void build_debug_ui();
+    void build_render_mode_control_panel();
+    void draw_killer_demo_panel();
+    void draw_rasterizer_debug_panel();
+    void draw_path_tracing_debug_panel();
+    void draw_gaussian_splatting_debug_panel();
     [[nodiscard]] bool should_forward_event_to_renderer(const union SDL_Event& event) const;
     [[nodiscard]] std::optional<std::filesystem::path> open_scene_with_system_dialog() const;
     [[nodiscard]] std::optional<std::filesystem::path> open_gaussian_model_with_system_dialog() const;
