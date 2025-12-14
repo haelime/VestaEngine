@@ -144,6 +144,10 @@ private:
     void draw_rasterizer_debug_panel();
     void draw_path_tracing_debug_panel();
     void draw_gaussian_splatting_debug_panel();
+    void draw_ray_tracing_debug_panel();
+    void draw_global_illumination_panel();
+    void draw_post_process_panel();
+    void draw_advanced_portfolio_panel();
     [[nodiscard]] bool should_forward_event_to_renderer(const union SDL_Event& event) const;
     [[nodiscard]] std::optional<std::filesystem::path> open_scene_with_system_dialog() const;
     [[nodiscard]] std::optional<std::filesystem::path> open_gaussian_model_with_system_dialog() const;

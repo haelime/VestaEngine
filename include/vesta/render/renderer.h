@@ -90,6 +90,12 @@ enum class RasterPipelineMode : uint32_t {
     Deferred = 1,
 };
 
+enum class ToneMappingMode : uint32_t {
+    None = 0,
+    Reinhard = 1,
+    ACES = 2,
+};
+
 enum class SceneLoadState : uint32_t {
     Idle = 0,
     Parsing = 1,
@@ -237,6 +243,50 @@ struct RendererSettings {
     bool gaussianShowCovarianceEllipsoids{ false };
     bool gaussianShowSpatialBounds{ false };
     bool hybridDepthCompositeDebug{ false };
+    bool enableRtShadows{ false };
+    bool enableRtAmbientOcclusion{ false };
+    bool enableRtReflections{ false };
+    bool enableRtGlobalIllumination{ false };
+    uint32_t rtShadowSamples{ 1 };
+    uint32_t rtAoSamples{ 1 };
+    uint32_t rtReflectionSamples{ 1 };
+    uint32_t rtGiSamples{ 1 };
+    float rtMaxRayDistance{ 100.0f };
+    float rtAoRadius{ 2.0f };
+    float rtReflectionRoughnessCutoff{ 0.8f };
+    bool rtHalfResolution{ true };
+    bool rtDenoiser{ true };
+    bool rtTemporalAccumulation{ true };
+    bool enablePathTracedGi{ true };
+    bool enableDdgi{ false };
+    bool enableVoxelGi{ false };
+    bool enableRestirGi{ false };
+    uint32_t ddgiProbeCountX{ 8 };
+    uint32_t ddgiProbeCountY{ 4 };
+    uint32_t ddgiProbeCountZ{ 8 };
+    float ddgiProbeSpacing{ 2.0f };
+    float ddgiHysteresis{ 0.95f };
+    uint32_t ddgiRaysPerProbe{ 128 };
+    bool showGiIndirectOnly{ false };
+    ToneMappingMode toneMappingMode{ ToneMappingMode::ACES };
+    bool enableBloom{ false };
+    bool enableColorGrading{ false };
+    bool enableVignette{ false };
+    bool enableMotionBlur{ false };
+    bool enableFxaa{ false };
+    float bloomThreshold{ 1.0f };
+    float bloomIntensity{ 0.1f };
+    float vignetteStrength{ 0.0f };
+    float colorGradingSaturation{ 1.0f };
+    float colorGradingContrast{ 1.0f };
+    bool enableRestirDi{ false };
+    bool enableRestirPt{ false };
+    uint32_t restirCandidateLights{ 8 };
+    uint32_t restirReservoirCount{ 1 };
+    bool enableGpuDrivenRendering{ false };
+    bool enableAsyncCompute{ false };
+    bool enableMeshletCulling{ false };
+    bool showAsyncComputeTimeline{ false };
     bool enablePathTraceDenoiser{ true };
     float pathTraceDenoiserStrength{ 0.65f };
     float pathTraceDenoiserTemporalBlend{ 0.88f };

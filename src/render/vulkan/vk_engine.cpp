@@ -265,6 +265,19 @@ const char* RasterPipelineModeLabel(vesta::render::RasterPipelineMode mode)
     }
 }
 
+const char* ToneMappingModeLabel(vesta::render::ToneMappingMode mode)
+{
+    switch (mode) {
+    case vesta::render::ToneMappingMode::None:
+        return "None";
+    case vesta::render::ToneMappingMode::Reinhard:
+        return "Reinhard";
+    case vesta::render::ToneMappingMode::ACES:
+    default:
+        return "ACES";
+    }
+}
+
 std::optional<size_t> BenchmarkPassIndex(std::string_view passName)
 {
     for (size_t index = 0; index < kBenchmarkPassNames.size(); ++index) {
@@ -3774,6 +3787,22 @@ void VestaEngine::build_render_mode_control_panel()
                 draw_gaussian_splatting_debug_panel();
                 ImGui::EndTabItem();
             }
+            if (ImGui::BeginTabItem("Ray Effects")) {
+                draw_ray_tracing_debug_panel();
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("GI")) {
+                draw_global_illumination_panel();
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Post")) {
+                draw_post_process_panel();
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Advanced")) {
+                draw_advanced_portfolio_panel();
+                ImGui::EndTabItem();
+            }
             ImGui::EndTabBar();
         }
     }
@@ -4041,6 +4070,207 @@ void VestaEngine::draw_gaussian_splatting_debug_panel()
     ImGui::Checkbox("Tile Grid Overlay", &settings.gaussianShowTileGrid);
     ImGui::Checkbox("Covariance Ellipsoids", &settings.gaussianShowCovarianceEllipsoids);
     ImGui::Checkbox("Spatial Bounds", &settings.gaussianShowSpatialBounds);
+}
+
+void VestaEngine::draw_ray_tracing_debug_panel()
+{
+    auto& settings = _renderer.GetSettings();
+    const auto& scene = _renderer.GetScene();
+    const auto& device = _renderer.GetRenderDevice();
+    const bool rayQuerySupported = device.GetRayTracingSupport().rayQueryFeatures.rayQuery == VK_TRUE;
+    const bool pipelineSupported = device.GetRayTracingSupport().rayTracingPipelineFeatures.rayTracingPipeline == VK_TRUE;
+    const bool hybridEffectsSupported = rayQuerySupported && scene.HasRayTracingScene();
+
+    ImGui::Text("Hardware RT pipeline %s  Ray Query %s",
+        pipelineSupported ? "available" : "unavailable",
+        rayQuerySupported ? "available" : "unavailable");
+    ImGui::Text("TLAS %s  BLAS %.3f ms  TLAS %.3f ms",
+        scene.HasRayTracingScene() ? "resident" : "missing",
+        scene.GetBottomLevelBuildMs(),
+        scene.GetTopLevelBuildMs());
+    ImGui::Text("Backend %s", PathTraceBackendLabel(_renderer.GetActivePathTraceBackend()));
+
+    if (!hybridEffectsSupported) {
+        ImGui::TextDisabled("Hybrid ray effects require ray query support and a resident TLAS.");
+    }
+
+    ImGui::BeginDisabled(!hybridEffectsSupported);
+    bool resetHistory = false;
+    resetHistory |= ImGui::Checkbox("RT Shadows", &settings.enableRtShadows);
+    resetHistory |= ImGui::Checkbox("RT Ambient Occlusion", &settings.enableRtAmbientOcclusion);
+    resetHistory |= ImGui::Checkbox("RT Reflections", &settings.enableRtReflections);
+    resetHistory |= ImGui::Checkbox("RT Global Illumination", &settings.enableRtGlobalIllumination);
+    int shadowSamples = static_cast<int>(settings.rtShadowSamples);
+    if (ImGui::SliderInt("Shadow Samples", &shadowSamples, 1, 8)) {
+        settings.rtShadowSamples = static_cast<uint32_t>(std::clamp(shadowSamples, 1, 8));
+        resetHistory = true;
+    }
+    int aoSamples = static_cast<int>(settings.rtAoSamples);
+    if (ImGui::SliderInt("AO Samples", &aoSamples, 1, 8)) {
+        settings.rtAoSamples = static_cast<uint32_t>(std::clamp(aoSamples, 1, 8));
+        resetHistory = true;
+    }
+    int reflectionSamples = static_cast<int>(settings.rtReflectionSamples);
+    if (ImGui::SliderInt("Reflection Samples", &reflectionSamples, 1, 8)) {
+        settings.rtReflectionSamples = static_cast<uint32_t>(std::clamp(reflectionSamples, 1, 8));
+        resetHistory = true;
+    }
+    resetHistory |= ImGui::SliderFloat("Max Ray Distance", &settings.rtMaxRayDistance, 0.5f, 500.0f, "%.1f");
+    resetHistory |= ImGui::SliderFloat("AO Radius", &settings.rtAoRadius, 0.05f, 20.0f, "%.2f");
+    resetHistory |= ImGui::SliderFloat("Reflection Roughness Cutoff", &settings.rtReflectionRoughnessCutoff, 0.0f, 1.0f, "%.2f");
+    resetHistory |= ImGui::Checkbox("Half Resolution", &settings.rtHalfResolution);
+    resetHistory |= ImGui::Checkbox("Denoiser", &settings.rtDenoiser);
+    resetHistory |= ImGui::Checkbox("Temporal Accumulation", &settings.rtTemporalAccumulation);
+    ImGui::EndDisabled();
+    if (resetHistory) {
+        _renderer.ResetAccumulation();
+    }
+
+    ImGui::SeparatorText("Implemented vs Stub");
+    ImGui::BulletText("Hardware path tracing uses RT pipeline when available.");
+    ImGui::BulletText("Hybrid RT shadow/AO/reflection controls are staged UI until ray-query passes are added.");
+    ImGui::BulletText("Acceleration structure residency and build timing are live in Resource Inspector.");
+}
+
+void VestaEngine::draw_global_illumination_panel()
+{
+    auto& settings = _renderer.GetSettings();
+
+    bool resetHistory = false;
+    if (ImGui::Checkbox("Path Traced GI", &settings.enablePathTracedGi)) {
+        settings.enablePathTracing = settings.enablePathTracing || settings.enablePathTracedGi;
+        resetHistory = true;
+    }
+    ImGui::TextDisabled("Path traced GI is represented by indirect bounces and the Indirect path AOV.");
+
+    if (ImGui::Checkbox("SSGI", &settings.enableSsgi)) {
+        resetHistory = true;
+    }
+    if (settings.enableSsgi) {
+        resetHistory |= ImGui::SliderFloat("SSGI Radius", &settings.ssgiRadius, 0.05f, 8.0f, "%.2f");
+        resetHistory |= ImGui::SliderFloat("SSGI Intensity", &settings.ssgiIntensity, 0.0f, 2.0f, "%.2f");
+        int ssgiSamples = static_cast<int>(settings.ssgiSampleCount);
+        if (ImGui::SliderInt("SSGI Samples", &ssgiSamples, 4, 16)) {
+            settings.ssgiSampleCount = static_cast<uint32_t>(std::clamp(ssgiSamples, 4, 16));
+            resetHistory = true;
+        }
+    }
+    if (ImGui::Checkbox("Indirect Only Debug", &settings.showGiIndirectOnly)) {
+        settings.debugView = settings.showGiIndirectOnly ? vesta::render::RendererDebugView::IndirectLighting
+                                                         : vesta::render::RendererDebugView::FinalColor;
+        resetHistory = true;
+    }
+    ImGui::Checkbox("GI Probe Overlay", &settings.showGiProbeOverlay);
+
+    ImGui::SeparatorText("DDGI Probe Grid");
+    ImGui::BeginDisabled(true);
+    ImGui::Checkbox("DDGI", &settings.enableDdgi);
+    int probesX = static_cast<int>(settings.ddgiProbeCountX);
+    int probesY = static_cast<int>(settings.ddgiProbeCountY);
+    int probesZ = static_cast<int>(settings.ddgiProbeCountZ);
+    ImGui::SliderInt("Probe Count X", &probesX, 1, 32);
+    ImGui::SliderInt("Probe Count Y", &probesY, 1, 16);
+    ImGui::SliderInt("Probe Count Z", &probesZ, 1, 32);
+    ImGui::SliderFloat("Probe Spacing", &settings.ddgiProbeSpacing, 0.25f, 10.0f, "%.2f");
+    ImGui::SliderFloat("Hysteresis", &settings.ddgiHysteresis, 0.0f, 1.0f, "%.2f");
+    ImGui::EndDisabled();
+    ImGui::TextDisabled("DDGI is queued: requires probe storage, ray update pass, and irradiance composite.");
+
+    ImGui::SeparatorText("Advanced GI");
+    ImGui::BeginDisabled(true);
+    ImGui::Checkbox("Voxel GI", &settings.enableVoxelGi);
+    ImGui::Checkbox("ReSTIR GI", &settings.enableRestirGi);
+    ImGui::EndDisabled();
+    ImGui::TextDisabled("Voxel GI and ReSTIR GI are portfolio roadmap stubs.");
+
+    if (resetHistory) {
+        _renderer.ResetAccumulation();
+    }
+}
+
+void VestaEngine::draw_post_process_panel()
+{
+    auto& settings = _renderer.GetSettings();
+
+    const char* toneModes[] = { "None", "Reinhard", "ACES" };
+    int toneMode = static_cast<int>(settings.toneMappingMode);
+    if (ImGui::Combo("Tone Mapping", &toneMode, toneModes, IM_ARRAYSIZE(toneModes))) {
+        settings.toneMappingMode = static_cast<vesta::render::ToneMappingMode>(toneMode);
+        _renderer.ResetAccumulation();
+    }
+    ImGui::Text("Active Display Transform %s", ToneMappingModeLabel(settings.toneMappingMode));
+    if (ImGui::SliderFloat("Exposure", &settings.cameraExposureEv, -6.0f, 6.0f, "%.2f EV")) {
+        _renderer.ResetAccumulation();
+    }
+    ImGui::SliderFloat("Saturation", &settings.colorGradingSaturation, 0.0f, 2.0f, "%.2f");
+    ImGui::SliderFloat("Contrast", &settings.colorGradingContrast, 0.25f, 2.0f, "%.2f");
+
+    ImGui::SeparatorText("Effects");
+    ImGui::Checkbox("Bloom", &settings.enableBloom);
+    if (settings.enableBloom) {
+        ImGui::SliderFloat("Bloom Threshold", &settings.bloomThreshold, 0.0f, 8.0f, "%.2f");
+        ImGui::SliderFloat("Bloom Intensity", &settings.bloomIntensity, 0.0f, 2.0f, "%.2f");
+    }
+    ImGui::Checkbox("Color Grading", &settings.enableColorGrading);
+    ImGui::Checkbox("Vignette", &settings.enableVignette);
+    if (settings.enableVignette) {
+        ImGui::SliderFloat("Vignette Strength", &settings.vignetteStrength, 0.0f, 1.0f, "%.2f");
+    }
+    ImGui::Checkbox("FXAA", &settings.enableFxaa);
+    ImGui::Checkbox("Motion Blur", &settings.enableMotionBlur);
+    ImGui::SeparatorText("Depth of Field");
+    if (ImGui::SliderFloat("Aperture Radius", &settings.cameraApertureRadius, 0.0f, 0.25f, "%.3f")) {
+        _renderer.ResetAccumulation();
+    }
+    if (ImGui::SliderFloat("Focal Distance", &settings.cameraFocalDistance, 0.05f, 100.0f, "%.2f")) {
+        _renderer.ResetAccumulation();
+    }
+
+    ImGui::SeparatorText("Implemented vs Stub");
+    ImGui::BulletText("Exposure and ACES-style display transform are live in CompositePass.");
+    ImGui::BulletText("Depth-of-field parameters are live for path tracing camera settings.");
+    ImGui::BulletText("Bloom, vignette, FXAA, and motion blur are staged controls until post passes are added.");
+}
+
+void VestaEngine::draw_advanced_portfolio_panel()
+{
+    auto& settings = _renderer.GetSettings();
+    const auto& scene = _renderer.GetScene();
+    const auto& device = _renderer.GetRenderDevice();
+
+    ImGui::SeparatorText("ReSTIR");
+    ImGui::BeginDisabled(true);
+    ImGui::Checkbox("ReSTIR DI", &settings.enableRestirDi);
+    ImGui::Checkbox("ReSTIR GI", &settings.enableRestirGi);
+    ImGui::Checkbox("ReSTIR PT", &settings.enableRestirPt);
+    int candidateLights = static_cast<int>(settings.restirCandidateLights);
+    int reservoirs = static_cast<int>(settings.restirReservoirCount);
+    ImGui::SliderInt("Candidate Lights", &candidateLights, 1, 64);
+    ImGui::SliderInt("Reservoirs / Pixel", &reservoirs, 1, 8);
+    ImGui::EndDisabled();
+    ImGui::TextDisabled("Requires light reservoir buffers and temporal/spatial reuse passes.");
+
+    ImGui::SeparatorText("GPU-driven Rendering");
+    ImGui::Checkbox("Indirect Draw", &settings.useIndirectDraw);
+    ImGui::BeginDisabled(true);
+    ImGui::Checkbox("GPU-driven Culling", &settings.enableGpuDrivenRendering);
+    ImGui::Checkbox("Meshlet / Cluster Culling", &settings.enableMeshletCulling);
+    ImGui::EndDisabled();
+    ImGui::Text("Visible Surfaces %u / %zu", _renderer.GetVisibleSurfaceCount(), scene.GetSurfaces().size());
+    ImGui::Text("Indirect command buffer %s", settings.useIndirectDraw ? "enabled" : "not active");
+    ImGui::TextDisabled("Compute culling and meshlet bounds are roadmap stubs.");
+
+    ImGui::SeparatorText("Bindless");
+    ImGui::Text("Textures %zu  Resident %u", scene.GetTextures().size(), _renderer.GetResidentTextureCount());
+    ImGui::Text("Device local memory %u MiB", device.GetDedicatedVideoMemoryMiB());
+    ImGui::Text("Path backend %s", PathTraceBackendLabel(_renderer.GetActivePathTraceBackend()));
+
+    ImGui::SeparatorText("Async Compute");
+    ImGui::BeginDisabled(true);
+    ImGui::Checkbox("Async Compute", &settings.enableAsyncCompute);
+    ImGui::Checkbox("Queue Timeline", &settings.showAsyncComputeTimeline);
+    ImGui::EndDisabled();
+    ImGui::TextDisabled("Async compute requires separate queue ownership and render graph scheduling work.");
 }
 
 bool VestaEngine::should_forward_event_to_renderer(const SDL_Event& event) const

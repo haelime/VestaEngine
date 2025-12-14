@@ -102,6 +102,11 @@ void CompositePass::SetExposure(float exposureEv)
     _exposureEv = exposureEv;
 }
 
+void CompositePass::SetToneMapping(uint32_t toneMappingMode)
+{
+    _toneMappingMode = toneMappingMode;
+}
+
 void CompositePass::SetAmbientOcclusion(bool enabled, float radius, float intensity)
 {
     _ssaoParams = glm::vec4(enabled ? 1.0f : 0.0f, std::max(radius, 0.01f), std::clamp(intensity, 0.0f, 4.0f), 0.0f);
@@ -210,7 +215,7 @@ void CompositePass::Execute(const RenderGraphContext& context)
         .imageIndices4 = glm::uvec4(kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex),
         .gaussianDebug = glm::uvec4(_gaussianTileRangeBufferIndex, _gaussianTileCountX, _gaussianTileCountY, 8u),
         .params = glm::vec4(_gaussianMix, _exposureEv, _nearPlane, _farPlane),
-        .compareParams = glm::vec4(static_cast<float>(_compareMode), _compareSplitPosition, _compareDifferenceScale, 0.0f),
+        .compareParams = glm::vec4(static_cast<float>(_compareMode), _compareSplitPosition, _compareDifferenceScale, static_cast<float>(_toneMappingMode)),
         .ssaoParams = _ssaoParams,
         .inverseViewProjection = _inverseViewProjection,
     };

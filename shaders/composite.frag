@@ -44,6 +44,11 @@ vec3 tonemap(vec3 value) {
     return clamp((value * (a * value + b)) / (value * (c * value + d) + e), 0.0, 1.0);
 }
 
+vec3 reinhardTonemap(vec3 value)
+{
+    return value / (vec3(1.0) + value);
+}
+
 bool hasImage(uint index) {
     return index != INVALID_IMAGE_INDEX;
 }
@@ -312,7 +317,14 @@ vec3 heatmap(float value)
 vec3 applyDisplayTransform(vec3 color)
 {
     color *= exp2(pc.params.y);
-    color = tonemap(color);
+    uint toneMappingMode = uint(pc.compareParams.w + 0.5);
+    if (toneMappingMode == 1u) {
+        color = reinhardTonemap(color);
+    } else if (toneMappingMode == 2u) {
+        color = tonemap(color);
+    } else {
+        color = clamp(color, vec3(0.0), vec3(1.0));
+    }
     return pow(color, vec3(1.0 / 2.2));
 }
 
