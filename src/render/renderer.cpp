@@ -601,6 +601,10 @@ void ConfigureCompositePass(Renderer& renderer, IRenderPass& pass, const Rendere
         renderer.GetSettings().compareDifferenceScale);
     compositePass.SetExposure(renderer.GetSettings().cameraExposureEv);
     compositePass.SetToneMapping(static_cast<uint32_t>(renderer.GetSettings().toneMappingMode));
+    compositePass.SetPostProcess(renderer.GetSettings().colorGradingSaturation,
+        renderer.GetSettings().colorGradingContrast,
+        renderer.GetSettings().enableVignette,
+        renderer.GetSettings().vignetteStrength);
     compositePass.SetAmbientOcclusion(
         renderer.GetSettings().enableSsao, renderer.GetSettings().ssaoRadius, renderer.GetSettings().ssaoIntensity);
     compositePass.SetCameraMatrices(renderer.GetCamera().GetViewProjection(), renderer.GetCamera().GetInverseViewProjection());

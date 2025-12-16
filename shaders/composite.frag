@@ -19,6 +19,7 @@ layout(push_constant) uniform CompositePushConstants {
     uvec4 gaussianDebug;
     vec4 params;
     vec4 compareParams;
+    vec4 postParams;
     vec4 ssaoParams;
     mat4 inverseViewProjection;
 } pc;
@@ -89,6 +90,7 @@ vec3 reconstructWorldPosition(ivec2 pixel, ivec2 size, float depth)
 }
 
 vec3 applyDisplayTransform(vec3 color);
+vec3 applyPostProcess(vec3 color, vec2 uv);
 vec3 heatmap(float value);
 
 float computeScreenSpaceAo(ivec2 pixel, ivec2 size, vec3 worldPosition, vec3 normal, float depth)
@@ -328,6 +330,19 @@ vec3 applyDisplayTransform(vec3 color)
     return pow(color, vec3(1.0 / 2.2));
 }
 
+vec3 applyPostProcess(vec3 color, vec2 uv)
+{
+    float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
+    color = mix(vec3(luminance), color, clamp(pc.postParams.x, 0.0, 2.0));
+    color = (color - vec3(0.5)) * clamp(pc.postParams.y, 0.25, 2.0) + vec3(0.5);
+    if (pc.postParams.z > 0.5 && pc.postParams.w > 0.0) {
+        vec2 centered = uv * 2.0 - 1.0;
+        float vignette = smoothstep(1.15, 0.25, dot(centered, centered));
+        color *= mix(1.0, vignette, clamp(pc.postParams.w, 0.0, 1.0));
+    }
+    return clamp(color, vec3(0.0), vec3(1.0));
+}
+
 vec3 resolveGaussianDebugView(vec4 gaussianColor, ivec2 pixel, vec2 uv)
 {
     uint gaussianDebugView = pc.imageIndices1.z;
@@ -418,12 +433,12 @@ void main() {
     vec4 gaussianColor = resolveGaussian(pixel, uv);
     vec3 debugColor = resolveDebugView(pixel);
     if (debugColor.x >= 0.0) {
-        outColor = vec4(debugColor, 1.0);
+        outColor = vec4(applyPostProcess(debugColor, uv), 1.0);
         return;
     }
     vec3 gaussianDebugColor = resolveGaussianDebugView(gaussianColor, pixel, uv);
     if (gaussianDebugColor.x >= 0.0) {
-        outColor = vec4(gaussianDebugColor, 1.0);
+        outColor = vec4(applyPostProcess(gaussianDebugColor, uv), 1.0);
         return;
     }
 
@@ -435,12 +450,12 @@ void main() {
             float splitPosition = clamp(pc.compareParams.y, 0.02, 0.98);
             vec3 splitColor = uv.x < splitPosition ? rasterDisplay : pathDisplay;
             float divider = 1.0 - smoothstep(0.0, 0.003, abs(uv.x - splitPosition));
-            outColor = vec4(mix(splitColor, vec3(1.0), divider), 1.0);
+            outColor = vec4(applyPostProcess(mix(splitColor, vec3(1.0), divider), uv), 1.0);
             return;
         }
         if (compareMode == 2u) {
             float diff = length(rasterDisplay - pathDisplay) * pc.compareParams.z;
-            outColor = vec4(heatmap(diff), 1.0);
+            outColor = vec4(applyPostProcess(heatmap(diff), uv), 1.0);
             return;
         }
     }
@@ -462,5 +477,6 @@ void main() {
     if (pc.imageIndices1.x != 2u) {
         composite = applyDisplayTransform(composite);
     }
+    composite = applyPostProcess(composite, uv);
     outColor = vec4(composite, 1.0);
 }

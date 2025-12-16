@@ -23,6 +23,7 @@ struct CompositePushConstants {
     glm::uvec4 gaussianDebug{ kInvalidImageIndex, 0u, 0u, 8u };
     glm::vec4 params{ 0.25f, 0.0f, 0.0f, 0.0f };
     glm::vec4 compareParams{ 0.0f, 0.5f, 4.0f, 0.0f };
+    glm::vec4 postParams{ 1.0f, 1.0f, 0.0f, 0.0f };
     glm::vec4 ssaoParams{ 1.0f, 0.75f, 1.35f, 0.0f };
     glm::mat4 inverseViewProjection{ 1.0f };
 };
@@ -105,6 +106,14 @@ void CompositePass::SetExposure(float exposureEv)
 void CompositePass::SetToneMapping(uint32_t toneMappingMode)
 {
     _toneMappingMode = toneMappingMode;
+}
+
+void CompositePass::SetPostProcess(float saturation, float contrast, bool vignetteEnabled, float vignetteStrength)
+{
+    _saturation = std::clamp(saturation, 0.0f, 2.0f);
+    _contrast = std::clamp(contrast, 0.25f, 2.0f);
+    _vignetteEnabled = vignetteEnabled;
+    _vignetteStrength = std::clamp(vignetteStrength, 0.0f, 1.0f);
 }
 
 void CompositePass::SetAmbientOcclusion(bool enabled, float radius, float intensity)
@@ -216,6 +225,7 @@ void CompositePass::Execute(const RenderGraphContext& context)
         .gaussianDebug = glm::uvec4(_gaussianTileRangeBufferIndex, _gaussianTileCountX, _gaussianTileCountY, 8u),
         .params = glm::vec4(_gaussianMix, _exposureEv, _nearPlane, _farPlane),
         .compareParams = glm::vec4(static_cast<float>(_compareMode), _compareSplitPosition, _compareDifferenceScale, static_cast<float>(_toneMappingMode)),
+        .postParams = glm::vec4(_saturation, _contrast, _vignetteEnabled ? 1.0f : 0.0f, _vignetteStrength),
         .ssaoParams = _ssaoParams,
         .inverseViewProjection = _inverseViewProjection,
     };
