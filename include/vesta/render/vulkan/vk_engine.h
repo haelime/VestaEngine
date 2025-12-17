@@ -68,7 +68,6 @@ struct EngineLaunchOptions {
     settings.enablePathTracing = false;
     settings.buildRayTracingStructuresOnLoad =
         !options.deferRayTracingBuildUntilAfterFirstPresent ? settings.buildRayTracingStructuresOnLoad : false;
-    settings.textureStreamingEnabled = false;
     settings.enableDistanceCulling = false;
     settings.useIndirectDraw = false;
     settings.sceneUploadMode = vesta::render::SceneUploadMode::Streaming;

@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstring>
 #include <cctype>
+#include <cstdlib>
 #include <fstream>
 #include <functional>
 #include <limits>
@@ -777,6 +778,392 @@ uint32_t AddFbxTextureAsset(ParsedScene& parsedScene,
     parsedScene.textures.push_back(*texture);
     textureCache.emplace(cacheKey, index);
     return index;
+}
+
+std::string TrimAscii(std::string_view value)
+{
+    size_t begin = 0;
+    while (begin < value.size() && std::isspace(static_cast<unsigned char>(value[begin]))) {
+        ++begin;
+    }
+    size_t end = value.size();
+    while (end > begin && std::isspace(static_cast<unsigned char>(value[end - 1]))) {
+        --end;
+    }
+    return std::string(value.substr(begin, end - begin));
+}
+
+std::filesystem::path ResolveObjTexturePath(const std::filesystem::path& objPath, std::string rawPath)
+{
+    rawPath = TrimAscii(rawPath);
+    if (rawPath.empty()) {
+        return {};
+    }
+    std::replace(rawPath.begin(), rawPath.end(), '\\', '/');
+    const std::filesystem::path texturePath(rawPath);
+    if (std::filesystem::exists(texturePath)) {
+        return texturePath;
+    }
+
+    const std::filesystem::path localPath = objPath.parent_path() / texturePath;
+    if (std::filesystem::exists(localPath)) {
+        return localPath;
+    }
+    const std::filesystem::path localFilename = objPath.parent_path() / texturePath.filename();
+    if (std::filesystem::exists(localFilename)) {
+        return localFilename;
+    }
+    for (std::string_view folderName : { "textures", "Textures", "texture", "Texture", "maps", "Maps" }) {
+        const std::filesystem::path root = objPath.parent_path() / folderName;
+        if (!std::filesystem::exists(root)) {
+            continue;
+        }
+        const std::filesystem::path direct = root / texturePath.filename();
+        if (std::filesystem::exists(direct)) {
+            return direct;
+        }
+        for (const std::filesystem::directory_entry& entry : std::filesystem::recursive_directory_iterator(root)) {
+            if (entry.is_regular_file() && entry.path().filename() == texturePath.filename()) {
+                return entry.path();
+            }
+        }
+    }
+    return {};
+}
+
+uint32_t AddObjTextureAsset(ParsedScene& parsedScene,
+    std::unordered_map<std::string, uint32_t>& textureCache,
+    const std::filesystem::path& path,
+    bool srgb)
+{
+    return AddFbxTextureAsset(parsedScene, textureCache, path, srgb);
+}
+
+struct ObjMaterialRecord {
+    std::string name;
+    SceneMaterial material;
+};
+
+std::vector<std::filesystem::path> ParseObjMtllibs(const std::filesystem::path& objPath, std::string_view arguments)
+{
+    std::vector<std::filesystem::path> result;
+    std::istringstream stream{ std::string(arguments) };
+    std::string filename;
+    while (stream >> filename) {
+        const std::filesystem::path path = objPath.parent_path() / filename;
+        if (std::filesystem::exists(path)) {
+            result.push_back(path);
+        }
+    }
+    return result;
+}
+
+std::string ExtractObjMapFilename(std::string_view arguments)
+{
+    std::istringstream stream{ std::string(arguments) };
+    std::string token;
+    std::string lastToken;
+    while (stream >> token) {
+        lastToken = token;
+    }
+    return lastToken;
+}
+
+std::vector<ObjMaterialRecord> ParseObjMaterialLibraries(
+    const std::filesystem::path& objPath,
+    ParsedScene& parsedScene,
+    std::span<const std::filesystem::path> materialPaths)
+{
+    std::vector<ObjMaterialRecord> records;
+    std::unordered_map<std::string, uint32_t> textureCache;
+    ObjMaterialRecord current;
+    bool hasCurrent = false;
+
+    auto flushCurrent = [&]() {
+        if (hasCurrent) {
+            records.push_back(std::move(current));
+            current = {};
+            hasCurrent = false;
+        }
+    };
+
+    for (const std::filesystem::path& materialPath : materialPaths) {
+        std::ifstream input(materialPath);
+        if (!input.is_open()) {
+            continue;
+        }
+
+        std::string line;
+        while (std::getline(input, line)) {
+            const std::string trimmed = TrimAscii(line);
+            if (trimmed.empty() || trimmed.front() == '#') {
+                continue;
+            }
+            std::istringstream stream(trimmed);
+            std::string tag;
+            stream >> tag;
+            if (tag == "newmtl") {
+                flushCurrent();
+                hasCurrent = true;
+                current.name = TrimAscii(trimmed.substr(tag.size()));
+                current.material = MakeDefaultMaterial();
+            } else if (hasCurrent && tag == "Kd") {
+                float r = 0.8f;
+                float g = 0.8f;
+                float b = 0.85f;
+                if (stream >> r >> g >> b) {
+                    current.material.baseColorFactor = glm::vec4(r, g, b, current.material.baseColorFactor.a);
+                }
+            } else if (hasCurrent && tag == "Ke") {
+                float r = 0.0f;
+                float g = 0.0f;
+                float b = 0.0f;
+                if (stream >> r >> g >> b) {
+                    current.material.emissiveFactor = glm::vec4(r, g, b, 0.0f);
+                }
+            } else if (hasCurrent && (tag == "d" || tag == "Tr")) {
+                float alpha = 1.0f;
+                if (stream >> alpha) {
+                    current.material.baseColorFactor.a = tag == "Tr" ? 1.0f - alpha : alpha;
+                }
+            } else if (hasCurrent && tag == "Ns") {
+                float shininess = 32.0f;
+                if (stream >> shininess) {
+                    current.material.materialParams.y = glm::clamp(std::sqrt(2.0f / (std::max(shininess, 1.0f) + 2.0f)), 0.04f, 1.0f);
+                }
+            } else if (hasCurrent && (tag == "map_Kd" || tag == "map_BaseColor")) {
+                std::string rest;
+                std::getline(stream, rest);
+                const std::filesystem::path texturePath = ResolveObjTexturePath(objPath, ExtractObjMapFilename(rest));
+                current.material.textureIndices0.x = AddObjTextureAsset(parsedScene, textureCache, texturePath, true);
+            } else if (hasCurrent && (tag == "map_Bump" || tag == "bump" || tag == "map_Kn" || tag == "map_normal")) {
+                std::string rest;
+                std::getline(stream, rest);
+                const std::filesystem::path texturePath = ResolveObjTexturePath(objPath, ExtractObjMapFilename(rest));
+                current.material.textureIndices0.z = AddObjTextureAsset(parsedScene, textureCache, texturePath, false);
+                if (current.material.textureIndices0.z != render::kInvalidResourceIndex) {
+                    current.material.materialParams.w = 1.0f;
+                }
+            } else if (hasCurrent && (tag == "map_Pr" || tag == "map_Ns")) {
+                std::string rest;
+                std::getline(stream, rest);
+                const std::filesystem::path texturePath = ResolveObjTexturePath(objPath, ExtractObjMapFilename(rest));
+                current.material.textureIndices0.y = AddObjTextureAsset(parsedScene, textureCache, texturePath, false);
+            }
+        }
+    }
+    flushCurrent();
+    return records;
+}
+
+struct ObjVertexKey {
+    int position{ 0 };
+    int texCoord{ 0 };
+    int normal{ 0 };
+
+    [[nodiscard]] bool operator==(const ObjVertexKey& other) const
+    {
+        return position == other.position && texCoord == other.texCoord && normal == other.normal;
+    }
+};
+
+struct ObjVertexKeyHash {
+    [[nodiscard]] size_t operator()(const ObjVertexKey& key) const
+    {
+        size_t hash = static_cast<size_t>(key.position) * 73856093u;
+        hash ^= static_cast<size_t>(key.texCoord) * 19349663u;
+        hash ^= static_cast<size_t>(key.normal) * 83492791u;
+        return hash;
+    }
+};
+
+int ParseObjIndexToken(std::string_view token)
+{
+    if (token.empty()) {
+        return 0;
+    }
+    char* end = nullptr;
+    const std::string text(token);
+    return static_cast<int>(std::strtol(text.c_str(), &end, 10));
+}
+
+ObjVertexKey ParseObjFaceVertex(std::string_view token)
+{
+    ObjVertexKey key{};
+    const size_t firstSlash = token.find('/');
+    if (firstSlash == std::string_view::npos) {
+        key.position = ParseObjIndexToken(token);
+        return key;
+    }
+
+    key.position = ParseObjIndexToken(token.substr(0, firstSlash));
+    const size_t secondSlash = token.find('/', firstSlash + 1);
+    if (secondSlash == std::string_view::npos) {
+        key.texCoord = ParseObjIndexToken(token.substr(firstSlash + 1));
+        return key;
+    }
+    key.texCoord = ParseObjIndexToken(token.substr(firstSlash + 1, secondSlash - firstSlash - 1));
+    key.normal = ParseObjIndexToken(token.substr(secondSlash + 1));
+    return key;
+}
+
+template <typename T>
+const T* ResolveObjIndexedValue(std::span<const T> values, int objIndex)
+{
+    if (objIndex == 0 || values.empty()) {
+        return nullptr;
+    }
+    const int resolved = objIndex > 0 ? objIndex - 1 : static_cast<int>(values.size()) + objIndex;
+    if (resolved < 0 || resolved >= static_cast<int>(values.size())) {
+        return nullptr;
+    }
+    return &values[static_cast<size_t>(resolved)];
+}
+
+bool ParseObjMesh(const std::filesystem::path& path, ParsedScene& parsedScene)
+{
+    std::ifstream input(path);
+    if (!input.is_open()) {
+        return false;
+    }
+
+    std::vector<glm::vec3> positions;
+    std::vector<glm::vec3> normals;
+    std::vector<glm::vec2> texCoords;
+    std::unordered_map<std::string, uint32_t> materialLookup;
+
+    parsedScene.materials.clear();
+    parsedScene.materials.push_back(MakeDefaultMaterial());
+    materialLookup.emplace("default", 0u);
+
+    struct ObjPrimitiveBuilder {
+        ParsedPrimitive primitive;
+        std::unordered_map<ObjVertexKey, uint32_t, ObjVertexKeyHash> vertexLookup;
+    };
+    std::unordered_map<uint32_t, ObjPrimitiveBuilder> primitiveBuilders;
+    uint32_t currentMaterial = 0u;
+
+    auto resolveMaterial = [&](std::string_view name) -> uint32_t {
+        const std::string key = TrimAscii(name);
+        if (const auto it = materialLookup.find(key); it != materialLookup.end()) {
+            return it->second;
+        }
+        return 0u;
+    };
+    auto getBuilder = [&](uint32_t materialIndex) -> ObjPrimitiveBuilder& {
+        ObjPrimitiveBuilder& builder = primitiveBuilders[materialIndex];
+        builder.primitive.materialIndex = materialIndex;
+        return builder;
+    };
+    auto appendVertex = [&](ObjPrimitiveBuilder& builder, const ObjVertexKey& key) -> uint32_t {
+        if (const auto it = builder.vertexLookup.find(key); it != builder.vertexLookup.end()) {
+            return it->second;
+        }
+
+        ParsedPrimitive& primitive = builder.primitive;
+        const glm::vec3* position = ResolveObjIndexedValue(std::span<const glm::vec3>(positions.data(), positions.size()), key.position);
+        if (position == nullptr) {
+            return 0u;
+        }
+        primitive.positions.push_back(*position);
+        if (const glm::vec3* normal = ResolveObjIndexedValue(std::span<const glm::vec3>(normals.data(), normals.size()), key.normal)) {
+            primitive.normals.push_back(*normal);
+            primitive.hasNormals = true;
+        } else {
+            primitive.normals.push_back(glm::vec3(0.0f, 1.0f, 0.0f));
+        }
+        if (const glm::vec2* uv = ResolveObjIndexedValue(std::span<const glm::vec2>(texCoords.data(), texCoords.size()), key.texCoord)) {
+            primitive.texCoords.push_back(*uv);
+        } else {
+            primitive.texCoords.push_back(glm::vec2(0.0f));
+        }
+
+        const uint32_t index = static_cast<uint32_t>(primitive.positions.size() - 1);
+        builder.vertexLookup.emplace(key, index);
+        return index;
+    };
+
+    std::string line;
+    while (std::getline(input, line)) {
+        const std::string trimmed = TrimAscii(line);
+        if (trimmed.empty() || trimmed.front() == '#') {
+            continue;
+        }
+        std::istringstream stream(trimmed);
+        std::string tag;
+        stream >> tag;
+        if (tag == "v") {
+            glm::vec3 value(0.0f);
+            if (stream >> value.x >> value.y >> value.z) {
+                positions.push_back(value);
+            }
+        } else if (tag == "vn") {
+            glm::vec3 value(0.0f, 1.0f, 0.0f);
+            if (stream >> value.x >> value.y >> value.z) {
+                normals.push_back(value);
+            }
+        } else if (tag == "vt") {
+            glm::vec2 value(0.0f);
+            if (stream >> value.x >> value.y) {
+                texCoords.push_back(glm::vec2(value.x, 1.0f - value.y));
+            }
+        } else if (tag == "mtllib") {
+            std::string rest;
+            std::getline(stream, rest);
+            std::vector<std::filesystem::path> libraries = ParseObjMtllibs(path, rest);
+            for (const ObjMaterialRecord& record : ParseObjMaterialLibraries(path, parsedScene, libraries)) {
+                const uint32_t index = static_cast<uint32_t>(parsedScene.materials.size());
+                parsedScene.materials.push_back(record.material);
+                materialLookup.emplace(record.name, index);
+            }
+        } else if (tag == "usemtl") {
+            std::string rest;
+            std::getline(stream, rest);
+            currentMaterial = resolveMaterial(rest);
+        } else if (tag == "f") {
+            std::vector<ObjVertexKey> face;
+            std::string token;
+            while (stream >> token) {
+                face.push_back(ParseObjFaceVertex(token));
+            }
+            if (face.size() < 3) {
+                continue;
+            }
+            ObjPrimitiveBuilder& builder = getBuilder(currentMaterial);
+            for (size_t corner = 1; corner + 1 < face.size(); ++corner) {
+                builder.primitive.indices.push_back(appendVertex(builder, face[0]));
+                builder.primitive.indices.push_back(appendVertex(builder, face[corner]));
+                builder.primitive.indices.push_back(appendVertex(builder, face[corner + 1]));
+            }
+        }
+    }
+
+    const uint32_t objectIndex = static_cast<uint32_t>(parsedScene.objects.size());
+    const uint32_t firstPrimitive = static_cast<uint32_t>(parsedScene.primitives.size());
+    for (auto& [_, builder] : primitiveBuilders) {
+        ParsedPrimitive& primitive = builder.primitive;
+        if (primitive.positions.empty() || primitive.indices.empty()) {
+            continue;
+        }
+        primitive.objectIndex = objectIndex;
+        primitive.worldTransform = glm::mat4(1.0f);
+        primitive.tangents = GenerateTangents(primitive.positions, primitive.normals, primitive.texCoords, primitive.indices);
+        primitive.hasTangents = true;
+        parsedScene.primitives.push_back(std::move(primitive));
+    }
+
+    if (parsedScene.primitives.size() == firstPrimitive) {
+        return false;
+    }
+    parsedScene.objects.push_back(ParsedSceneObject{
+        .name = path.stem().string(),
+        .initialWorldTransform = glm::mat4(1.0f),
+        .worldTransform = glm::mat4(1.0f),
+        .firstPrimitive = firstPrimitive,
+        .primitiveCount = static_cast<uint32_t>(parsedScene.primitives.size() - firstPrimitive),
+    });
+    parsedScene.sceneKind = SceneKind::Mesh;
+    return true;
 }
 
 template <typename T>
@@ -2134,6 +2521,14 @@ bool Scene::ParseFromFile(const std::filesystem::path& path)
 
     if (extension == ".fbx") {
         if (!ParseFbxMesh(path, parsedScene)) {
+            return false;
+        }
+        _parsed = std::move(parsed);
+        return _parsed->IsLoaded();
+    }
+
+    if (extension == ".obj") {
+        if (!ParseObjMesh(path, parsedScene)) {
             return false;
         }
         _parsed = std::move(parsed);

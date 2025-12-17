@@ -682,7 +682,8 @@ void ApplySceneModeInference(vesta::render::RendererSettings& settings, const st
         return;
     }
 
-    if (extension == ".glb" || extension == ".GLB" || extension == ".gltf" || extension == ".GLTF") {
+    if (extension == ".glb" || extension == ".GLB" || extension == ".gltf" || extension == ".GLTF" || extension == ".fbx" ||
+        extension == ".FBX" || extension == ".obj" || extension == ".OBJ") {
         settings.displayMode = vesta::render::RendererDisplayMode::DeferredLighting;
         settings.enableRaster = true;
         settings.enableGaussian = true;
@@ -4319,7 +4320,7 @@ std::optional<std::filesystem::path> VestaEngine::open_scene_with_system_dialog(
     dialogInfo.lpstrFile = filePath.data();
     dialogInfo.nMaxFile = static_cast<DWORD>(filePath.size());
     dialogInfo.lpstrFilter =
-        L"Supported Scenes (*.glb;*.gltf;*.fbx;*.ply)\0*.glb;*.gltf;*.fbx;*.ply\0glTF Scenes (*.glb;*.gltf)\0*.glb;*.gltf\0FBX Meshes (*.fbx)\0*.fbx\0Gaussian PLY (*.ply)\0*.ply\0All Files (*.*)\0*.*\0";
+        L"Supported Scenes (*.glb;*.gltf;*.fbx;*.obj;*.ply)\0*.glb;*.gltf;*.fbx;*.obj;*.ply\0glTF Scenes (*.glb;*.gltf)\0*.glb;*.gltf\0OBJ Meshes (*.obj)\0*.obj\0FBX Meshes (*.fbx)\0*.fbx\0Gaussian PLY (*.ply)\0*.ply\0All Files (*.*)\0*.*\0";
     dialogInfo.lpstrInitialDir = initialDirectory.empty() ? nullptr : initialDirectory.c_str();
     dialogInfo.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY;
     dialogInfo.lpstrDefExt = L"glb";
