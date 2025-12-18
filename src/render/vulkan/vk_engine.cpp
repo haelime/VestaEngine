@@ -1446,6 +1446,7 @@ void VestaEngine::finish_benchmark()
                << "taa,taa_feedback,"
                << "ssr,ssr_max_distance,ssr_thickness,ssr_intensity,"
                << "ssgi,ssgi_radius,ssgi_intensity,ssgi_samples,"
+               << "shadow_map,shadow_map_size,shadow_bias,shadow_normal_bias,shadow_strength,"
                << "pt_nee,pt_rr,pt_rr_depth,pt_firefly_clamp,"
                << "pt_denoiser,pt_denoiser_strength,pt_denoiser_temporal,pt_denoiser_iterations,"
                << "requested_backend,active_backend,scene_upload_mode,"
@@ -1512,6 +1513,11 @@ void VestaEngine::finish_benchmark()
            << settings.ssgiRadius << ','
            << settings.ssgiIntensity << ','
            << settings.ssgiSampleCount << ','
+           << (settings.enableShadowMap ? "true" : "false") << ','
+           << settings.shadowMapSize << ','
+           << settings.shadowBias << ','
+           << settings.shadowNormalBias << ','
+           << settings.shadowStrength << ','
            << (settings.pathTraceNextEventEstimation ? "true" : "false") << ','
            << (settings.pathTraceRussianRoulette ? "true" : "false") << ','
            << settings.pathTraceRussianRouletteDepth << ','
@@ -1657,6 +1663,11 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "  \"ssgi_radius\": " << settings.ssgiRadius << ",\n"
            << "  \"ssgi_intensity\": " << settings.ssgiIntensity << ",\n"
            << "  \"ssgi_samples\": " << settings.ssgiSampleCount << ",\n"
+           << "  \"shadow_map\": " << (settings.enableShadowMap ? "true" : "false") << ",\n"
+           << "  \"shadow_map_size\": " << settings.shadowMapSize << ",\n"
+           << "  \"shadow_bias\": " << settings.shadowBias << ",\n"
+           << "  \"shadow_normal_bias\": " << settings.shadowNormalBias << ",\n"
+           << "  \"shadow_strength\": " << settings.shadowStrength << ",\n"
            << "  \"path_trace_next_event_estimation\": " << (settings.pathTraceNextEventEstimation ? "true" : "false") << ",\n"
            << "  \"path_trace_russian_roulette\": " << (settings.pathTraceRussianRoulette ? "true" : "false") << ",\n"
            << "  \"path_trace_russian_roulette_depth\": " << settings.pathTraceRussianRouletteDepth << ",\n"
@@ -2999,6 +3010,15 @@ void VestaEngine::build_debug_ui()
             settings.shadowMapSize = static_cast<uint32_t>(std::clamp(shadowMapSize, 512, 4096));
             _renderer.ResetAccumulation();
         }
+        if (ImGui::SliderFloat("Shadow Bias", &settings.shadowBias, 0.0f, 0.01f, "%.4f")) {
+            _renderer.ResetAccumulation();
+        }
+        if (ImGui::SliderFloat("Normal Bias", &settings.shadowNormalBias, 0.0f, 0.1f, "%.3f")) {
+            _renderer.ResetAccumulation();
+        }
+        if (ImGui::SliderFloat("Shadow Strength", &settings.shadowStrength, 0.0f, 1.0f, "%.2f")) {
+            _renderer.ResetAccumulation();
+        }
 
         const char* backendModes[] = { "Auto", "Compute", "Hardware RT" };
         int backendMode = static_cast<int>(settings.pathTraceBackend);
@@ -3914,6 +3934,15 @@ void VestaEngine::draw_rasterizer_debug_panel()
     int shadowMapSize = static_cast<int>(settings.shadowMapSize);
     if (ImGui::SliderInt("Shadow Map Size", &shadowMapSize, 512, 4096)) {
         settings.shadowMapSize = static_cast<uint32_t>(std::clamp(shadowMapSize, 512, 4096));
+        _renderer.ResetAccumulation();
+    }
+    if (ImGui::SliderFloat("Shadow Bias", &settings.shadowBias, 0.0f, 0.01f, "%.4f")) {
+        _renderer.ResetAccumulation();
+    }
+    if (ImGui::SliderFloat("Normal Bias", &settings.shadowNormalBias, 0.0f, 0.1f, "%.3f")) {
+        _renderer.ResetAccumulation();
+    }
+    if (ImGui::SliderFloat("Shadow Strength", &settings.shadowStrength, 0.0f, 1.0f, "%.2f")) {
         _renderer.ResetAccumulation();
     }
 

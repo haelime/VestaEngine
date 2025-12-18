@@ -476,6 +476,15 @@ void ConfigureDeferredLightingPass(Renderer& renderer, IRenderPass& pass, const 
         settings.enableSsr, settings.ssrMaxDistance, settings.ssrThickness, settings.ssrIntensity);
     lightingPass.SetScreenSpaceGlobalIllumination(
         settings.enableSsgi, settings.ssgiRadius, settings.ssgiIntensity, settings.ssgiSampleCount);
+    if (resources.shadowMap && renderer.GetScene().HasRasterGeometry()) {
+        lightingPass.SetShadowMap(resources.shadowMap,
+            BuildDirectionalShadowViewProjection(renderer.GetScene().GetBounds(), settings.lightDirectionAndIntensity),
+            settings.shadowBias,
+            settings.shadowNormalBias,
+            settings.shadowStrength);
+    } else {
+        lightingPass.SetShadowMap({}, glm::mat4(1.0f), settings.shadowBias, settings.shadowNormalBias, 0.0f);
+    }
     lightingPass.SetOutput(resources.deferredLighting);
     lightingPass.SetDebugOutput(resources.deferredLightingDebug, static_cast<uint32_t>(settings.debugView));
 }

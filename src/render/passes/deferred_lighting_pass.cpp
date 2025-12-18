@@ -2,6 +2,7 @@
 
 #include <array>
 #include <algorithm>
+#include <cstring>
 
 #include <glm/glm.hpp>
 
@@ -21,7 +22,7 @@ struct DeferredLightingPushConstants {
     uint32_t outputImageIndex{ 0 };
     uint32_t debugOutputImageIndex{ kInvalidResourceIndex };
     uint32_t debugView{ 0 };
-    uint32_t padding2{ 0 };
+    uint32_t lightingConstantsBufferIndex{ kInvalidResourceIndex };
     glm::mat4 inverseViewProjection{ 1.0f };
     glm::mat4 viewProjection{ 1.0f };
     glm::vec4 cameraPosition{ 0.0f };
@@ -30,6 +31,14 @@ struct DeferredLightingPushConstants {
     glm::vec4 ssaoParams{ 1.0f, 0.75f, 1.35f, 0.0f };
     glm::vec4 ssrParams{ 1.0f, 18.0f, 0.18f, 0.65f };
     glm::vec4 ssgiParams{ 1.0f, 1.4f, 0.32f, 10.0f };
+};
+
+static_assert(sizeof(DeferredLightingPushConstants) <= 256, "Deferred lighting push constants must fit common Vulkan limits.");
+
+struct DeferredLightingConstants {
+    glm::mat4 lightViewProjection{ 1.0f };
+    glm::vec4 shadowParams{ 0.0015f, 0.015f, 0.82f, 0.0f }; // bias, normal bias, strength, enabled
+    glm::uvec4 shadowIndices{ kInvalidResourceIndex, 0u, 0u, 0u };
 };
 } // namespace
 
@@ -96,6 +105,21 @@ void DeferredLightingPass::SetScreenSpaceGlobalIllumination(bool enabled, float 
         static_cast<float>(std::clamp(sampleCount, 4u, 16u)));
 }
 
+void DeferredLightingPass::SetShadowMap(
+    GraphTextureHandle shadowMap,
+    glm::mat4 lightViewProjection,
+    float bias,
+    float normalBias,
+    float strength)
+{
+    _shadowMap = shadowMap;
+    _lightViewProjection = lightViewProjection;
+    _shadowParams = glm::vec4(std::clamp(bias, 0.0f, 0.02f),
+        std::clamp(normalBias, 0.0f, 0.2f),
+        std::clamp(strength, 0.0f, 1.0f),
+        shadowMap ? 1.0f : 0.0f);
+}
+
 void DeferredLightingPass::Initialize(RenderDevice& device)
 {
     if (_pipeline != VK_NULL_HANDLE || device.GetDevice() == VK_NULL_HANDLE) {
@@ -119,6 +143,15 @@ void DeferredLightingPass::Initialize(RenderDevice& device)
     pipelineDesc.layout = _pipelineLayout;
     pipelineDesc.computeShader = _computeShader;
     _pipeline = vkutil::create_compute_pipeline(vkDevice, pipelineDesc);
+
+    _lightingConstantsBuffer = device.CreateBuffer(BufferDesc{
+        .size = sizeof(DeferredLightingConstants),
+        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+        .allocationFlags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT,
+        .registerBindlessStorage = true,
+        .debugName = "DeferredLightingConstants",
+    });
 }
 
 void DeferredLightingPass::Setup(RenderGraphBuilder& builder)
@@ -127,6 +160,9 @@ void DeferredLightingPass::Setup(RenderGraphBuilder& builder)
     builder.Read(_normal, ResourceUsage::StorageRead);
     builder.Read(_material, ResourceUsage::StorageRead);
     builder.Read(_depth, ResourceUsage::SampledRead);
+    if (_shadowMap) {
+        builder.Read(_shadowMap, ResourceUsage::SampledRead);
+    }
     builder.Write(_output, ResourceUsage::StorageWrite);
     if (_debugOutput) {
         builder.Write(_debugOutput, ResourceUsage::StorageWrite);
@@ -144,9 +180,23 @@ void DeferredLightingPass::Execute(const RenderGraphContext& context)
     const ImageHandle materialHandle = context.GetTextureHandle(_material);
     const ImageHandle depthHandle = context.GetTextureHandle(_depth);
     const ImageHandle outputHandle = context.GetTextureHandle(_output);
+    const uint32_t shadowMapIndex = _shadowMap
+        ? context.GetDevice().GetImageResource(context.GetTextureHandle(_shadowMap)).bindless.sampledImage
+        : kInvalidResourceIndex;
     const uint32_t debugOutputImageIndex = _debugOutput
         ? context.GetDevice().GetImageResource(context.GetTextureHandle(_debugOutput)).bindless.storageImage
         : kInvalidResourceIndex;
+
+    const AllocatedBuffer& lightingConstantsBuffer = context.GetDevice().GetBufferResource(_lightingConstantsBuffer);
+    if (lightingConstantsBuffer.allocationInfo.pMappedData != nullptr) {
+        const DeferredLightingConstants constants{
+            .lightViewProjection = _lightViewProjection,
+            .shadowParams = glm::vec4(_shadowParams.x, _shadowParams.y, _shadowParams.z, shadowMapIndex != kInvalidResourceIndex ? _shadowParams.w : 0.0f),
+            .shadowIndices = glm::uvec4(shadowMapIndex, 0u, 0u, 0u),
+        };
+        std::memcpy(lightingConstantsBuffer.allocationInfo.pMappedData, &constants, sizeof(constants));
+        context.GetDevice().FlushBuffer(_lightingConstantsBuffer, 0, sizeof(constants));
+    }
 
     glm::vec4 cameraPosition = glm::vec4(_camera->GetPosition(), _pointLightPositionAndIntensity.w);
     glm::vec4 environmentParams = _environmentParams;
@@ -163,6 +213,7 @@ void DeferredLightingPass::Execute(const RenderGraphContext& context)
         .outputImageIndex = context.GetDevice().GetImageResource(outputHandle).bindless.storageImage,
         .debugOutputImageIndex = debugOutputImageIndex,
         .debugView = _debugView,
+        .lightingConstantsBufferIndex = lightingConstantsBuffer.bindless.storageBuffer,
         .inverseViewProjection = _camera->GetInverseViewProjection(),
         .viewProjection = _camera->GetViewProjection(),
         .cameraPosition = cameraPosition,
@@ -201,5 +252,6 @@ void DeferredLightingPass::Shutdown(RenderDevice& device)
     vkutil::destroy_pipeline(vkDevice, _pipeline);
     vkutil::destroy_pipeline_layout(vkDevice, _pipelineLayout);
     vkutil::destroy_shader_module(vkDevice, _computeShader);
+    device.DestroyBuffer(_lightingConstantsBuffer);
 }
 } // namespace vesta::render

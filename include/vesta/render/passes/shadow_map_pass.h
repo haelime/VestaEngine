@@ -6,9 +6,14 @@
 
 namespace vesta::scene {
 class Scene;
+struct SceneBounds;
 }
 
 namespace vesta::render {
+[[nodiscard]] glm::mat4 BuildDirectionalShadowViewProjection(
+    const vesta::scene::SceneBounds& bounds,
+    glm::vec4 lightDirectionAndIntensity);
+
 class ShadowMapPass final : public IRenderPass {
 public:
     void SetOutput(GraphTextureHandle shadowMap);

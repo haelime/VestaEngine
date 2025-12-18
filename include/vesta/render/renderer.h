@@ -306,6 +306,9 @@ struct RendererSettings {
     uint32_t ssgiSampleCount{ 10 };
     bool enableShadowMap{ true };
     uint32_t shadowMapSize{ 2048 };
+    float shadowBias{ 0.0015f };
+    float shadowNormalBias{ 0.015f };
+    float shadowStrength{ 0.82f };
     bool animationPlaying{ false };
     float animationTimeScale{ 1.0f };
     float animationTimeSeconds{ 0.0f };

@@ -17,6 +17,26 @@ struct ShadowPushConstants {
 };
 } // namespace
 
+glm::mat4 BuildDirectionalShadowViewProjection(
+    const vesta::scene::SceneBounds& bounds,
+    glm::vec4 lightDirectionAndIntensity)
+{
+    const float radius = glm::max(bounds.radius, 1.0f);
+    glm::vec3 lightDirection = glm::vec3(lightDirectionAndIntensity);
+    if (glm::dot(lightDirection, lightDirection) <= 1.0e-6f) {
+        lightDirection = glm::vec3(-0.4f, -1.0f, -0.3f);
+    }
+    lightDirection = glm::normalize(lightDirection);
+    const glm::vec3 lightPosition = bounds.center - lightDirection * radius * 2.5f;
+    const glm::vec3 up = std::abs(glm::dot(lightDirection, glm::vec3(0.0f, 1.0f, 0.0f))) > 0.92f
+        ? glm::vec3(0.0f, 0.0f, 1.0f)
+        : glm::vec3(0.0f, 1.0f, 0.0f);
+    glm::mat4 lightView = glm::lookAt(lightPosition, bounds.center, up);
+    glm::mat4 lightProjection = glm::ortho(-radius, radius, -radius, radius, 0.05f, radius * 5.5f);
+    lightProjection[1][1] *= -1.0f;
+    return lightProjection * lightView;
+}
+
 void ShadowMapPass::SetOutput(GraphTextureHandle shadowMap)
 {
     _shadowMap = shadowMap;
@@ -89,23 +109,8 @@ void ShadowMapPass::Execute(const RenderGraphContext& context)
         return;
     }
 
-    const auto& bounds = _scene->GetBounds();
-    const float radius = glm::max(bounds.radius, 1.0f);
-    glm::vec3 lightDirection = glm::vec3(_lightDirectionAndIntensity);
-    if (glm::dot(lightDirection, lightDirection) <= 1.0e-6f) {
-        lightDirection = glm::vec3(-0.4f, -1.0f, -0.3f);
-    }
-    lightDirection = glm::normalize(lightDirection);
-    const glm::vec3 lightPosition = bounds.center - lightDirection * radius * 2.5f;
-    const glm::vec3 up = std::abs(glm::dot(lightDirection, glm::vec3(0.0f, 1.0f, 0.0f))) > 0.92f
-        ? glm::vec3(0.0f, 0.0f, 1.0f)
-        : glm::vec3(0.0f, 1.0f, 0.0f);
-    glm::mat4 lightView = glm::lookAt(lightPosition, bounds.center, up);
-    glm::mat4 lightProjection = glm::ortho(-radius, radius, -radius, radius, 0.05f, radius * 5.5f);
-    lightProjection[1][1] *= -1.0f;
-
     ShadowPushConstants pushConstants{
-        .lightViewProjection = lightProjection * lightView,
+        .lightViewProjection = BuildDirectionalShadowViewProjection(_scene->GetBounds(), _lightDirectionAndIntensity),
     };
 
     VkClearValue depthClear{};

@@ -8,6 +8,16 @@ layout(local_size_x = 8, local_size_y = 8) in;
 layout(set = 0, binding = 0) uniform sampler2D sampledImages[];
 layout(rgba16f, set = 0, binding = 1) uniform image2D storageImages[];
 
+struct DeferredLightingConstants {
+    mat4 lightViewProjection;
+    vec4 shadowParams;
+    uvec4 shadowIndices;
+};
+
+layout(set = 0, binding = 2, std430) readonly buffer DeferredLightingConstantsBuffer {
+    DeferredLightingConstants values;
+} lightingConstantsBuffers[];
+
 layout(push_constant) uniform DeferredLightingPushConstants {
     uint albedoImageIndex;
     uint normalImageIndex;
@@ -16,7 +26,7 @@ layout(push_constant) uniform DeferredLightingPushConstants {
     uint outputImageIndex;
     uint debugOutputImageIndex;
     uint debugView;
-    uint padding2;
+    uint lightingConstantsBufferIndex;
     mat4 inverseViewProjection;
     mat4 viewProjection;
     vec4 cameraPosition;
@@ -32,6 +42,7 @@ const uint INVALID_IMAGE_INDEX = 0xffffffffu;
 const uint DEBUG_DIRECT_LIGHTING = 13u;
 const uint DEBUG_INDIRECT_LIGHTING = 14u;
 const uint DEBUG_REFLECTION = 15u;
+const uint INVALID_BUFFER_INDEX = 0xffffffffu;
 
 float DistributionGGX(vec3 N, vec3 H, float roughness)
 {
@@ -257,6 +268,44 @@ vec3 computeScreenSpaceGi(ivec2 pixel, ivec2 size, vec3 worldPosition, vec3 norm
     return (bounce / weightSum) * baseColor * pc.ssgiParams.z;
 }
 
+float computeDirectionalShadow(vec3 worldPosition, vec3 normal, vec3 lightDirection)
+{
+    if (pc.lightingConstantsBufferIndex == INVALID_BUFFER_INDEX) {
+        return 1.0;
+    }
+
+    DeferredLightingConstants constants = lightingConstantsBuffers[nonuniformEXT(int(pc.lightingConstantsBufferIndex))].values;
+    if (constants.shadowParams.w < 0.5 || constants.shadowIndices.x == INVALID_IMAGE_INDEX) {
+        return 1.0;
+    }
+
+    float normalBias = constants.shadowParams.y;
+    vec4 shadowClip = constants.lightViewProjection * vec4(worldPosition + normal * normalBias, 1.0);
+    if (shadowClip.w <= 0.0) {
+        return 1.0;
+    }
+
+    vec3 shadowNdc = shadowClip.xyz / shadowClip.w;
+    vec2 shadowUv = shadowNdc.xy * 0.5 + 0.5;
+    if (shadowUv.x < 0.0 || shadowUv.y < 0.0 || shadowUv.x > 1.0 || shadowUv.y > 1.0) {
+        return 1.0;
+    }
+
+    vec2 texelSize = 1.0 / vec2(textureSize(sampledImages[nonuniformEXT(int(constants.shadowIndices.x))], 0));
+    float slopeBias = constants.shadowParams.x * (1.0 - clamp(dot(normal, lightDirection), 0.0, 1.0));
+    float receiverDepth = shadowNdc.z - max(constants.shadowParams.x, slopeBias);
+    float visibility = 0.0;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            float blockerDepth = texture(sampledImages[nonuniformEXT(int(constants.shadowIndices.x))],
+                shadowUv + vec2(x, y) * texelSize).r;
+            visibility += receiverDepth <= blockerDepth ? 1.0 : 0.0;
+        }
+    }
+    visibility /= 9.0;
+    return mix(1.0 - constants.shadowParams.z, 1.0, visibility);
+}
+
 void main() {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
     ivec2 size = imageSize(storageImages[nonuniformEXT(int(pc.albedoImageIndex))]);
@@ -285,6 +334,7 @@ void main() {
 
     vec3 F0 = mix(vec3(0.04), baseColor, metallic);
     vec3 direct = evaluatePbrLight(baseColor, metallic, roughness, N, V, L, vec3(pc.lightDirectionAndIntensity.w));
+    direct *= computeDirectionalShadow(worldPosition, N, L);
     float pointIntensity = pc.cameraPosition.w;
     if (pointIntensity > 0.0) {
         vec3 pointPosition = vec3(pc.environmentParams.z, pc.environmentParams.w, pc.ssaoParams.w);
