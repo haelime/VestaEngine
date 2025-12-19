@@ -12,10 +12,14 @@ struct DeferredLightingConstants {
     mat4 lightViewProjection;
     vec4 shadowParams;
     uvec4 shadowIndices;
+    vec4 directionalColor;
+    vec4 pointColor;
     vec4 spotPositionAndIntensity;
     vec4 spotDirectionAndParams;
+    vec4 spotColor;
     vec4 areaPositionAndIntensity;
     vec4 areaNormalAndSize;
+    vec4 areaColor;
 };
 
 layout(set = 0, binding = 2, std430) readonly buffer DeferredLightingConstantsBuffer {
@@ -338,7 +342,7 @@ vec3 evaluateLocalLights(DeferredLightingConstants constants,
             N,
             V,
             spotL,
-            vec3(1.0, 0.88, 0.68) * constants.spotPositionAndIntensity.w * attenuation);
+            max(constants.spotColor.rgb, vec3(0.0)) * constants.spotPositionAndIntensity.w * attenuation);
     }
 
     if (constants.areaPositionAndIntensity.w > 0.0) {
@@ -356,7 +360,7 @@ vec3 evaluateLocalLights(DeferredLightingConstants constants,
             N,
             V,
             areaL,
-            vec3(0.86, 0.92, 1.0) * constants.areaPositionAndIntensity.w * attenuation);
+            max(constants.areaColor.rgb, vec3(0.0)) * constants.areaPositionAndIntensity.w * attenuation);
     }
 
     return result;
@@ -389,8 +393,14 @@ void main() {
     vec3 R = reflect(-V, N);
 
     vec3 F0 = mix(vec3(0.04), baseColor, metallic);
-    vec3 direct = evaluatePbrLight(baseColor, metallic, roughness, N, V, L, vec3(pc.lightDirectionAndIntensity.w));
     DeferredLightingConstants lightingConstants = lightingConstantsBuffers[nonuniformEXT(int(pc.lightingConstantsBufferIndex))].values;
+    vec3 direct = evaluatePbrLight(baseColor,
+        metallic,
+        roughness,
+        N,
+        V,
+        L,
+        max(lightingConstants.directionalColor.rgb, vec3(0.0)) * pc.lightDirectionAndIntensity.w);
     direct *= computeDirectionalShadow(worldPosition, N, L);
     direct += evaluateLocalLights(lightingConstants, baseColor, metallic, roughness, worldPosition, N, V);
     float pointIntensity = pc.cameraPosition.w;
@@ -407,7 +417,7 @@ void main() {
             N,
             V,
             pointL,
-            vec3(1.0, 0.82, 0.55) * pointIntensity * attenuation);
+            max(lightingConstants.pointColor.rgb, vec3(0.0)) * pointIntensity * attenuation);
     }
 
     vec3 indirectBounce = computeScreenSpaceGi(pixel, size, worldPosition, N, baseColor) * ao * (1.0 - metallic);

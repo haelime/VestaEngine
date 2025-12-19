@@ -16,6 +16,7 @@ public:
     void SetDebugOutput(GraphTextureHandle output, uint32_t debugView);
     void SetCamera(const Camera* camera);
     void SetLight(glm::vec4 lightDirectionAndIntensity);
+    void SetLightColors(glm::vec4 directional, glm::vec4 point, glm::vec4 spot, glm::vec4 area);
     void SetPointLight(bool enabled, glm::vec4 positionAndIntensity);
     void SetSpotLight(bool enabled, glm::vec4 positionAndIntensity, glm::vec4 directionAndAngle);
     void SetAreaLight(bool enabled, glm::vec4 positionAndIntensity, glm::vec4 normalAndSize);
@@ -42,11 +43,15 @@ private:
     uint32_t _debugView{ 0 };
     const Camera* _camera{ nullptr };
     glm::vec4 _lightDirectionAndIntensity{ -0.4f, -1.0f, -0.3f, 2.0f };
+    glm::vec4 _directionalLightColor{ 1.0f, 1.0f, 1.0f, 0.0f };
     glm::vec4 _pointLightPositionAndIntensity{ 0.0f, 2.0f, 0.0f, 0.0f };
+    glm::vec4 _pointLightColor{ 1.0f, 0.82f, 0.55f, 0.0f };
     glm::vec4 _spotLightPositionAndIntensity{ 0.0f, 3.0f, 2.5f, 0.0f };
     glm::vec4 _spotLightDirectionAndAngle{ 0.0f, -0.8f, -0.6f, 28.0f };
+    glm::vec4 _spotLightColor{ 1.0f, 0.88f, 0.68f, 0.0f };
     glm::vec4 _areaLightPositionAndIntensity{ 0.0f, 3.2f, 0.0f, 0.0f };
     glm::vec4 _areaLightNormalAndSize{ 0.0f, -1.0f, 0.0f, 2.0f };
+    glm::vec4 _areaLightColor{ 0.86f, 0.92f, 1.0f, 0.0f };
     glm::vec4 _environmentParams{ 1.0f, 0.0f, 0.0f, 0.0f };
     glm::vec4 _ssaoParams{ 1.0f, 0.75f, 1.35f, 0.0f };
     glm::vec4 _ssrParams{ 1.0f, 18.0f, 0.18f, 0.65f };

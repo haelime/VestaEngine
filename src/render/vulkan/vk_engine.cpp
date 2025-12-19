@@ -3256,6 +3256,9 @@ void VestaEngine::build_debug_ui()
                     if (ImGui::SliderFloat("Intensity", &settings.lightDirectionAndIntensity.w, 0.0f, 8.0f, "%.2f")) {
                         _renderer.ResetAccumulation();
                     }
+                    if (ImGui::ColorEdit3("Directional Color", &settings.directionalLightColor.x, ImGuiColorEditFlags_Float)) {
+                        _renderer.ResetAccumulation();
+                    }
                     ImGui::SeparatorText("Point Light");
                     if (ImGui::Checkbox("Point Enabled", &settings.enablePointLight)) {
                         _renderer.ResetAccumulation();
@@ -3266,7 +3269,10 @@ void VestaEngine::build_debug_ui()
                     if (ImGui::SliderFloat("Point Intensity", &settings.pointLightPositionAndIntensity.w, 0.0f, 64.0f, "%.2f")) {
                         _renderer.ResetAccumulation();
                     }
-                    ImGui::Text("Color %.2f %.2f %.2f  Radius %.1f", 1.0f, 0.82f, 0.55f, 8.0f);
+                    if (ImGui::ColorEdit3("Point Color", &settings.pointLightColor.x, ImGuiColorEditFlags_Float)) {
+                        _renderer.ResetAccumulation();
+                    }
+                    ImGui::Text("Radius %.1f", 8.0f);
                     ImGui::SeparatorText("Spot Light");
                     if (ImGui::Checkbox("Spot Enabled", &settings.enableSpotLight)) {
                         _renderer.ResetAccumulation();
@@ -3293,6 +3299,9 @@ void VestaEngine::build_debug_ui()
                     if (ImGui::SliderFloat("Spot Intensity", &settings.spotLightPositionAndIntensity.w, 0.0f, 96.0f, "%.2f")) {
                         _renderer.ResetAccumulation();
                     }
+                    if (ImGui::ColorEdit3("Spot Color", &settings.spotLightColor.x, ImGuiColorEditFlags_Float)) {
+                        _renderer.ResetAccumulation();
+                    }
                     ImGui::SeparatorText("Area Light");
                     if (ImGui::Checkbox("Area Enabled", &settings.enableAreaLight)) {
                         _renderer.ResetAccumulation();
@@ -3317,6 +3326,9 @@ void VestaEngine::build_debug_ui()
                         _renderer.ResetAccumulation();
                     }
                     if (ImGui::SliderFloat("Area Intensity", &settings.areaLightPositionAndIntensity.w, 0.0f, 48.0f, "%.2f")) {
+                        _renderer.ResetAccumulation();
+                    }
+                    if (ImGui::ColorEdit3("Area Color", &settings.areaLightColor.x, ImGuiColorEditFlags_Float)) {
                         _renderer.ResetAccumulation();
                     }
                     ImGui::SeparatorText("Environment");

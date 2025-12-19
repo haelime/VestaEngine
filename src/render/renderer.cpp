@@ -469,6 +469,7 @@ void ConfigureDeferredLightingPass(Renderer& renderer, IRenderPass& pass, const 
     lightingPass.SetInputs(resources.gbufferAlbedo, resources.gbufferNormal, resources.gbufferMaterial, resources.sceneDepth);
     lightingPass.SetCamera(&renderer.GetCamera());
     lightingPass.SetLight(settings.lightDirectionAndIntensity);
+    lightingPass.SetLightColors(settings.directionalLightColor, settings.pointLightColor, settings.spotLightColor, settings.areaLightColor);
     lightingPass.SetPointLight(settings.enablePointLight, settings.pointLightPositionAndIntensity);
     lightingPass.SetSpotLight(settings.enableSpotLight, settings.spotLightPositionAndIntensity, settings.spotLightDirectionAndAngle);
     lightingPass.SetAreaLight(settings.enableAreaLight, settings.areaLightPositionAndIntensity, settings.areaLightNormalAndSize);

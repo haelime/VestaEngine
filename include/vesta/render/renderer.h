@@ -315,14 +315,18 @@ struct RendererSettings {
     bool animateDirectionalLight{ false };
     bool animateEnvironment{ false };
     glm::vec4 lightDirectionAndIntensity{ -0.4f, -1.0f, -0.3f, 2.0f };
+    glm::vec4 directionalLightColor{ 1.0f, 1.0f, 1.0f, 0.0f };
     bool enablePointLight{ false };
     glm::vec4 pointLightPositionAndIntensity{ 0.0f, 2.0f, 0.0f, 4.0f };
+    glm::vec4 pointLightColor{ 1.0f, 0.82f, 0.55f, 0.0f };
     bool enableSpotLight{ false };
     glm::vec4 spotLightPositionAndIntensity{ 0.0f, 3.0f, 2.5f, 10.0f };
     glm::vec4 spotLightDirectionAndAngle{ 0.0f, -0.8f, -0.6f, 28.0f };
+    glm::vec4 spotLightColor{ 1.0f, 0.88f, 0.68f, 0.0f };
     bool enableAreaLight{ false };
     glm::vec4 areaLightPositionAndIntensity{ 0.0f, 3.2f, 0.0f, 5.0f };
     glm::vec4 areaLightNormalAndSize{ 0.0f, -1.0f, 0.0f, 2.0f };
+    glm::vec4 areaLightColor{ 0.86f, 0.92f, 1.0f, 0.0f };
     float environmentIntensity{ 1.0f };
     float environmentRotationDegrees{ 0.0f };
     float cameraExposureEv{ 0.0f };

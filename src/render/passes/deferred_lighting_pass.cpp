@@ -39,10 +39,14 @@ struct DeferredLightingConstants {
     glm::mat4 lightViewProjection{ 1.0f };
     glm::vec4 shadowParams{ 0.0015f, 0.015f, 0.82f, 0.0f }; // bias, normal bias, strength, enabled
     glm::uvec4 shadowIndices{ kInvalidResourceIndex, 0u, 0u, 0u };
+    glm::vec4 directionalColor{ 1.0f, 1.0f, 1.0f, 0.0f };
+    glm::vec4 pointColor{ 1.0f, 0.82f, 0.55f, 0.0f };
     glm::vec4 spotPositionAndIntensity{ 0.0f, 3.0f, 2.5f, 0.0f };
     glm::vec4 spotDirectionAndParams{ 0.0f, -0.8f, -0.6f, glm::radians(28.0f) };
+    glm::vec4 spotColor{ 1.0f, 0.88f, 0.68f, 0.0f };
     glm::vec4 areaPositionAndIntensity{ 0.0f, 3.2f, 0.0f, 0.0f };
     glm::vec4 areaNormalAndSize{ 0.0f, -1.0f, 0.0f, 2.0f };
+    glm::vec4 areaColor{ 0.86f, 0.92f, 1.0f, 0.0f };
 };
 } // namespace
 
@@ -73,6 +77,14 @@ void DeferredLightingPass::SetCamera(const Camera* camera)
 void DeferredLightingPass::SetLight(glm::vec4 lightDirectionAndIntensity)
 {
     _lightDirectionAndIntensity = lightDirectionAndIntensity;
+}
+
+void DeferredLightingPass::SetLightColors(glm::vec4 directional, glm::vec4 point, glm::vec4 spot, glm::vec4 area)
+{
+    _directionalLightColor = glm::vec4(glm::max(glm::vec3(directional), glm::vec3(0.0f)), 0.0f);
+    _pointLightColor = glm::vec4(glm::max(glm::vec3(point), glm::vec3(0.0f)), 0.0f);
+    _spotLightColor = glm::vec4(glm::max(glm::vec3(spot), glm::vec3(0.0f)), 0.0f);
+    _areaLightColor = glm::vec4(glm::max(glm::vec3(area), glm::vec3(0.0f)), 0.0f);
 }
 
 void DeferredLightingPass::SetPointLight(bool enabled, glm::vec4 positionAndIntensity)
@@ -225,10 +237,14 @@ void DeferredLightingPass::Execute(const RenderGraphContext& context)
             .lightViewProjection = _lightViewProjection,
             .shadowParams = glm::vec4(_shadowParams.x, _shadowParams.y, _shadowParams.z, shadowMapIndex != kInvalidResourceIndex ? _shadowParams.w : 0.0f),
             .shadowIndices = glm::uvec4(shadowMapIndex, 0u, 0u, 0u),
+            .directionalColor = _directionalLightColor,
+            .pointColor = _pointLightColor,
             .spotPositionAndIntensity = _spotLightPositionAndIntensity,
             .spotDirectionAndParams = glm::vec4(glm::vec3(_spotLightDirectionAndAngle), glm::radians(_spotLightDirectionAndAngle.w)),
+            .spotColor = _spotLightColor,
             .areaPositionAndIntensity = _areaLightPositionAndIntensity,
             .areaNormalAndSize = _areaLightNormalAndSize,
+            .areaColor = _areaLightColor,
         };
         std::memcpy(lightingConstantsBuffer.allocationInfo.pMappedData, &constants, sizeof(constants));
         context.GetDevice().FlushBuffer(_lightingConstantsBuffer, 0, sizeof(constants));
