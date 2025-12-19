@@ -1166,6 +1166,207 @@ bool ParseObjMesh(const std::filesystem::path& path, ParsedScene& parsedScene)
     return true;
 }
 
+struct MeshPlyHeader {
+    size_t vertexCount{ 0 };
+    size_t faceCount{ 0 };
+    std::vector<std::string> vertexProperties;
+    bool ascii{ false };
+};
+
+bool ParseMeshPlyHeader(std::ifstream& input, MeshPlyHeader& header)
+{
+    std::string line;
+    if (!std::getline(input, line) || line != "ply") {
+        return false;
+    }
+
+    enum class Element {
+        None,
+        Vertex,
+        Face,
+    } currentElement = Element::None;
+
+    while (std::getline(input, line)) {
+        if (!line.empty() && line.back() == '\r') {
+            line.pop_back();
+        }
+
+        std::istringstream stream(line);
+        std::string token;
+        stream >> token;
+        if (token == "format") {
+            std::string formatName;
+            stream >> formatName;
+            header.ascii = formatName == "ascii";
+        } else if (token == "element") {
+            std::string elementName;
+            size_t count = 0;
+            stream >> elementName >> count;
+            if (elementName == "vertex") {
+                currentElement = Element::Vertex;
+                header.vertexCount = count;
+            } else if (elementName == "face") {
+                currentElement = Element::Face;
+                header.faceCount = count;
+            } else {
+                currentElement = Element::None;
+            }
+        } else if (token == "property" && currentElement == Element::Vertex) {
+            std::string typeName;
+            std::string propertyName;
+            stream >> typeName;
+            if (typeName != "list") {
+                stream >> propertyName;
+                header.vertexProperties.push_back(propertyName);
+            }
+        } else if (token == "end_header") {
+            return header.ascii && header.vertexCount > 0 && header.faceCount > 0 && !header.vertexProperties.empty();
+        }
+    }
+
+    return false;
+}
+
+bool ParseMeshPly(const std::filesystem::path& path, ParsedScene& parsedScene)
+{
+    std::ifstream input(path);
+    if (!input.is_open()) {
+        return false;
+    }
+
+    MeshPlyHeader header;
+    if (!ParseMeshPlyHeader(input, header)) {
+        return false;
+    }
+
+    std::unordered_map<std::string, size_t> propertyIndex;
+    for (size_t index = 0; index < header.vertexProperties.size(); ++index) {
+        propertyIndex.emplace(header.vertexProperties[index], index);
+    }
+    const auto findProperty = [&](std::string_view name) -> int {
+        const auto it = propertyIndex.find(std::string(name));
+        return it == propertyIndex.end() ? -1 : static_cast<int>(it->second);
+    };
+
+    const int xIndex = findProperty("x");
+    const int yIndex = findProperty("y");
+    const int zIndex = findProperty("z");
+    if (xIndex < 0 || yIndex < 0 || zIndex < 0) {
+        return false;
+    }
+    const int nxIndex = findProperty("nx");
+    const int nyIndex = findProperty("ny");
+    const int nzIndex = findProperty("nz");
+    const int redIndex = findProperty("red");
+    const int greenIndex = findProperty("green");
+    const int blueIndex = findProperty("blue");
+
+    ParsedPrimitive primitive;
+    primitive.positions.reserve(header.vertexCount);
+    primitive.texCoords.resize(header.vertexCount, glm::vec2(0.0f));
+    if (nxIndex >= 0 && nyIndex >= 0 && nzIndex >= 0) {
+        primitive.normals.reserve(header.vertexCount);
+        primitive.hasNormals = true;
+    }
+
+    parsedScene.materials.clear();
+    SceneMaterial material = MakeDefaultMaterial();
+    material.baseColorFactor = glm::vec4(0.78f, 0.76f, 0.72f, 1.0f);
+    material.materialParams = glm::vec4(0.0f, 0.58f, 1.0f, 1.0f);
+    parsedScene.materials.push_back(material);
+
+    std::string line;
+    std::vector<float> values;
+    values.reserve(header.vertexProperties.size());
+    glm::vec3 accumulatedColor(0.0f);
+    size_t colorCount = 0;
+    for (size_t vertexIndex = 0; vertexIndex < header.vertexCount; ++vertexIndex) {
+        if (!std::getline(input, line)) {
+            return false;
+        }
+        values.clear();
+        std::istringstream stream(line);
+        for (size_t property = 0; property < header.vertexProperties.size(); ++property) {
+            float value = 0.0f;
+            stream >> value;
+            values.push_back(value);
+        }
+        if (values.size() < header.vertexProperties.size()) {
+            return false;
+        }
+
+        const auto valueAt = [&](int index, float fallback = 0.0f) {
+            return index >= 0 && static_cast<size_t>(index) < values.size() ? values[static_cast<size_t>(index)] : fallback;
+        };
+        primitive.positions.push_back(glm::vec3(valueAt(xIndex), valueAt(yIndex), valueAt(zIndex)));
+        if (primitive.hasNormals) {
+            glm::vec3 normal(valueAt(nxIndex), valueAt(nyIndex), valueAt(nzIndex));
+            normal = glm::length(normal) > 1.0e-5f ? glm::normalize(normal) : glm::vec3(0.0f, 1.0f, 0.0f);
+            primitive.normals.push_back(normal);
+        }
+        if (redIndex >= 0 && greenIndex >= 0 && blueIndex >= 0) {
+            accumulatedColor += glm::vec3(valueAt(redIndex), valueAt(greenIndex), valueAt(blueIndex)) / 255.0f;
+            ++colorCount;
+        }
+    }
+
+    if (colorCount > 0) {
+        parsedScene.materials[0].baseColorFactor = glm::vec4(glm::clamp(accumulatedColor / static_cast<float>(colorCount),
+                                                               glm::vec3(0.05f),
+                                                               glm::vec3(1.0f)),
+            1.0f);
+    }
+
+    for (size_t faceIndex = 0; faceIndex < header.faceCount; ++faceIndex) {
+        if (!std::getline(input, line)) {
+            return false;
+        }
+        std::istringstream stream(line);
+        uint32_t count = 0;
+        stream >> count;
+        if (count < 3) {
+            continue;
+        }
+        std::vector<uint32_t> face(count);
+        for (uint32_t corner = 0; corner < count; ++corner) {
+            stream >> face[corner];
+            if (face[corner] >= primitive.positions.size()) {
+                return false;
+            }
+        }
+        for (uint32_t corner = 1; corner + 1 < count; ++corner) {
+            primitive.indices.push_back(face[0]);
+            primitive.indices.push_back(face[corner]);
+            primitive.indices.push_back(face[corner + 1]);
+        }
+    }
+
+    if (primitive.positions.empty() || primitive.indices.empty()) {
+        return false;
+    }
+
+    if (!primitive.hasNormals) {
+        primitive.normals.resize(primitive.positions.size(), glm::vec3(0.0f, 1.0f, 0.0f));
+    }
+    primitive.materialIndex = 0;
+    primitive.objectIndex = static_cast<uint32_t>(parsedScene.objects.size());
+    primitive.worldTransform = glm::mat4(1.0f);
+    primitive.tangents = GenerateTangents(primitive.positions, primitive.normals, primitive.texCoords, primitive.indices);
+    primitive.hasTangents = true;
+
+    const uint32_t firstPrimitive = static_cast<uint32_t>(parsedScene.primitives.size());
+    parsedScene.primitives.push_back(std::move(primitive));
+    parsedScene.objects.push_back(ParsedSceneObject{
+        .name = path.stem().string(),
+        .initialWorldTransform = glm::mat4(1.0f),
+        .worldTransform = glm::mat4(1.0f),
+        .firstPrimitive = firstPrimitive,
+        .primitiveCount = 1,
+    });
+    parsedScene.sceneKind = SceneKind::Mesh;
+    return true;
+}
+
 template <typename T>
 bool DecodeFbxArray(std::span<const std::byte> bytes, size_t& offset, size_t elementSize, std::vector<T>& out)
 {
@@ -2511,8 +2712,16 @@ bool Scene::ParseFromFile(const std::filesystem::path& path)
     parsedScene.sceneKind = SceneKind::Empty;
     const std::string extension = ToLowerExtension(path);
 
-    if (std::filesystem::is_directory(path) || extension == ".ply") {
+    if (std::filesystem::is_directory(path)) {
         if (!ParseGaussianPly(path, parsedScene)) {
+            return false;
+        }
+        _parsed = std::move(parsed);
+        return _parsed->IsLoaded();
+    }
+
+    if (extension == ".ply") {
+        if (!ParseMeshPly(path, parsedScene) && !ParseGaussianPly(path, parsedScene)) {
             return false;
         }
         _parsed = std::move(parsed);

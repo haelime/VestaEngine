@@ -663,6 +663,34 @@ const char* SceneUploadModeLabel(vesta::render::SceneUploadMode mode)
     }
 }
 
+bool LooksLikeMeshPly(const std::filesystem::path& path)
+{
+    if (!std::filesystem::is_regular_file(path)) {
+        return false;
+    }
+
+    std::ifstream input(path);
+    if (!input.is_open()) {
+        return false;
+    }
+
+    std::string line;
+    while (std::getline(input, line)) {
+        if (line.starts_with("element face ")) {
+            std::istringstream stream(line);
+            std::string elementToken;
+            std::string faceToken;
+            size_t faceCount = 0;
+            stream >> elementToken >> faceToken >> faceCount;
+            return faceCount > 0;
+        }
+        if (line == "end_header" || line == "end_header\r") {
+            break;
+        }
+    }
+    return false;
+}
+
 void ApplySceneModeInference(vesta::render::RendererSettings& settings, const std::filesystem::path& path)
 {
     if (std::filesystem::is_directory(path)) {
@@ -675,9 +703,15 @@ void ApplySceneModeInference(vesta::render::RendererSettings& settings, const st
 
     const std::filesystem::path extension = path.extension();
     if (extension == ".ply" || extension == ".PLY") {
-        settings.displayMode = vesta::render::RendererDisplayMode::Gaussian;
-        settings.enableRaster = false;
-        settings.enableGaussian = true;
+        if (LooksLikeMeshPly(path)) {
+            settings.displayMode = vesta::render::RendererDisplayMode::DeferredLighting;
+            settings.enableRaster = true;
+            settings.enableGaussian = true;
+        } else {
+            settings.displayMode = vesta::render::RendererDisplayMode::Gaussian;
+            settings.enableRaster = false;
+            settings.enableGaussian = true;
+        }
         settings.enablePathTracing = false;
         return;
     }
@@ -4416,7 +4450,7 @@ std::optional<std::filesystem::path> VestaEngine::open_scene_with_system_dialog(
     dialogInfo.lpstrFile = filePath.data();
     dialogInfo.nMaxFile = static_cast<DWORD>(filePath.size());
     dialogInfo.lpstrFilter =
-        L"Supported Scenes (*.glb;*.gltf;*.fbx;*.obj;*.ply)\0*.glb;*.gltf;*.fbx;*.obj;*.ply\0glTF Scenes (*.glb;*.gltf)\0*.glb;*.gltf\0OBJ Meshes (*.obj)\0*.obj\0FBX Meshes (*.fbx)\0*.fbx\0Gaussian PLY (*.ply)\0*.ply\0All Files (*.*)\0*.*\0";
+        L"Supported Scenes (*.glb;*.gltf;*.fbx;*.obj;*.ply)\0*.glb;*.gltf;*.fbx;*.obj;*.ply\0glTF Scenes (*.glb;*.gltf)\0*.glb;*.gltf\0OBJ Meshes (*.obj)\0*.obj\0FBX Meshes (*.fbx)\0*.fbx\0Mesh or Gaussian PLY (*.ply)\0*.ply\0All Files (*.*)\0*.*\0";
     dialogInfo.lpstrInitialDir = initialDirectory.empty() ? nullptr : initialDirectory.c_str();
     dialogInfo.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY;
     dialogInfo.lpstrDefExt = L"glb";
