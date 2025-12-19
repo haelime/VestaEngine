@@ -39,6 +39,10 @@ struct DeferredLightingConstants {
     glm::mat4 lightViewProjection{ 1.0f };
     glm::vec4 shadowParams{ 0.0015f, 0.015f, 0.82f, 0.0f }; // bias, normal bias, strength, enabled
     glm::uvec4 shadowIndices{ kInvalidResourceIndex, 0u, 0u, 0u };
+    glm::vec4 spotPositionAndIntensity{ 0.0f, 3.0f, 2.5f, 0.0f };
+    glm::vec4 spotDirectionAndParams{ 0.0f, -0.8f, -0.6f, glm::radians(28.0f) };
+    glm::vec4 areaPositionAndIntensity{ 0.0f, 3.2f, 0.0f, 0.0f };
+    glm::vec4 areaNormalAndSize{ 0.0f, -1.0f, 0.0f, 2.0f };
 };
 } // namespace
 
@@ -77,6 +81,34 @@ void DeferredLightingPass::SetPointLight(bool enabled, glm::vec4 positionAndInte
         positionAndIntensity.y,
         positionAndIntensity.z,
         enabled ? std::max(positionAndIntensity.w, 0.0f) : 0.0f);
+}
+
+void DeferredLightingPass::SetSpotLight(bool enabled, glm::vec4 positionAndIntensity, glm::vec4 directionAndAngle)
+{
+    glm::vec3 direction(directionAndAngle);
+    if (glm::dot(direction, direction) <= 1.0e-6f) {
+        direction = glm::vec3(0.0f, -0.8f, -0.6f);
+    }
+    direction = glm::normalize(direction);
+    _spotLightPositionAndIntensity = glm::vec4(positionAndIntensity.x,
+        positionAndIntensity.y,
+        positionAndIntensity.z,
+        enabled ? std::max(positionAndIntensity.w, 0.0f) : 0.0f);
+    _spotLightDirectionAndAngle = glm::vec4(direction, std::clamp(directionAndAngle.w, 5.0f, 80.0f));
+}
+
+void DeferredLightingPass::SetAreaLight(bool enabled, glm::vec4 positionAndIntensity, glm::vec4 normalAndSize)
+{
+    glm::vec3 normal(normalAndSize);
+    if (glm::dot(normal, normal) <= 1.0e-6f) {
+        normal = glm::vec3(0.0f, -1.0f, 0.0f);
+    }
+    normal = glm::normalize(normal);
+    _areaLightPositionAndIntensity = glm::vec4(positionAndIntensity.x,
+        positionAndIntensity.y,
+        positionAndIntensity.z,
+        enabled ? std::max(positionAndIntensity.w, 0.0f) : 0.0f);
+    _areaLightNormalAndSize = glm::vec4(normal, std::clamp(normalAndSize.w, 0.1f, 12.0f));
 }
 
 void DeferredLightingPass::SetEnvironment(glm::vec4 environmentParams)
@@ -193,6 +225,10 @@ void DeferredLightingPass::Execute(const RenderGraphContext& context)
             .lightViewProjection = _lightViewProjection,
             .shadowParams = glm::vec4(_shadowParams.x, _shadowParams.y, _shadowParams.z, shadowMapIndex != kInvalidResourceIndex ? _shadowParams.w : 0.0f),
             .shadowIndices = glm::uvec4(shadowMapIndex, 0u, 0u, 0u),
+            .spotPositionAndIntensity = _spotLightPositionAndIntensity,
+            .spotDirectionAndParams = glm::vec4(glm::vec3(_spotLightDirectionAndAngle), glm::radians(_spotLightDirectionAndAngle.w)),
+            .areaPositionAndIntensity = _areaLightPositionAndIntensity,
+            .areaNormalAndSize = _areaLightNormalAndSize,
         };
         std::memcpy(lightingConstantsBuffer.allocationInfo.pMappedData, &constants, sizeof(constants));
         context.GetDevice().FlushBuffer(_lightingConstantsBuffer, 0, sizeof(constants));

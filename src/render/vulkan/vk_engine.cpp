@@ -1668,6 +1668,9 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "  \"shadow_bias\": " << settings.shadowBias << ",\n"
            << "  \"shadow_normal_bias\": " << settings.shadowNormalBias << ",\n"
            << "  \"shadow_strength\": " << settings.shadowStrength << ",\n"
+           << "  \"point_light\": " << (settings.enablePointLight ? "true" : "false") << ",\n"
+           << "  \"spot_light\": " << (settings.enableSpotLight ? "true" : "false") << ",\n"
+           << "  \"area_light\": " << (settings.enableAreaLight ? "true" : "false") << ",\n"
            << "  \"path_trace_next_event_estimation\": " << (settings.pathTraceNextEventEstimation ? "true" : "false") << ",\n"
            << "  \"path_trace_russian_roulette\": " << (settings.pathTraceRussianRoulette ? "true" : "false") << ",\n"
            << "  \"path_trace_russian_roulette_depth\": " << settings.pathTraceRussianRouletteDepth << ",\n"
@@ -3264,6 +3267,58 @@ void VestaEngine::build_debug_ui()
                         _renderer.ResetAccumulation();
                     }
                     ImGui::Text("Color %.2f %.2f %.2f  Radius %.1f", 1.0f, 0.82f, 0.55f, 8.0f);
+                    ImGui::SeparatorText("Spot Light");
+                    if (ImGui::Checkbox("Spot Enabled", &settings.enableSpotLight)) {
+                        _renderer.ResetAccumulation();
+                    }
+                    if (ImGui::DragFloat3("Spot Position", &settings.spotLightPositionAndIntensity.x, 0.05f, -100.0f, 100.0f, "%.2f")) {
+                        _renderer.ResetAccumulation();
+                    }
+                    float spotDirection[3] = {
+                        settings.spotLightDirectionAndAngle.x,
+                        settings.spotLightDirectionAndAngle.y,
+                        settings.spotLightDirectionAndAngle.z,
+                    };
+                    if (ImGui::SliderFloat3("Spot Direction", spotDirection, -1.0f, 1.0f, "%.2f")) {
+                        glm::vec3 direction(spotDirection[0], spotDirection[1], spotDirection[2]);
+                        if (glm::length(direction) > 1.0e-4f) {
+                            direction = glm::normalize(direction);
+                            settings.spotLightDirectionAndAngle = glm::vec4(direction, settings.spotLightDirectionAndAngle.w);
+                            _renderer.ResetAccumulation();
+                        }
+                    }
+                    if (ImGui::SliderFloat("Spot Angle", &settings.spotLightDirectionAndAngle.w, 5.0f, 80.0f, "%.1f deg")) {
+                        _renderer.ResetAccumulation();
+                    }
+                    if (ImGui::SliderFloat("Spot Intensity", &settings.spotLightPositionAndIntensity.w, 0.0f, 96.0f, "%.2f")) {
+                        _renderer.ResetAccumulation();
+                    }
+                    ImGui::SeparatorText("Area Light");
+                    if (ImGui::Checkbox("Area Enabled", &settings.enableAreaLight)) {
+                        _renderer.ResetAccumulation();
+                    }
+                    if (ImGui::DragFloat3("Area Position", &settings.areaLightPositionAndIntensity.x, 0.05f, -100.0f, 100.0f, "%.2f")) {
+                        _renderer.ResetAccumulation();
+                    }
+                    float areaNormal[3] = {
+                        settings.areaLightNormalAndSize.x,
+                        settings.areaLightNormalAndSize.y,
+                        settings.areaLightNormalAndSize.z,
+                    };
+                    if (ImGui::SliderFloat3("Area Normal", areaNormal, -1.0f, 1.0f, "%.2f")) {
+                        glm::vec3 normal(areaNormal[0], areaNormal[1], areaNormal[2]);
+                        if (glm::length(normal) > 1.0e-4f) {
+                            normal = glm::normalize(normal);
+                            settings.areaLightNormalAndSize = glm::vec4(normal, settings.areaLightNormalAndSize.w);
+                            _renderer.ResetAccumulation();
+                        }
+                    }
+                    if (ImGui::SliderFloat("Area Size", &settings.areaLightNormalAndSize.w, 0.1f, 12.0f, "%.2f")) {
+                        _renderer.ResetAccumulation();
+                    }
+                    if (ImGui::SliderFloat("Area Intensity", &settings.areaLightPositionAndIntensity.w, 0.0f, 48.0f, "%.2f")) {
+                        _renderer.ResetAccumulation();
+                    }
                     ImGui::SeparatorText("Environment");
                     if (ImGui::SliderFloat("Env Intensity", &settings.environmentIntensity, 0.0f, 4.0f, "%.2f")) {
                         _renderer.ResetAccumulation();

@@ -12,6 +12,10 @@ struct DeferredLightingConstants {
     mat4 lightViewProjection;
     vec4 shadowParams;
     uvec4 shadowIndices;
+    vec4 spotPositionAndIntensity;
+    vec4 spotDirectionAndParams;
+    vec4 areaPositionAndIntensity;
+    vec4 areaNormalAndSize;
 };
 
 layout(set = 0, binding = 2, std430) readonly buffer DeferredLightingConstantsBuffer {
@@ -306,6 +310,58 @@ float computeDirectionalShadow(vec3 worldPosition, vec3 normal, vec3 lightDirect
     return mix(1.0 - constants.shadowParams.z, 1.0, visibility);
 }
 
+vec3 evaluateLocalLights(DeferredLightingConstants constants,
+    vec3 baseColor,
+    float metallic,
+    float roughness,
+    vec3 worldPosition,
+    vec3 N,
+    vec3 V)
+{
+    vec3 result = vec3(0.0);
+
+    if (constants.spotPositionAndIntensity.w > 0.0) {
+        vec3 spotPosition = constants.spotPositionAndIntensity.xyz;
+        vec3 pointToLight = spotPosition - worldPosition;
+        float distanceToLight = max(length(pointToLight), 1.0e-4);
+        vec3 spotL = pointToLight / distanceToLight;
+        vec3 spotDirection = normalize(constants.spotDirectionAndParams.xyz);
+        float outerAngle = clamp(constants.spotDirectionAndParams.w, 0.05, 1.55);
+        float outerCos = cos(outerAngle);
+        float innerCos = cos(outerAngle * 0.78);
+        float coneCos = dot(normalize(worldPosition - spotPosition), spotDirection);
+        float cone = smoothstep(outerCos, innerCos, coneCos);
+        float attenuation = cone / max(distanceToLight * distanceToLight, 0.08);
+        result += evaluatePbrLight(baseColor,
+            metallic,
+            roughness,
+            N,
+            V,
+            spotL,
+            vec3(1.0, 0.88, 0.68) * constants.spotPositionAndIntensity.w * attenuation);
+    }
+
+    if (constants.areaPositionAndIntensity.w > 0.0) {
+        vec3 areaPosition = constants.areaPositionAndIntensity.xyz;
+        vec3 pointToLight = areaPosition - worldPosition;
+        float distanceToLight = max(length(pointToLight), 1.0e-4);
+        vec3 areaL = pointToLight / distanceToLight;
+        vec3 areaNormal = normalize(constants.areaNormalAndSize.xyz);
+        float size = max(constants.areaNormalAndSize.w, 0.1);
+        float facing = max(dot(areaNormal, -areaL), 0.0);
+        float attenuation = facing * size * size / max(distanceToLight * distanceToLight + size * size, 0.08);
+        result += evaluatePbrLight(baseColor,
+            metallic,
+            roughness,
+            N,
+            V,
+            areaL,
+            vec3(0.86, 0.92, 1.0) * constants.areaPositionAndIntensity.w * attenuation);
+    }
+
+    return result;
+}
+
 void main() {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
     ivec2 size = imageSize(storageImages[nonuniformEXT(int(pc.albedoImageIndex))]);
@@ -334,7 +390,9 @@ void main() {
 
     vec3 F0 = mix(vec3(0.04), baseColor, metallic);
     vec3 direct = evaluatePbrLight(baseColor, metallic, roughness, N, V, L, vec3(pc.lightDirectionAndIntensity.w));
+    DeferredLightingConstants lightingConstants = lightingConstantsBuffers[nonuniformEXT(int(pc.lightingConstantsBufferIndex))].values;
     direct *= computeDirectionalShadow(worldPosition, N, L);
+    direct += evaluateLocalLights(lightingConstants, baseColor, metallic, roughness, worldPosition, N, V);
     float pointIntensity = pc.cameraPosition.w;
     if (pointIntensity > 0.0) {
         vec3 pointPosition = vec3(pc.environmentParams.z, pc.environmentParams.w, pc.ssaoParams.w);

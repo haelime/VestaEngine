@@ -470,6 +470,8 @@ void ConfigureDeferredLightingPass(Renderer& renderer, IRenderPass& pass, const 
     lightingPass.SetCamera(&renderer.GetCamera());
     lightingPass.SetLight(settings.lightDirectionAndIntensity);
     lightingPass.SetPointLight(settings.enablePointLight, settings.pointLightPositionAndIntensity);
+    lightingPass.SetSpotLight(settings.enableSpotLight, settings.spotLightPositionAndIntensity, settings.spotLightDirectionAndAngle);
+    lightingPass.SetAreaLight(settings.enableAreaLight, settings.areaLightPositionAndIntensity, settings.areaLightNormalAndSize);
     lightingPass.SetEnvironment(glm::vec4(settings.environmentIntensity, glm::radians(settings.environmentRotationDegrees), 0.0f, 0.0f));
     lightingPass.SetAmbientOcclusion(settings.enableSsao, settings.ssaoRadius, settings.ssaoIntensity);
     lightingPass.SetScreenSpaceReflections(
