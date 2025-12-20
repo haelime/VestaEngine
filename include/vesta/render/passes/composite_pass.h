@@ -29,7 +29,13 @@ public:
     void SetCompare(uint32_t compareMode, float splitPosition, float differenceScale);
     void SetExposure(float exposureEv);
     void SetToneMapping(uint32_t toneMappingMode);
-    void SetPostProcess(float saturation, float contrast, bool vignetteEnabled, float vignetteStrength);
+    void SetPostProcess(float saturation,
+        float contrast,
+        bool vignetteEnabled,
+        float vignetteStrength,
+        bool bloomEnabled,
+        float bloomThreshold,
+        float bloomIntensity);
     void SetAmbientOcclusion(bool enabled, float radius, float intensity);
     void SetCameraMatrices(const glm::mat4& viewProjection, const glm::mat4& inverseViewProjection);
     void SetDepthRange(float nearPlane, float farPlane);
@@ -72,6 +78,9 @@ private:
     float _contrast{ 1.0f };
     bool _vignetteEnabled{ false };
     float _vignetteStrength{ 0.0f };
+    bool _bloomEnabled{ false };
+    float _bloomThreshold{ 1.0f };
+    float _bloomIntensity{ 0.1f };
     glm::vec4 _ssaoParams{ 1.0f, 0.75f, 1.35f, 0.0f };
     glm::mat4 _viewProjection{ 1.0f };
     glm::mat4 _inverseViewProjection{ 1.0f };

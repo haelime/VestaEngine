@@ -1487,7 +1487,9 @@ void VestaEngine::finish_benchmark()
                << "gaussian,path_tracing,texture_streaming,indirect_draw,frustum_culling,distance_culling,"
                << "gaussian_trained,gaussian_count,gaussian_sh_degree,gaussian_view_dependent_color,gaussian_antialiasing,"
                << "gaussian_fast_culling,gaussian_opacity,gaussian_mix,gaussian_interactive_preview,"
-               << "pt_scale,environment_intensity,environment_rotation_deg,exposure_ev,aperture_radius,focal_distance,"
+               << "pt_scale,environment_intensity,environment_rotation_deg,exposure_ev,"
+               << "bloom,bloom_threshold,bloom_intensity,vignette,vignette_strength,saturation,contrast,"
+               << "aperture_radius,focal_distance,"
                << "avg_frame_ms,p95_frame_ms,min_frame_ms,max_frame_ms,avg_fps,frame_count,"
                << "vertices,triangles,surfaces,textures_total,textures_resident,parse_ms,prepare_ms,"
                << "geometry_upload_ms,texture_upload_ms,blas_ms,tlas_ms,"
@@ -1582,6 +1584,13 @@ void VestaEngine::finish_benchmark()
            << settings.environmentIntensity << ','
            << settings.environmentRotationDegrees << ','
            << settings.cameraExposureEv << ','
+           << (settings.enableBloom ? "true" : "false") << ','
+           << settings.bloomThreshold << ','
+           << settings.bloomIntensity << ','
+           << (settings.enableVignette ? "true" : "false") << ','
+           << settings.vignetteStrength << ','
+           << settings.colorGradingSaturation << ','
+           << settings.colorGradingContrast << ','
            << settings.cameraApertureRadius << ','
            << settings.cameraFocalDistance << ','
            << averageFrameMs << ','
@@ -1719,6 +1728,13 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "  \"environment_intensity\": " << settings.environmentIntensity << ",\n"
            << "  \"environment_rotation_degrees\": " << settings.environmentRotationDegrees << ",\n"
            << "  \"exposure_ev\": " << settings.cameraExposureEv << ",\n"
+           << "  \"bloom\": " << (settings.enableBloom ? "true" : "false") << ",\n"
+           << "  \"bloom_threshold\": " << settings.bloomThreshold << ",\n"
+           << "  \"bloom_intensity\": " << settings.bloomIntensity << ",\n"
+           << "  \"vignette\": " << (settings.enableVignette ? "true" : "false") << ",\n"
+           << "  \"vignette_strength\": " << settings.vignetteStrength << ",\n"
+           << "  \"saturation\": " << settings.colorGradingSaturation << ",\n"
+           << "  \"contrast\": " << settings.colorGradingContrast << ",\n"
            << "  \"aperture_radius\": " << settings.cameraApertureRadius << ",\n"
            << "  \"focal_distance\": " << settings.cameraFocalDistance << ",\n"
            << "  \"camera_fov_degrees\": " << camera.GetFovDegrees() << ",\n"
@@ -4375,9 +4391,9 @@ void VestaEngine::draw_post_process_panel()
     }
 
     ImGui::SeparatorText("Implemented vs Stub");
-    ImGui::BulletText("Exposure and ACES-style display transform are live in CompositePass.");
+    ImGui::BulletText("Exposure, ACES-style display transform, bloom, color controls, and vignette are live in CompositePass.");
     ImGui::BulletText("Depth-of-field parameters are live for path tracing camera settings.");
-    ImGui::BulletText("Bloom, vignette, FXAA, and motion blur are staged controls until post passes are added.");
+    ImGui::BulletText("FXAA and motion blur are staged controls until post passes are added.");
 }
 
 void VestaEngine::draw_advanced_portfolio_panel()

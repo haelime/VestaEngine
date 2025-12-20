@@ -20,6 +20,7 @@ layout(push_constant) uniform CompositePushConstants {
     vec4 params;
     vec4 compareParams;
     vec4 postParams;
+    vec4 bloomParams;
     vec4 ssaoParams;
     mat4 inverseViewProjection;
 } pc;
@@ -91,6 +92,7 @@ vec3 reconstructWorldPosition(ivec2 pixel, ivec2 size, float depth)
 
 vec3 applyDisplayTransform(vec3 color);
 vec3 applyPostProcess(vec3 color, vec2 uv);
+vec3 computeBloom(vec2 uv);
 vec3 heatmap(float value);
 
 float computeScreenSpaceAo(ivec2 pixel, ivec2 size, vec3 worldPosition, vec3 normal, float depth)
@@ -343,6 +345,56 @@ vec3 applyPostProcess(vec3 color, vec2 uv)
     return clamp(color, vec3(0.0), vec3(1.0));
 }
 
+vec3 sampleBloomSource(uint imageIndex, vec2 uv)
+{
+    if (!hasImage(imageIndex)) {
+        return vec3(0.0);
+    }
+    ivec2 imageSizeValue = imageSize(storageImages[nonuniformEXT(int(imageIndex))]);
+    ivec2 samplePixel = clamp(ivec2(uv * vec2(imageSizeValue)), ivec2(0), imageSizeValue - ivec2(1));
+    return applyDisplayTransform(imageLoad(storageImages[nonuniformEXT(int(imageIndex))], samplePixel).rgb);
+}
+
+vec3 bloomExtract(vec3 color)
+{
+    float threshold = max(pc.bloomParams.x, 0.0);
+    float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
+    float knee = smoothstep(threshold * 0.72, max(threshold, 0.0001), luminance);
+    return color * knee;
+}
+
+vec3 computeBloom(vec2 uv)
+{
+    if (pc.bloomParams.z < 0.5 || pc.bloomParams.y <= 0.0) {
+        return vec3(0.0);
+    }
+
+    uint sourceImage = hasImage(pc.imageIndices0.x) ? pc.imageIndices0.x : pc.imageIndices0.y;
+    if (!hasImage(sourceImage)) {
+        return vec3(0.0);
+    }
+
+    ivec2 sourceSize = imageSize(storageImages[nonuniformEXT(int(sourceImage))]);
+    vec2 texel = 1.0 / vec2(sourceSize);
+    const vec2 offsets[13] = vec2[](
+        vec2(0.0, 0.0),
+        vec2(1.0, 0.0), vec2(-1.0, 0.0), vec2(0.0, 1.0), vec2(0.0, -1.0),
+        vec2(1.0, 1.0), vec2(-1.0, 1.0), vec2(1.0, -1.0), vec2(-1.0, -1.0),
+        vec2(2.0, 0.0), vec2(-2.0, 0.0), vec2(0.0, 2.0), vec2(0.0, -2.0));
+    const float weights[13] = float[](
+        0.18,
+        0.11, 0.11, 0.11, 0.11,
+        0.07, 0.07, 0.07, 0.07,
+        0.04, 0.04, 0.04, 0.04);
+
+    vec3 bloom = vec3(0.0);
+    for (int sampleIndex = 0; sampleIndex < 13; ++sampleIndex) {
+        vec2 sampleUv = clamp(uv + offsets[sampleIndex] * texel * 2.0, vec2(0.0), vec2(1.0));
+        bloom += bloomExtract(sampleBloomSource(sourceImage, sampleUv)) * weights[sampleIndex];
+    }
+    return bloom * pc.bloomParams.y;
+}
+
 vec3 resolveGaussianDebugView(vec4 gaussianColor, ivec2 pixel, vec2 uv)
 {
     uint gaussianDebugView = pc.imageIndices1.z;
@@ -433,12 +485,12 @@ void main() {
     vec4 gaussianColor = resolveGaussian(pixel, uv);
     vec3 debugColor = resolveDebugView(pixel);
     if (debugColor.x >= 0.0) {
-        outColor = vec4(applyPostProcess(debugColor, uv), 1.0);
+        outColor = vec4(applyPostProcess(debugColor + computeBloom(uv), uv), 1.0);
         return;
     }
     vec3 gaussianDebugColor = resolveGaussianDebugView(gaussianColor, pixel, uv);
     if (gaussianDebugColor.x >= 0.0) {
-        outColor = vec4(applyPostProcess(gaussianDebugColor, uv), 1.0);
+        outColor = vec4(applyPostProcess(gaussianDebugColor + computeBloom(uv), uv), 1.0);
         return;
     }
 
@@ -450,7 +502,7 @@ void main() {
             float splitPosition = clamp(pc.compareParams.y, 0.02, 0.98);
             vec3 splitColor = uv.x < splitPosition ? rasterDisplay : pathDisplay;
             float divider = 1.0 - smoothstep(0.0, 0.003, abs(uv.x - splitPosition));
-            outColor = vec4(applyPostProcess(mix(splitColor, vec3(1.0), divider), uv), 1.0);
+            outColor = vec4(applyPostProcess(mix(splitColor, vec3(1.0), divider) + computeBloom(uv), uv), 1.0);
             return;
         }
         if (compareMode == 2u) {
@@ -477,6 +529,7 @@ void main() {
     if (pc.imageIndices1.x != 2u) {
         composite = applyDisplayTransform(composite);
     }
+    composite += computeBloom(uv);
     composite = applyPostProcess(composite, uv);
     outColor = vec4(composite, 1.0);
 }

@@ -24,6 +24,7 @@ struct CompositePushConstants {
     glm::vec4 params{ 0.25f, 0.0f, 0.0f, 0.0f };
     glm::vec4 compareParams{ 0.0f, 0.5f, 4.0f, 0.0f };
     glm::vec4 postParams{ 1.0f, 1.0f, 0.0f, 0.0f };
+    glm::vec4 bloomParams{ 1.0f, 0.1f, 0.0f, 0.0f };
     glm::vec4 ssaoParams{ 1.0f, 0.75f, 1.35f, 0.0f };
     glm::mat4 inverseViewProjection{ 1.0f };
 };
@@ -108,12 +109,21 @@ void CompositePass::SetToneMapping(uint32_t toneMappingMode)
     _toneMappingMode = toneMappingMode;
 }
 
-void CompositePass::SetPostProcess(float saturation, float contrast, bool vignetteEnabled, float vignetteStrength)
+void CompositePass::SetPostProcess(float saturation,
+    float contrast,
+    bool vignetteEnabled,
+    float vignetteStrength,
+    bool bloomEnabled,
+    float bloomThreshold,
+    float bloomIntensity)
 {
     _saturation = std::clamp(saturation, 0.0f, 2.0f);
     _contrast = std::clamp(contrast, 0.25f, 2.0f);
     _vignetteEnabled = vignetteEnabled;
     _vignetteStrength = std::clamp(vignetteStrength, 0.0f, 1.0f);
+    _bloomEnabled = bloomEnabled;
+    _bloomThreshold = std::clamp(bloomThreshold, 0.0f, 8.0f);
+    _bloomIntensity = std::clamp(bloomIntensity, 0.0f, 2.0f);
 }
 
 void CompositePass::SetAmbientOcclusion(bool enabled, float radius, float intensity)
@@ -226,6 +236,7 @@ void CompositePass::Execute(const RenderGraphContext& context)
         .params = glm::vec4(_gaussianMix, _exposureEv, _nearPlane, _farPlane),
         .compareParams = glm::vec4(static_cast<float>(_compareMode), _compareSplitPosition, _compareDifferenceScale, static_cast<float>(_toneMappingMode)),
         .postParams = glm::vec4(_saturation, _contrast, _vignetteEnabled ? 1.0f : 0.0f, _vignetteStrength),
+        .bloomParams = glm::vec4(_bloomThreshold, _bloomIntensity, _bloomEnabled ? 1.0f : 0.0f, 0.0f),
         .ssaoParams = _ssaoParams,
         .inverseViewProjection = _inverseViewProjection,
     };

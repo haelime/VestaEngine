@@ -269,7 +269,7 @@ struct RendererSettings {
     uint32_t ddgiRaysPerProbe{ 128 };
     bool showGiIndirectOnly{ false };
     ToneMappingMode toneMappingMode{ ToneMappingMode::ACES };
-    bool enableBloom{ false };
+    bool enableBloom{ true };
     bool enableColorGrading{ false };
     bool enableVignette{ false };
     bool enableMotionBlur{ false };
