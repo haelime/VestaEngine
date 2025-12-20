@@ -2023,6 +2023,23 @@ void VestaEngine::build_main_menu_bar()
             if (ImGui::MenuItem("Load garden_input.ply", nullptr, false, !sceneLoadInProgress)) {
                 load_scene_path("assets/demo/garden_input.ply");
             }
+            if (ImGui::BeginMenu("Benchmark Scenes", !sceneLoadInProgress)) {
+                const auto sceneItem = [&](const char* label, const char* path) {
+                    const bool exists = std::filesystem::exists(path);
+                    if (ImGui::MenuItem(label, nullptr, false, exists)) {
+                        load_scene_path(path);
+                    }
+                };
+                sceneItem("Sponza Atrium", "assets/benchmark_scenes/sponza/sponza.obj");
+                sceneItem("Amazon Bistro Exterior", "assets/benchmark_scenes/bistro_exterior/exterior.obj");
+                sceneItem("Amazon Bistro Interior", "assets/benchmark_scenes/bistro_interior/interior.obj");
+                sceneItem("San Miguel Low Poly", "assets/benchmark_scenes/san_miguel/san-miguel-low-poly.obj");
+                sceneItem("Cornell Box", "assets/benchmark_scenes/cornell_box/cornell-box.obj");
+                sceneItem("Stanford Bunny", "assets/benchmark_scenes/stanford_bunny/bunny/reconstruction/bun_zipper.ply");
+                sceneItem("Stanford Dragon", "assets/benchmark_scenes/stanford_dragon/dragon_recon/dragon_vrip_res2.ply");
+                sceneItem("Stanford Buddha", "assets/benchmark_scenes/stanford_buddha/happy_recon/happy_vrip_res2.ply");
+                ImGui::EndMenu();
+            }
             if (ImGui::MenuItem(
                     "Reload Current", nullptr, false, !sceneLoadInProgress && !_renderer.GetScene().GetSourcePath().empty())) {
                 if (UseAsyncSceneLoading(settings)) {
