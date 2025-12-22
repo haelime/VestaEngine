@@ -36,7 +36,9 @@ public:
         bool bloomEnabled,
         float bloomThreshold,
         float bloomIntensity,
-        bool fxaaEnabled);
+        bool fxaaEnabled,
+        bool motionBlurEnabled,
+        float motionBlurStrength);
     void SetAmbientOcclusion(bool enabled, float radius, float intensity);
     void SetCameraMatrices(const glm::mat4& viewProjection, const glm::mat4& inverseViewProjection);
     void SetDepthRange(float nearPlane, float farPlane);
@@ -83,6 +85,8 @@ private:
     float _bloomThreshold{ 1.0f };
     float _bloomIntensity{ 0.1f };
     bool _fxaaEnabled{ false };
+    bool _motionBlurEnabled{ false };
+    float _motionBlurStrength{ 0.35f };
     glm::vec4 _ssaoParams{ 1.0f, 0.75f, 1.35f, 0.0f };
     glm::mat4 _viewProjection{ 1.0f };
     glm::mat4 _inverseViewProjection{ 1.0f };

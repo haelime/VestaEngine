@@ -22,6 +22,7 @@ layout(push_constant) uniform CompositePushConstants {
     vec4 postParams;
     vec4 bloomParams;
     vec4 ssaoParams;
+    vec4 motionBlurParams;
     mat4 inverseViewProjection;
 } pc;
 
@@ -94,6 +95,7 @@ vec3 applyDisplayTransform(vec3 color);
 vec3 applyPostProcess(vec3 color, vec2 uv);
 vec3 computeBloom(vec2 uv);
 vec3 applyFxaa(vec3 color, vec2 uv);
+vec3 applyMotionBlur(vec3 color, vec2 uv);
 vec3 heatmap(float value);
 
 float computeScreenSpaceAo(ivec2 pixel, ivec2 size, vec3 worldPosition, vec3 normal, float depth)
@@ -423,6 +425,41 @@ vec3 applyFxaa(vec3 color, vec2 uv)
     return mix(color, average, edgeAmount * 0.42);
 }
 
+vec3 applyMotionBlur(vec3 color, vec2 uv)
+{
+    if (pc.motionBlurParams.x < 0.5 || pc.motionBlurParams.y <= 0.0) {
+        return color;
+    }
+    if (!hasImage(pc.imageIndices0.x) || !hasImage(pc.imageIndices3.y)) {
+        return color;
+    }
+
+    ivec2 motionSize = imageSize(storageImages[nonuniformEXT(int(pc.imageIndices3.y))]);
+    ivec2 motionPixel = clamp(ivec2(uv * vec2(motionSize)), ivec2(0), motionSize - ivec2(1));
+    vec2 motion = imageLoad(storageImages[nonuniformEXT(int(pc.imageIndices3.y))], motionPixel).xy;
+    float motionMagnitude = length(motion);
+    if (motionMagnitude < 0.0002) {
+        return color;
+    }
+
+    int sampleCount = int(clamp(pc.motionBlurParams.z, 3.0, 9.0));
+    vec3 accumulated = color;
+    float weightSum = 1.0;
+    float strength = clamp(pc.motionBlurParams.y, 0.0, 2.0);
+    for (int sampleIndex = 1; sampleIndex < 9; ++sampleIndex) {
+        if (sampleIndex >= sampleCount) {
+            break;
+        }
+        float t = float(sampleIndex) / float(sampleCount - 1);
+        float centered = t - 0.5;
+        float weight = 1.0 - abs(centered) * 1.7;
+        vec2 sampleUv = clamp(uv - motion * centered * strength, vec2(0.0), vec2(1.0));
+        accumulated += sampleBloomSource(pc.imageIndices0.x, sampleUv) * weight;
+        weightSum += weight;
+    }
+    return accumulated / max(weightSum, 0.0001);
+}
+
 vec3 resolveGaussianDebugView(vec4 gaussianColor, ivec2 pixel, vec2 uv)
 {
     uint gaussianDebugView = pc.imageIndices1.z;
@@ -557,6 +594,7 @@ void main() {
     if (pc.imageIndices1.x != 2u) {
         composite = applyDisplayTransform(composite);
     }
+    composite = applyMotionBlur(composite, uv);
     composite = applyFxaa(composite, uv);
     composite += computeBloom(uv);
     composite = applyPostProcess(composite, uv);

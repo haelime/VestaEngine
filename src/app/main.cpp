@@ -38,6 +38,8 @@ void PrintUsage()
         << "  --ssgi-radius <value>         SSGI sample radius.\n"
         << "  --ssgi-intensity <value>      SSGI bounce strength.\n"
         << "  --ssgi-samples <4-16>         SSGI sample count.\n"
+        << "  --motion-blur <on|off>        Toggle screen-space motion blur.\n"
+        << "  --motion-blur-strength <0-2>  Motion blur sample spread.\n"
         << "  --benchmark <csv-path>        Run a timed benchmark and exit.\n"
         << "  --screenshot <png-path>       Save a PNG capture during benchmark.\n"
         << "  --benchmark-seconds <value>   Benchmark capture duration.\n"
@@ -557,6 +559,31 @@ int main(int argc, char* argv[])
                 return 1;
             }
             options.startupSsgiSamples = samples;
+            continue;
+        }
+        if (argument == "--motion-blur") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            options.startupMotionBlurEnabled = ParseToggle(value);
+            if (!options.startupMotionBlurEnabled.has_value()) {
+                std::cerr << "Invalid motion blur toggle: " << value << "\n";
+                return 1;
+            }
+            continue;
+        }
+        if (argument == "--motion-blur-strength") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            float strength = 0.0f;
+            if (!TryParseFloat(value, strength) || strength < 0.0f || strength > 2.0f) {
+                std::cerr << "Invalid motion blur strength: " << value << "\n";
+                return 1;
+            }
+            options.startupMotionBlurStrength = strength;
             continue;
         }
         if (argument == "--benchmark") {

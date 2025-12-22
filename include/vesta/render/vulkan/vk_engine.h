@@ -48,6 +48,8 @@ struct EngineLaunchOptions {
     std::optional<float> startupSsgiRadius;
     std::optional<float> startupSsgiIntensity;
     std::optional<uint32_t> startupSsgiSamples;
+    std::optional<bool> startupMotionBlurEnabled;
+    std::optional<float> startupMotionBlurStrength;
     std::optional<BenchmarkConfig> benchmark;
     std::filesystem::path startupLogPath{ "out/startup.log" };
     bool safeStartupMode{ true };

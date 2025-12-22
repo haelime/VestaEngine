@@ -1001,6 +1001,14 @@ void VestaEngine::init_renderer()
         settings.ssgiSampleCount = std::clamp(*_launchOptions.startupSsgiSamples, 4u, 16u);
         resetAccumulation = true;
     }
+    if (_launchOptions.startupMotionBlurEnabled.has_value()) {
+        settings.enableMotionBlur = *_launchOptions.startupMotionBlurEnabled;
+        resetAccumulation = true;
+    }
+    if (_launchOptions.startupMotionBlurStrength.has_value()) {
+        settings.motionBlurStrength = std::clamp(*_launchOptions.startupMotionBlurStrength, 0.0f, 2.0f);
+        resetAccumulation = true;
+    }
     if (_launchOptions.benchmark.has_value()) {
         settings.frameTimingCapture = true;
         settings.benchmarkOverlay = false;
@@ -1488,7 +1496,7 @@ void VestaEngine::finish_benchmark()
                << "gaussian_trained,gaussian_count,gaussian_sh_degree,gaussian_view_dependent_color,gaussian_antialiasing,"
                << "gaussian_fast_culling,gaussian_opacity,gaussian_mix,gaussian_interactive_preview,"
                << "pt_scale,environment_intensity,environment_rotation_deg,exposure_ev,"
-               << "bloom,bloom_threshold,bloom_intensity,fxaa,vignette,vignette_strength,saturation,contrast,"
+               << "bloom,bloom_threshold,bloom_intensity,fxaa,motion_blur,motion_blur_strength,vignette,vignette_strength,saturation,contrast,"
                << "aperture_radius,focal_distance,"
                << "avg_frame_ms,p95_frame_ms,min_frame_ms,max_frame_ms,avg_fps,frame_count,"
                << "vertices,triangles,surfaces,textures_total,textures_resident,parse_ms,prepare_ms,"
@@ -1588,6 +1596,8 @@ void VestaEngine::finish_benchmark()
            << settings.bloomThreshold << ','
            << settings.bloomIntensity << ','
            << (settings.enableFxaa ? "true" : "false") << ','
+           << (settings.enableMotionBlur ? "true" : "false") << ','
+           << settings.motionBlurStrength << ','
            << (settings.enableVignette ? "true" : "false") << ','
            << settings.vignetteStrength << ','
            << settings.colorGradingSaturation << ','
@@ -1733,6 +1743,8 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "  \"bloom_threshold\": " << settings.bloomThreshold << ",\n"
            << "  \"bloom_intensity\": " << settings.bloomIntensity << ",\n"
            << "  \"fxaa\": " << (settings.enableFxaa ? "true" : "false") << ",\n"
+           << "  \"motion_blur\": " << (settings.enableMotionBlur ? "true" : "false") << ",\n"
+           << "  \"motion_blur_strength\": " << settings.motionBlurStrength << ",\n"
            << "  \"vignette\": " << (settings.enableVignette ? "true" : "false") << ",\n"
            << "  \"vignette_strength\": " << settings.vignetteStrength << ",\n"
            << "  \"saturation\": " << settings.colorGradingSaturation << ",\n"
@@ -4384,6 +4396,9 @@ void VestaEngine::draw_post_process_panel()
     }
     ImGui::Checkbox("FXAA", &settings.enableFxaa);
     ImGui::Checkbox("Motion Blur", &settings.enableMotionBlur);
+    if (settings.enableMotionBlur) {
+        ImGui::SliderFloat("Motion Blur Strength", &settings.motionBlurStrength, 0.0f, 2.0f, "%.2f");
+    }
     ImGui::SeparatorText("Depth of Field");
     if (ImGui::SliderFloat("Aperture Radius", &settings.cameraApertureRadius, 0.0f, 0.25f, "%.3f")) {
         _renderer.ResetAccumulation();
@@ -4393,9 +4408,9 @@ void VestaEngine::draw_post_process_panel()
     }
 
     ImGui::SeparatorText("Implemented vs Stub");
-    ImGui::BulletText("Exposure, ACES-style display transform, bloom, FXAA, color controls, and vignette are live in CompositePass.");
+    ImGui::BulletText("Exposure, ACES-style display transform, bloom, FXAA, motion blur, color controls, and vignette are live in CompositePass.");
     ImGui::BulletText("Depth-of-field parameters are live for path tracing camera settings.");
-    ImGui::BulletText("Motion blur is staged until a velocity-aware post pass is added.");
+    ImGui::BulletText("Motion blur uses the GBuffer motion vector target for a lightweight screen-space blur.");
 }
 
 void VestaEngine::draw_advanced_portfolio_panel()

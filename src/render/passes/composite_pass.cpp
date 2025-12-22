@@ -26,6 +26,7 @@ struct CompositePushConstants {
     glm::vec4 postParams{ 1.0f, 1.0f, 0.0f, 0.0f };
     glm::vec4 bloomParams{ 1.0f, 0.1f, 0.0f, 0.0f };
     glm::vec4 ssaoParams{ 1.0f, 0.75f, 1.35f, 0.0f };
+    glm::vec4 motionBlurParams{ 0.0f, 0.35f, 5.0f, 0.0f };
     glm::mat4 inverseViewProjection{ 1.0f };
 };
 } // namespace
@@ -116,7 +117,9 @@ void CompositePass::SetPostProcess(float saturation,
     bool bloomEnabled,
     float bloomThreshold,
     float bloomIntensity,
-    bool fxaaEnabled)
+    bool fxaaEnabled,
+    bool motionBlurEnabled,
+    float motionBlurStrength)
 {
     _saturation = std::clamp(saturation, 0.0f, 2.0f);
     _contrast = std::clamp(contrast, 0.25f, 2.0f);
@@ -126,6 +129,8 @@ void CompositePass::SetPostProcess(float saturation,
     _bloomThreshold = std::clamp(bloomThreshold, 0.0f, 8.0f);
     _bloomIntensity = std::clamp(bloomIntensity, 0.0f, 2.0f);
     _fxaaEnabled = fxaaEnabled;
+    _motionBlurEnabled = motionBlurEnabled;
+    _motionBlurStrength = std::clamp(motionBlurStrength, 0.0f, 2.0f);
 }
 
 void CompositePass::SetAmbientOcclusion(bool enabled, float radius, float intensity)
@@ -240,6 +245,7 @@ void CompositePass::Execute(const RenderGraphContext& context)
         .postParams = glm::vec4(_saturation, _contrast, _vignetteEnabled ? 1.0f : 0.0f, _vignetteStrength),
         .bloomParams = glm::vec4(_bloomThreshold, _bloomIntensity, _bloomEnabled ? 1.0f : 0.0f, _fxaaEnabled ? 1.0f : 0.0f),
         .ssaoParams = _ssaoParams,
+        .motionBlurParams = glm::vec4(_motionBlurEnabled ? 1.0f : 0.0f, _motionBlurStrength, 5.0f, 0.0f),
         .inverseViewProjection = _inverseViewProjection,
     };
 
