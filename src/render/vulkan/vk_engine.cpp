@@ -133,6 +133,21 @@ const char* PresentModeLabel(VkPresentModeKHR mode)
     }
 }
 
+const char* EnvironmentPresetLabel(uint32_t preset)
+{
+    switch (preset) {
+    case 1u:
+        return "Sunset";
+    case 2u:
+        return "Night";
+    case 3u:
+        return "Forest";
+    case 0u:
+    default:
+        return "Studio";
+    }
+}
+
 const char* PathTraceBackendLabel(vesta::render::PathTraceBackend backend)
 {
     switch (backend) {
@@ -1009,6 +1024,18 @@ void VestaEngine::init_renderer()
         settings.motionBlurStrength = std::clamp(*_launchOptions.startupMotionBlurStrength, 0.0f, 2.0f);
         resetAccumulation = true;
     }
+    if (_launchOptions.startupEnvironmentPreset.has_value()) {
+        settings.environmentPreset = std::clamp(*_launchOptions.startupEnvironmentPreset, 0u, 3u);
+        resetAccumulation = true;
+    }
+    if (_launchOptions.startupEnvironmentDiffuseStrength.has_value()) {
+        settings.environmentDiffuseStrength = std::clamp(*_launchOptions.startupEnvironmentDiffuseStrength, 0.0f, 2.0f);
+        resetAccumulation = true;
+    }
+    if (_launchOptions.startupEnvironmentSpecularStrength.has_value()) {
+        settings.environmentSpecularStrength = std::clamp(*_launchOptions.startupEnvironmentSpecularStrength, 0.0f, 2.0f);
+        resetAccumulation = true;
+    }
     if (_launchOptions.benchmark.has_value()) {
         settings.frameTimingCapture = true;
         settings.benchmarkOverlay = false;
@@ -1495,7 +1522,7 @@ void VestaEngine::finish_benchmark()
                << "gaussian,path_tracing,texture_streaming,indirect_draw,frustum_culling,distance_culling,"
                << "gaussian_trained,gaussian_count,gaussian_sh_degree,gaussian_view_dependent_color,gaussian_antialiasing,"
                << "gaussian_fast_culling,gaussian_opacity,gaussian_mix,gaussian_interactive_preview,"
-               << "pt_scale,environment_intensity,environment_rotation_deg,exposure_ev,"
+               << "pt_scale,environment_intensity,environment_rotation_deg,environment_preset,ibl_diffuse,ibl_specular,exposure_ev,"
                << "bloom,bloom_threshold,bloom_intensity,fxaa,motion_blur,motion_blur_strength,vignette,vignette_strength,saturation,contrast,"
                << "aperture_radius,focal_distance,"
                << "avg_frame_ms,p95_frame_ms,min_frame_ms,max_frame_ms,avg_fps,frame_count,"
@@ -1591,6 +1618,9 @@ void VestaEngine::finish_benchmark()
            << settings.pathTraceResolutionScale << ','
            << settings.environmentIntensity << ','
            << settings.environmentRotationDegrees << ','
+           << CsvEscape(EnvironmentPresetLabel(settings.environmentPreset)) << ','
+           << settings.environmentDiffuseStrength << ','
+           << settings.environmentSpecularStrength << ','
            << settings.cameraExposureEv << ','
            << (settings.enableBloom ? "true" : "false") << ','
            << settings.bloomThreshold << ','
@@ -1738,6 +1768,9 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "  \"path_trace_frame_index\": " << _renderer.GetPathTraceFrameIndex() << ",\n"
            << "  \"environment_intensity\": " << settings.environmentIntensity << ",\n"
            << "  \"environment_rotation_degrees\": " << settings.environmentRotationDegrees << ",\n"
+           << "  \"environment_preset\": \"" << EnvironmentPresetLabel(settings.environmentPreset) << "\",\n"
+           << "  \"ibl_diffuse_strength\": " << settings.environmentDiffuseStrength << ",\n"
+           << "  \"ibl_specular_strength\": " << settings.environmentSpecularStrength << ",\n"
            << "  \"exposure_ev\": " << settings.cameraExposureEv << ",\n"
            << "  \"bloom\": " << (settings.enableBloom ? "true" : "false") << ",\n"
            << "  \"bloom_threshold\": " << settings.bloomThreshold << ",\n"
@@ -2252,10 +2285,22 @@ void VestaEngine::build_main_menu_bar()
                     _renderer.ResetAccumulation();
                 }
                 ImGui::SeparatorText("Environment");
+                const char* environmentPresets[] = { "Studio", "Sunset", "Night", "Forest" };
+                int environmentPreset = static_cast<int>(std::clamp(settings.environmentPreset, 0u, 3u));
+                if (ImGui::Combo("Env Preset", &environmentPreset, environmentPresets, IM_ARRAYSIZE(environmentPresets))) {
+                    settings.environmentPreset = static_cast<uint32_t>(environmentPreset);
+                    _renderer.ResetAccumulation();
+                }
                 if (ImGui::SliderFloat("Env Intensity", &settings.environmentIntensity, 0.0f, 4.0f, "%.2f")) {
                     _renderer.ResetAccumulation();
                 }
                 if (ImGui::SliderFloat("Env Rotation", &settings.environmentRotationDegrees, 0.0f, 360.0f, "%.1f deg")) {
+                    _renderer.ResetAccumulation();
+                }
+                if (ImGui::SliderFloat("IBL Diffuse", &settings.environmentDiffuseStrength, 0.0f, 2.0f, "%.2f")) {
+                    _renderer.ResetAccumulation();
+                }
+                if (ImGui::SliderFloat("IBL Specular", &settings.environmentSpecularStrength, 0.0f, 2.0f, "%.2f")) {
                     _renderer.ResetAccumulation();
                 }
                 if (ImGui::MenuItem("Select For Drag")) {
@@ -3413,13 +3458,25 @@ void VestaEngine::build_debug_ui()
                         _renderer.ResetAccumulation();
                     }
                     ImGui::SeparatorText("Environment");
+                    const char* environmentPresets[] = { "Studio", "Sunset", "Night", "Forest" };
+                    int environmentPreset = static_cast<int>(std::clamp(settings.environmentPreset, 0u, 3u));
+                    if (ImGui::Combo("Preset", &environmentPreset, environmentPresets, IM_ARRAYSIZE(environmentPresets))) {
+                        settings.environmentPreset = static_cast<uint32_t>(environmentPreset);
+                        _renderer.ResetAccumulation();
+                    }
                     if (ImGui::SliderFloat("Env Intensity", &settings.environmentIntensity, 0.0f, 4.0f, "%.2f")) {
                         _renderer.ResetAccumulation();
                     }
                     if (ImGui::SliderFloat("Env Rotation", &settings.environmentRotationDegrees, 0.0f, 360.0f, "%.1f deg")) {
                         _renderer.ResetAccumulation();
                     }
-                    ImGui::TextUnformatted("Source Procedural Sky");
+                    if (ImGui::SliderFloat("IBL Diffuse", &settings.environmentDiffuseStrength, 0.0f, 2.0f, "%.2f")) {
+                        _renderer.ResetAccumulation();
+                    }
+                    if (ImGui::SliderFloat("IBL Specular", &settings.environmentSpecularStrength, 0.0f, 2.0f, "%.2f")) {
+                        _renderer.ResetAccumulation();
+                    }
+                    ImGui::Text("Source Procedural IBL: %s", EnvironmentPresetLabel(settings.environmentPreset));
                     ImGui::EndTabItem();
                 }
                 if (ImGui::BeginTabItem("Animation")) {

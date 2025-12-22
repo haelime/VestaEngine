@@ -330,6 +330,9 @@ struct RendererSettings {
     glm::vec4 areaLightColor{ 0.86f, 0.92f, 1.0f, 0.0f };
     float environmentIntensity{ 1.0f };
     float environmentRotationDegrees{ 0.0f };
+    uint32_t environmentPreset{ 0 };
+    float environmentDiffuseStrength{ 0.22f };
+    float environmentSpecularStrength{ 0.45f };
     float cameraExposureEv{ 0.0f };
     float cameraApertureRadius{ 0.0f };
     float cameraFocalDistance{ 5.0f };

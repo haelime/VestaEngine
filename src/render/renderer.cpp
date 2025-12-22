@@ -473,7 +473,11 @@ void ConfigureDeferredLightingPass(Renderer& renderer, IRenderPass& pass, const 
     lightingPass.SetPointLight(settings.enablePointLight, settings.pointLightPositionAndIntensity);
     lightingPass.SetSpotLight(settings.enableSpotLight, settings.spotLightPositionAndIntensity, settings.spotLightDirectionAndAngle);
     lightingPass.SetAreaLight(settings.enableAreaLight, settings.areaLightPositionAndIntensity, settings.areaLightNormalAndSize);
-    lightingPass.SetEnvironment(glm::vec4(settings.environmentIntensity, glm::radians(settings.environmentRotationDegrees), 0.0f, 0.0f));
+    lightingPass.SetEnvironment(glm::vec4(settings.environmentIntensity,
+        glm::radians(settings.environmentRotationDegrees),
+        static_cast<float>(settings.environmentPreset),
+        settings.environmentDiffuseStrength));
+    lightingPass.SetEnvironmentSpecularStrength(settings.environmentSpecularStrength);
     lightingPass.SetAmbientOcclusion(settings.enableSsao, settings.ssaoRadius, settings.ssaoIntensity);
     lightingPass.SetScreenSpaceReflections(
         settings.enableSsr, settings.ssrMaxDistance, settings.ssrThickness, settings.ssrIntensity);
@@ -544,7 +548,10 @@ void ConfigurePathTracerPass(Renderer& renderer, IRenderPass& pass, const Render
     pathTracerPass.SetEnabled(settings.enablePathTracing);
     pathTracerPass.SetBackendPreference(settings.pathTraceBackend);
     pathTracerPass.SetLight(settings.lightDirectionAndIntensity);
-    pathTracerPass.SetEnvironment(glm::vec4(settings.environmentIntensity, glm::radians(settings.environmentRotationDegrees), 0.0f, 0.0f));
+    pathTracerPass.SetEnvironment(glm::vec4(settings.environmentIntensity,
+        glm::radians(settings.environmentRotationDegrees),
+        static_cast<float>(settings.environmentPreset),
+        settings.environmentDiffuseStrength));
     const glm::vec3 cameraRight = glm::normalize(glm::cross(renderer.GetCamera().GetForward(), renderer.GetCamera().GetUp()));
     pathTracerPass.SetLens(glm::vec4(cameraRight, settings.cameraApertureRadius),
         glm::vec4(renderer.GetCamera().GetUp(), settings.cameraFocalDistance));

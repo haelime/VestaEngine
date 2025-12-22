@@ -40,6 +40,7 @@ struct DeferredLightingConstants {
     glm::vec4 shadowParams{ 0.0015f, 0.015f, 0.82f, 0.0f }; // bias, normal bias, strength, enabled
     glm::uvec4 shadowIndices{ kInvalidResourceIndex, 0u, 0u, 0u };
     glm::vec4 directionalColor{ 1.0f, 1.0f, 1.0f, 0.0f };
+    glm::vec4 pointPositionAndIntensity{ 0.0f, 2.0f, 0.0f, 0.0f };
     glm::vec4 pointColor{ 1.0f, 0.82f, 0.55f, 0.0f };
     glm::vec4 spotPositionAndIntensity{ 0.0f, 3.0f, 2.5f, 0.0f };
     glm::vec4 spotDirectionAndParams{ 0.0f, -0.8f, -0.6f, glm::radians(28.0f) };
@@ -126,6 +127,11 @@ void DeferredLightingPass::SetAreaLight(bool enabled, glm::vec4 positionAndInten
 void DeferredLightingPass::SetEnvironment(glm::vec4 environmentParams)
 {
     _environmentParams = environmentParams;
+}
+
+void DeferredLightingPass::SetEnvironmentSpecularStrength(float strength)
+{
+    _environmentSpecularStrength = std::clamp(strength, 0.0f, 2.0f);
 }
 
 void DeferredLightingPass::SetAmbientOcclusion(bool enabled, float radius, float intensity)
@@ -238,6 +244,7 @@ void DeferredLightingPass::Execute(const RenderGraphContext& context)
             .shadowParams = glm::vec4(_shadowParams.x, _shadowParams.y, _shadowParams.z, shadowMapIndex != kInvalidResourceIndex ? _shadowParams.w : 0.0f),
             .shadowIndices = glm::uvec4(shadowMapIndex, 0u, 0u, 0u),
             .directionalColor = _directionalLightColor,
+            .pointPositionAndIntensity = _pointLightPositionAndIntensity,
             .pointColor = _pointLightColor,
             .spotPositionAndIntensity = _spotLightPositionAndIntensity,
             .spotDirectionAndParams = glm::vec4(glm::vec3(_spotLightDirectionAndAngle), glm::radians(_spotLightDirectionAndAngle.w)),
@@ -250,12 +257,10 @@ void DeferredLightingPass::Execute(const RenderGraphContext& context)
         context.GetDevice().FlushBuffer(_lightingConstantsBuffer, 0, sizeof(constants));
     }
 
-    glm::vec4 cameraPosition = glm::vec4(_camera->GetPosition(), _pointLightPositionAndIntensity.w);
+    glm::vec4 cameraPosition = glm::vec4(_camera->GetPosition(), 0.0f);
     glm::vec4 environmentParams = _environmentParams;
-    environmentParams.z = _pointLightPositionAndIntensity.x;
-    environmentParams.w = _pointLightPositionAndIntensity.y;
     glm::vec4 ssaoParams = _ssaoParams;
-    ssaoParams.w = _pointLightPositionAndIntensity.z;
+    ssaoParams.w = _environmentSpecularStrength;
 
     DeferredLightingPushConstants pushConstants{
         .albedoImageIndex = context.GetDevice().GetImageResource(albedoHandle).bindless.storageImage,

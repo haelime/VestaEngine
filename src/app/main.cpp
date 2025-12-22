@@ -40,6 +40,9 @@ void PrintUsage()
         << "  --ssgi-samples <4-16>         SSGI sample count.\n"
         << "  --motion-blur <on|off>        Toggle screen-space motion blur.\n"
         << "  --motion-blur-strength <0-2>  Motion blur sample spread.\n"
+        << "  --env-preset <studio|sunset|night|forest>\n"
+        << "  --ibl-diffuse <0-2>           Diffuse environment lighting strength.\n"
+        << "  --ibl-specular <0-2>          Specular environment reflection strength.\n"
         << "  --benchmark <csv-path>        Run a timed benchmark and exit.\n"
         << "  --screenshot <png-path>       Save a PNG capture during benchmark.\n"
         << "  --benchmark-seconds <value>   Benchmark capture duration.\n"
@@ -93,6 +96,23 @@ std::optional<vesta::render::PathTraceBackend> ParsePathTraceBackend(std::string
     }
     if (value == "hardwarert" || value == "hardware-rt" || value == "rt") {
         return vesta::render::PathTraceBackend::HardwareRT;
+    }
+    return std::nullopt;
+}
+
+std::optional<uint32_t> ParseEnvironmentPreset(std::string_view value)
+{
+    if (value == "studio" || value == "default") {
+        return 0u;
+    }
+    if (value == "sunset" || value == "warm") {
+        return 1u;
+    }
+    if (value == "night" || value == "cool") {
+        return 2u;
+    }
+    if (value == "forest" || value == "soft") {
+        return 3u;
     }
     return std::nullopt;
 }
@@ -584,6 +604,44 @@ int main(int argc, char* argv[])
                 return 1;
             }
             options.startupMotionBlurStrength = strength;
+            continue;
+        }
+        if (argument == "--env-preset") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            options.startupEnvironmentPreset = ParseEnvironmentPreset(value);
+            if (!options.startupEnvironmentPreset.has_value()) {
+                std::cerr << "Unknown environment preset: " << value << "\n";
+                return 1;
+            }
+            continue;
+        }
+        if (argument == "--ibl-diffuse") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            float strength = 0.0f;
+            if (!TryParseFloat(value, strength) || strength < 0.0f || strength > 2.0f) {
+                std::cerr << "Invalid IBL diffuse strength: " << value << "\n";
+                return 1;
+            }
+            options.startupEnvironmentDiffuseStrength = strength;
+            continue;
+        }
+        if (argument == "--ibl-specular") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            float strength = 0.0f;
+            if (!TryParseFloat(value, strength) || strength < 0.0f || strength > 2.0f) {
+                std::cerr << "Invalid IBL specular strength: " << value << "\n";
+                return 1;
+            }
+            options.startupEnvironmentSpecularStrength = strength;
             continue;
         }
         if (argument == "--benchmark") {
