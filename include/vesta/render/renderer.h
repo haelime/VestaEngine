@@ -273,7 +273,7 @@ struct RendererSettings {
     bool enableColorGrading{ false };
     bool enableVignette{ false };
     bool enableMotionBlur{ false };
-    bool enableFxaa{ false };
+    bool enableFxaa{ true };
     float bloomThreshold{ 1.0f };
     float bloomIntensity{ 0.1f };
     float vignetteStrength{ 0.0f };

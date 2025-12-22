@@ -93,6 +93,7 @@ vec3 reconstructWorldPosition(ivec2 pixel, ivec2 size, float depth)
 vec3 applyDisplayTransform(vec3 color);
 vec3 applyPostProcess(vec3 color, vec2 uv);
 vec3 computeBloom(vec2 uv);
+vec3 applyFxaa(vec3 color, vec2 uv);
 vec3 heatmap(float value);
 
 float computeScreenSpaceAo(ivec2 pixel, ivec2 size, vec3 worldPosition, vec3 normal, float depth)
@@ -395,6 +396,33 @@ vec3 computeBloom(vec2 uv)
     return bloom * pc.bloomParams.y;
 }
 
+vec3 applyFxaa(vec3 color, vec2 uv)
+{
+    if (pc.bloomParams.w < 0.5) {
+        return color;
+    }
+
+    uint sourceImage = hasImage(pc.imageIndices0.x) ? pc.imageIndices0.x : pc.imageIndices0.y;
+    if (!hasImage(sourceImage)) {
+        return color;
+    }
+
+    ivec2 sourceSize = imageSize(storageImages[nonuniformEXT(int(sourceImage))]);
+    vec2 texel = 1.0 / vec2(sourceSize);
+    vec3 north = sampleBloomSource(sourceImage, clamp(uv + vec2(0.0, -texel.y), vec2(0.0), vec2(1.0)));
+    vec3 south = sampleBloomSource(sourceImage, clamp(uv + vec2(0.0, texel.y), vec2(0.0), vec2(1.0)));
+    vec3 east = sampleBloomSource(sourceImage, clamp(uv + vec2(texel.x, 0.0), vec2(0.0), vec2(1.0)));
+    vec3 west = sampleBloomSource(sourceImage, clamp(uv + vec2(-texel.x, 0.0), vec2(0.0), vec2(1.0)));
+
+    vec3 lumaWeights = vec3(0.299, 0.587, 0.114);
+    float centerLuma = dot(color, lumaWeights);
+    float minLuma = min(centerLuma, min(min(dot(north, lumaWeights), dot(south, lumaWeights)), min(dot(east, lumaWeights), dot(west, lumaWeights))));
+    float maxLuma = max(centerLuma, max(max(dot(north, lumaWeights), dot(south, lumaWeights)), max(dot(east, lumaWeights), dot(west, lumaWeights))));
+    float edgeAmount = smoothstep(0.04, 0.22, maxLuma - minLuma);
+    vec3 average = (north + south + east + west) * 0.25;
+    return mix(color, average, edgeAmount * 0.42);
+}
+
 vec3 resolveGaussianDebugView(vec4 gaussianColor, ivec2 pixel, vec2 uv)
 {
     uint gaussianDebugView = pc.imageIndices1.z;
@@ -485,12 +513,12 @@ void main() {
     vec4 gaussianColor = resolveGaussian(pixel, uv);
     vec3 debugColor = resolveDebugView(pixel);
     if (debugColor.x >= 0.0) {
-        outColor = vec4(applyPostProcess(debugColor + computeBloom(uv), uv), 1.0);
+        outColor = vec4(applyPostProcess(applyFxaa(debugColor, uv) + computeBloom(uv), uv), 1.0);
         return;
     }
     vec3 gaussianDebugColor = resolveGaussianDebugView(gaussianColor, pixel, uv);
     if (gaussianDebugColor.x >= 0.0) {
-        outColor = vec4(applyPostProcess(gaussianDebugColor + computeBloom(uv), uv), 1.0);
+        outColor = vec4(applyPostProcess(applyFxaa(gaussianDebugColor, uv) + computeBloom(uv), uv), 1.0);
         return;
     }
 
@@ -502,7 +530,7 @@ void main() {
             float splitPosition = clamp(pc.compareParams.y, 0.02, 0.98);
             vec3 splitColor = uv.x < splitPosition ? rasterDisplay : pathDisplay;
             float divider = 1.0 - smoothstep(0.0, 0.003, abs(uv.x - splitPosition));
-            outColor = vec4(applyPostProcess(mix(splitColor, vec3(1.0), divider) + computeBloom(uv), uv), 1.0);
+            outColor = vec4(applyPostProcess(applyFxaa(mix(splitColor, vec3(1.0), divider), uv) + computeBloom(uv), uv), 1.0);
             return;
         }
         if (compareMode == 2u) {
@@ -529,6 +557,7 @@ void main() {
     if (pc.imageIndices1.x != 2u) {
         composite = applyDisplayTransform(composite);
     }
+    composite = applyFxaa(composite, uv);
     composite += computeBloom(uv);
     composite = applyPostProcess(composite, uv);
     outColor = vec4(composite, 1.0);

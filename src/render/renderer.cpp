@@ -619,7 +619,8 @@ void ConfigureCompositePass(Renderer& renderer, IRenderPass& pass, const Rendere
         renderer.GetSettings().vignetteStrength,
         renderer.GetSettings().enableBloom,
         renderer.GetSettings().bloomThreshold,
-        renderer.GetSettings().bloomIntensity);
+        renderer.GetSettings().bloomIntensity,
+        renderer.GetSettings().enableFxaa);
     compositePass.SetAmbientOcclusion(
         renderer.GetSettings().enableSsao, renderer.GetSettings().ssaoRadius, renderer.GetSettings().ssaoIntensity);
     compositePass.SetCameraMatrices(renderer.GetCamera().GetViewProjection(), renderer.GetCamera().GetInverseViewProjection());
