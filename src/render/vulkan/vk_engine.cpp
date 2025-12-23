@@ -1036,6 +1036,14 @@ void VestaEngine::init_renderer()
         settings.environmentSpecularStrength = std::clamp(*_launchOptions.startupEnvironmentSpecularStrength, 0.0f, 2.0f);
         resetAccumulation = true;
     }
+    if (_launchOptions.startupPcssShadowsEnabled.has_value()) {
+        settings.enablePcssShadows = *_launchOptions.startupPcssShadowsEnabled;
+        resetAccumulation = true;
+    }
+    if (_launchOptions.startupShadowFilterRadius.has_value()) {
+        settings.shadowFilterRadius = std::clamp(*_launchOptions.startupShadowFilterRadius, 0.5f, 4.0f);
+        resetAccumulation = true;
+    }
     if (_launchOptions.benchmark.has_value()) {
         settings.frameTimingCapture = true;
         settings.benchmarkOverlay = false;
@@ -1515,7 +1523,7 @@ void VestaEngine::finish_benchmark()
                << "taa,taa_feedback,"
                << "ssr,ssr_max_distance,ssr_thickness,ssr_intensity,"
                << "ssgi,ssgi_radius,ssgi_intensity,ssgi_samples,"
-               << "shadow_map,shadow_map_size,shadow_bias,shadow_normal_bias,shadow_strength,"
+               << "shadow_map,shadow_map_size,shadow_bias,shadow_normal_bias,shadow_strength,shadow_pcss,shadow_filter_radius,"
                << "pt_nee,pt_rr,pt_rr_depth,pt_firefly_clamp,"
                << "pt_denoiser,pt_denoiser_strength,pt_denoiser_temporal,pt_denoiser_iterations,"
                << "requested_backend,active_backend,scene_upload_mode,"
@@ -1589,6 +1597,8 @@ void VestaEngine::finish_benchmark()
            << settings.shadowBias << ','
            << settings.shadowNormalBias << ','
            << settings.shadowStrength << ','
+           << (settings.enablePcssShadows ? "true" : "false") << ','
+           << settings.shadowFilterRadius << ','
            << (settings.pathTraceNextEventEstimation ? "true" : "false") << ','
            << (settings.pathTraceRussianRoulette ? "true" : "false") << ','
            << settings.pathTraceRussianRouletteDepth << ','
@@ -1752,6 +1762,8 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "  \"shadow_bias\": " << settings.shadowBias << ",\n"
            << "  \"shadow_normal_bias\": " << settings.shadowNormalBias << ",\n"
            << "  \"shadow_strength\": " << settings.shadowStrength << ",\n"
+           << "  \"shadow_pcss\": " << (settings.enablePcssShadows ? "true" : "false") << ",\n"
+           << "  \"shadow_filter_radius\": " << settings.shadowFilterRadius << ",\n"
            << "  \"point_light\": " << (settings.enablePointLight ? "true" : "false") << ",\n"
            << "  \"spot_light\": " << (settings.enableSpotLight ? "true" : "false") << ",\n"
            << "  \"area_light\": " << (settings.enableAreaLight ? "true" : "false") << ",\n"
@@ -3148,6 +3160,12 @@ void VestaEngine::build_debug_ui()
         if (ImGui::SliderFloat("Shadow Strength", &settings.shadowStrength, 0.0f, 1.0f, "%.2f")) {
             _renderer.ResetAccumulation();
         }
+        if (ImGui::Checkbox("PCSS Soft Shadows", &settings.enablePcssShadows)) {
+            _renderer.ResetAccumulation();
+        }
+        if (ImGui::SliderFloat("Shadow Filter Radius", &settings.shadowFilterRadius, 0.5f, 4.0f, "%.2f")) {
+            _renderer.ResetAccumulation();
+        }
 
         const char* backendModes[] = { "Auto", "Compute", "Hardware RT" };
         int backendMode = static_cast<int>(settings.pathTraceBackend);
@@ -4148,6 +4166,12 @@ void VestaEngine::draw_rasterizer_debug_panel()
         _renderer.ResetAccumulation();
     }
     if (ImGui::SliderFloat("Shadow Strength", &settings.shadowStrength, 0.0f, 1.0f, "%.2f")) {
+        _renderer.ResetAccumulation();
+    }
+    if (ImGui::Checkbox("PCSS Soft Shadows", &settings.enablePcssShadows)) {
+        _renderer.ResetAccumulation();
+    }
+    if (ImGui::SliderFloat("Shadow Filter Radius", &settings.shadowFilterRadius, 0.5f, 4.0f, "%.2f")) {
         _renderer.ResetAccumulation();
     }
 

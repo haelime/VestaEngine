@@ -38,6 +38,8 @@ void PrintUsage()
         << "  --ssgi-radius <value>         SSGI sample radius.\n"
         << "  --ssgi-intensity <value>      SSGI bounce strength.\n"
         << "  --ssgi-samples <4-16>         SSGI sample count.\n"
+        << "  --shadow-pcss <on|off>        Toggle PCSS-style soft shadow filtering.\n"
+        << "  --shadow-filter-radius <0.5-4> Shadow PCF/PCSS filter radius.\n"
         << "  --motion-blur <on|off>        Toggle screen-space motion blur.\n"
         << "  --motion-blur-strength <0-2>  Motion blur sample spread.\n"
         << "  --env-preset <studio|sunset|night|forest>\n"
@@ -579,6 +581,31 @@ int main(int argc, char* argv[])
                 return 1;
             }
             options.startupSsgiSamples = samples;
+            continue;
+        }
+        if (argument == "--shadow-pcss") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            options.startupPcssShadowsEnabled = ParseToggle(value);
+            if (!options.startupPcssShadowsEnabled.has_value()) {
+                std::cerr << "Invalid shadow PCSS toggle: " << value << "\n";
+                return 1;
+            }
+            continue;
+        }
+        if (argument == "--shadow-filter-radius") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            float radius = 0.0f;
+            if (!TryParseFloat(value, radius) || radius < 0.5f || radius > 4.0f) {
+                std::cerr << "Invalid shadow filter radius: " << value << "\n";
+                return 1;
+            }
+            options.startupShadowFilterRadius = radius;
             continue;
         }
         if (argument == "--motion-blur") {

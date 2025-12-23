@@ -310,6 +310,8 @@ struct RendererSettings {
     float shadowBias{ 0.0015f };
     float shadowNormalBias{ 0.015f };
     float shadowStrength{ 0.82f };
+    bool enablePcssShadows{ false };
+    float shadowFilterRadius{ 1.0f };
     bool animationPlaying{ false };
     float animationTimeScale{ 1.0f };
     float animationTimeSeconds{ 0.0f };

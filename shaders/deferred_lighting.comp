@@ -11,6 +11,7 @@ layout(rgba16f, set = 0, binding = 1) uniform image2D storageImages[];
 struct DeferredLightingConstants {
     mat4 lightViewProjection;
     vec4 shadowParams;
+    vec4 shadowFilterParams;
     uvec4 shadowIndices;
     vec4 directionalColor;
     vec4 pointPositionAndIntensity;
@@ -335,15 +336,46 @@ float computeDirectionalShadow(vec3 worldPosition, vec3 normal, vec3 lightDirect
     vec2 texelSize = 1.0 / vec2(textureSize(sampledImages[nonuniformEXT(int(constants.shadowIndices.x))], 0));
     float slopeBias = constants.shadowParams.x * (1.0 - clamp(dot(normal, lightDirection), 0.0, 1.0));
     float receiverDepth = shadowNdc.z - max(constants.shadowParams.x, slopeBias);
-    float visibility = 0.0;
-    for (int y = -1; y <= 1; ++y) {
-        for (int x = -1; x <= 1; ++x) {
-            float blockerDepth = texture(sampledImages[nonuniformEXT(int(constants.shadowIndices.x))],
-                shadowUv + vec2(x, y) * texelSize).r;
-            visibility += receiverDepth <= blockerDepth ? 1.0 : 0.0;
+
+    float filterRadius = clamp(constants.shadowFilterParams.x, 0.5, 4.0);
+    if (constants.shadowFilterParams.y > 0.5) {
+        float blockerDepthSum = 0.0;
+        float blockerCount = 0.0;
+        const int blockerRadius = 2;
+        for (int y = -blockerRadius; y <= blockerRadius; ++y) {
+            for (int x = -blockerRadius; x <= blockerRadius; ++x) {
+                vec2 offset = vec2(x, y) * texelSize * max(filterRadius, 1.0);
+                float blockerDepth = texture(sampledImages[nonuniformEXT(int(constants.shadowIndices.x))], shadowUv + offset).r;
+                if (blockerDepth < receiverDepth) {
+                    blockerDepthSum += blockerDepth;
+                    blockerCount += 1.0;
+                }
+            }
+        }
+        if (blockerCount > 0.0) {
+            float averageBlockerDepth = blockerDepthSum / blockerCount;
+            float penumbra = clamp((receiverDepth - averageBlockerDepth) * 420.0, 1.0, 4.0);
+            filterRadius *= penumbra;
         }
     }
-    visibility /= 9.0;
+
+    float visibility = 0.0;
+    float weightSum = 0.0;
+    const int maxKernelRadius = 4;
+    for (int y = -maxKernelRadius; y <= maxKernelRadius; ++y) {
+        for (int x = -maxKernelRadius; x <= maxKernelRadius; ++x) {
+            float distanceToCenter = length(vec2(x, y));
+            if (distanceToCenter > filterRadius + 0.35) {
+                continue;
+            }
+            float weight = 1.0 - smoothstep(max(filterRadius - 1.0, 0.0), filterRadius + 0.35, distanceToCenter);
+            float blockerDepth = texture(sampledImages[nonuniformEXT(int(constants.shadowIndices.x))],
+                shadowUv + vec2(x, y) * texelSize).r;
+            visibility += (receiverDepth <= blockerDepth ? 1.0 : 0.0) * weight;
+            weightSum += weight;
+        }
+    }
+    visibility /= max(weightSum, 1.0);
     return mix(1.0 - constants.shadowParams.z, 1.0, visibility);
 }
 

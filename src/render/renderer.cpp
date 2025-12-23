@@ -488,9 +488,17 @@ void ConfigureDeferredLightingPass(Renderer& renderer, IRenderPass& pass, const 
             BuildDirectionalShadowViewProjection(renderer.GetScene().GetBounds(), settings.lightDirectionAndIntensity),
             settings.shadowBias,
             settings.shadowNormalBias,
-            settings.shadowStrength);
+            settings.shadowStrength,
+            settings.enablePcssShadows,
+            settings.shadowFilterRadius);
     } else {
-        lightingPass.SetShadowMap({}, glm::mat4(1.0f), settings.shadowBias, settings.shadowNormalBias, 0.0f);
+        lightingPass.SetShadowMap({},
+            glm::mat4(1.0f),
+            settings.shadowBias,
+            settings.shadowNormalBias,
+            0.0f,
+            settings.enablePcssShadows,
+            settings.shadowFilterRadius);
     }
     lightingPass.SetOutput(resources.deferredLighting);
     lightingPass.SetDebugOutput(resources.deferredLightingDebug, static_cast<uint32_t>(settings.debugView));

@@ -25,7 +25,13 @@ public:
     void SetAmbientOcclusion(bool enabled, float radius, float intensity);
     void SetScreenSpaceReflections(bool enabled, float maxDistance, float thickness, float intensity);
     void SetScreenSpaceGlobalIllumination(bool enabled, float radius, float intensity, uint32_t sampleCount);
-    void SetShadowMap(GraphTextureHandle shadowMap, glm::mat4 lightViewProjection, float bias, float normalBias, float strength);
+    void SetShadowMap(GraphTextureHandle shadowMap,
+        glm::mat4 lightViewProjection,
+        float bias,
+        float normalBias,
+        float strength,
+        bool pcssEnabled,
+        float filterRadius);
 
     [[nodiscard]] std::string_view Name() const override { return "DeferredLightingPass"; }
     void Initialize(RenderDevice& device) override;
@@ -60,6 +66,7 @@ private:
     glm::vec4 _ssgiParams{ 1.0f, 1.4f, 0.32f, 10.0f };
     glm::mat4 _lightViewProjection{ 1.0f };
     glm::vec4 _shadowParams{ 0.0015f, 0.015f, 0.82f, 0.0f };
+    glm::vec4 _shadowFilterParams{ 1.0f, 0.0f, 0.0f, 0.0f };
     BufferHandle _lightingConstantsBuffer{};
     VkPipelineLayout _pipelineLayout{ VK_NULL_HANDLE };
     VkPipeline _pipeline{ VK_NULL_HANDLE };
