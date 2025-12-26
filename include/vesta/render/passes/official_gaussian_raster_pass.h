@@ -27,6 +27,7 @@ public:
     void SetJobSystem(vesta::core::JobSystem* jobs);
     void SetFrameSlot(uint32_t frameSlot);
     void SetParams(float opacity, uint32_t shDegree, bool viewDependentColor, bool antialiasing, bool fastCulling);
+    void SetDebugView(uint32_t debugView);
 
     [[nodiscard]] std::string_view Name() const override { return "OfficialGaussianRasterPass"; }
     void Initialize(RenderDevice& device) override;
@@ -84,6 +85,7 @@ private:
     bool _viewDependentColor{ true };
     bool _antialiasing{ true };
     bool _fastCulling{ true };
+    uint32_t _debugView{ 0 };
     uint32_t _frameSlot{ 0 };
 
     VkPipelineLayout _pipelineLayout{ VK_NULL_HANDLE };

@@ -3,6 +3,7 @@
 
 const uint TILE_SIZE = 8u;
 const uint INVALID_IMAGE_INDEX = 0xffffffffu;
+const uint GAUSSIAN_DEBUG_SPLAT_ID = 8u;
 
 struct ProjectedGaussian {
     vec4 centerRadiusDepth;
@@ -41,7 +42,16 @@ layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 shared vec4 sCenterRadiusDepth[64];
 shared vec4 sConicOpacity[64];
 shared vec4 sColor[64];
+shared uint sGaussianId[64];
 shared uint sBatchCount;
+
+vec3 hashSplatIdColor(uint id)
+{
+    uint x = id * 747796405u + 2891336453u;
+    x = ((x >> ((x >> 28u) + 4u)) ^ x) * 277803737u;
+    x = (x >> 22u) ^ x;
+    return vec3(float(x & 255u), float((x >> 8u) & 255u), float((x >> 16u) & 255u)) / 255.0;
+}
 
 void main()
 {
@@ -66,7 +76,7 @@ void main()
         if (pixelValid) {
             imageStore(accumOutput, pixel, vec4(0.0));
             imageStore(revealOutput, pixel, vec4(1.0));
-            imageStore(debugOutput, pixel, vec4(1.0, 0.0, 0.0, 1.0));
+            imageStore(debugOutput, pixel, vec4(0.0));
         }
         return;
     }
@@ -74,6 +84,7 @@ void main()
     float transmittance = 1.0;
     float nearestDepth = 1.0;
     float nearestRadius = 0.0;
+    uint nearestGaussianId = 0u;
     uint contributionCount = 0u;
     vec2 samplePoint = vec2(pixel) + vec2(0.5);
     bool done = false;
@@ -86,10 +97,12 @@ void main()
         barrier();
 
         if (localIndex < sBatchCount) {
-            ProjectedGaussian gaussian = projected[duplicateValues[batchStart + localIndex]];
+            uint gaussianId = duplicateValues[batchStart + localIndex];
+            ProjectedGaussian gaussian = projected[gaussianId];
             sCenterRadiusDepth[localIndex] = gaussian.centerRadiusDepth;
             sConicOpacity[localIndex] = gaussian.conicOpacity;
             sColor[localIndex] = gaussian.color;
+            sGaussianId[localIndex] = gaussianId;
         }
         barrier();
 
@@ -128,6 +141,7 @@ void main()
                 nearestDepth = min(nearestDepth, depth);
                 if (depth <= nearestDepth + 1.0e-5) {
                     nearestRadius = radius;
+                    nearestGaussianId = sGaussianId[entryIndex];
                 }
                 ++contributionCount;
                 float contribution = transmittance * alpha;
@@ -149,5 +163,11 @@ void main()
     float finalAlpha = clamp(1.0 - transmittance, 0.0, 1.0);
     imageStore(accumOutput, pixel, vec4(color, finalAlpha));
     imageStore(revealOutput, pixel, vec4(1.0 - finalAlpha));
+    uint debugView = uint(pc.params2.w + 0.5);
+    if (debugView == GAUSSIAN_DEBUG_SPLAT_ID) {
+        vec3 idColor = finalAlpha > 0.0 ? hashSplatIdColor(nearestGaussianId) : vec3(0.0);
+        imageStore(debugOutput, pixel, vec4(idColor, finalAlpha));
+        return;
+    }
     imageStore(debugOutput, pixel, vec4(nearestDepth, finalAlpha, nearestRadius, float(contributionCount)));
 }

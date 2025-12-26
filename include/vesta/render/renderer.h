@@ -77,6 +77,7 @@ enum class GaussianDebugView : uint32_t {
     TileOccupancy = 5,
     SplatRadius = 6,
     ContributionCount = 7,
+    SplatId = 8,
 };
 
 enum class CompareMode : uint32_t {

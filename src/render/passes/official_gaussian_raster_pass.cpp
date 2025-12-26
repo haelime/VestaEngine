@@ -198,6 +198,11 @@ void OfficialGaussianRasterPass::SetParams(float opacity, uint32_t shDegree, boo
     _fastCulling = fastCulling;
 }
 
+void OfficialGaussianRasterPass::SetDebugView(uint32_t debugView)
+{
+    _debugView = debugView;
+}
+
 void OfficialGaussianRasterPass::Initialize(RenderDevice& device)
 {
     if (_rasterPipeline != VK_NULL_HANDLE || device.GetDevice() == VK_NULL_HANDLE) {
@@ -871,7 +876,7 @@ void OfficialGaussianRasterPass::Execute(const RenderGraphContext& context)
     pushConstants = {};
     pushConstants.params0 = glm::uvec4(tileCountX, tileCountY, depthImageIndex, 0u);
     pushConstants.params1 = glm::uvec4(static_cast<uint32_t>(context.GetRenderExtent().width), static_cast<uint32_t>(context.GetRenderExtent().height), 0u, 0u);
-    pushConstants.params2 = glm::vec4(1.0f, kGaussianAlphaThreshold, kGaussianRevealThreshold, 0.0f);
+    pushConstants.params2 = glm::vec4(1.0f, kGaussianAlphaThreshold, kGaussianRevealThreshold, static_cast<float>(_debugView));
     vkCmdPushConstants(commandBuffer, _pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pushConstants), &pushConstants);
     vkCmdDispatch(commandBuffer, tileCountX, tileCountY, 1);
     InsertMemoryBarrier(commandBuffer,

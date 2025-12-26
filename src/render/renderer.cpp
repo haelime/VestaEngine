@@ -541,6 +541,7 @@ void ConfigureOfficialGaussianPass(Renderer& renderer, IRenderPass& pass, const 
         renderer.GetSettings().gaussianViewDependentColor,
         renderer.GetSettings().gaussianAntialiasing,
         renderer.GetSettings().gaussianFastCulling);
+    gaussianPass.SetDebugView(static_cast<uint32_t>(renderer.GetSettings().gaussianDebugView));
 }
 
 void ConfigurePathTracerPass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
