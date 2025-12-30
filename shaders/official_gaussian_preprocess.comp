@@ -108,6 +108,50 @@ vec3 evaluate_sh_color(GaussianPrimitive gaussian, uint degree, bool viewDepende
     return max(result + 0.5, vec3(0.0));
 }
 
+float coefficient_energy(vec3 value)
+{
+    return dot(value, value);
+}
+
+float dominant_sh_band(GaussianPrimitive gaussian, uint degree)
+{
+    float band0 = coefficient_energy(gaussian.shCoefficients[0].rgb);
+    float band1 = 0.0;
+    float band2 = 0.0;
+    float band3 = 0.0;
+
+    if (degree >= 1u) {
+        for (uint coefficient = 1u; coefficient <= 3u; ++coefficient) {
+            band1 += coefficient_energy(gaussian.shCoefficients[coefficient].rgb);
+        }
+    }
+    if (degree >= 2u) {
+        for (uint coefficient = 4u; coefficient <= 8u; ++coefficient) {
+            band2 += coefficient_energy(gaussian.shCoefficients[coefficient].rgb);
+        }
+    }
+    if (degree >= 3u) {
+        for (uint coefficient = 9u; coefficient <= 15u; ++coefficient) {
+            band3 += coefficient_energy(gaussian.shCoefficients[coefficient].rgb);
+        }
+    }
+
+    float selectedBand = 0.0;
+    float selectedEnergy = band0;
+    if (band1 > selectedEnergy) {
+        selectedBand = 1.0;
+        selectedEnergy = band1;
+    }
+    if (band2 > selectedEnergy) {
+        selectedBand = 2.0;
+        selectedEnergy = band2;
+    }
+    if (band3 > selectedEnergy) {
+        selectedBand = 3.0;
+    }
+    return selectedBand;
+}
+
 void main()
 {
     uint gaussianIndex = gl_GlobalInvocationID.x;
@@ -221,7 +265,7 @@ void main()
 
     outGaussian.centerRadiusDepth = vec4(centerPixel, radiusPixels, centerClip.z / centerClip.w);
     outGaussian.conicOpacity = vec4(inverseConic, effectiveOpacity);
-    outGaussian.color = vec4(color, 1.0);
+    outGaussian.color = vec4(color, dominant_sh_band(gaussian, shDegree));
     outGaussian.tileRect = uvec4(uint(tileMin.x), uint(tileMin.y), tileWidth, tileHeight);
     outGaussian.tileOffset = uvec4(0u, tilesTouched, 0u, 0u);
     projected[gaussianIndex] = outGaussian;

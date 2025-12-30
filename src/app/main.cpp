@@ -16,7 +16,7 @@ void PrintUsage()
         << "  --compare <off|split|difference>\n"
         << "  --debug-view <final|albedo|normal|world-position|depth|uv|material-id|object-id|roughness|metallic|emissive|ao|motion-vector|direct|indirect|reflection|denoised|difference-reference|wireframe|mip-level|shadow-map|overdraw>\n"
         << "  --pt-debug <final|albedo|normal|depth|direct|indirect|ray-count>\n"
-        << "  --gaussian-debug <final|alpha|revealage|overdraw|depth|tile-occupancy|radius|contribution-count|splat-id>\n"
+        << "  --gaussian-debug <final|alpha|revealage|overdraw|depth|tile-occupancy|radius|contribution-count|splat-id|sh-band>\n"
         << "  --compare-split <0.05-0.95>\n"
         << "  --compare-scale <value>\n"
         << "  --pt-backend <auto|compute|hardwarert>\n"
@@ -187,6 +187,7 @@ std::optional<vesta::render::GaussianDebugView> ParseGaussianDebugView(std::stri
     if (value == "radius" || value == "splat-radius") { return vesta::render::GaussianDebugView::SplatRadius; }
     if (value == "contribution-count" || value == "contributions" || value == "splat-count") { return vesta::render::GaussianDebugView::ContributionCount; }
     if (value == "splat-id" || value == "id" || value == "gaussian-id") { return vesta::render::GaussianDebugView::SplatId; }
+    if (value == "sh-band" || value == "sh" || value == "spherical-harmonics") { return vesta::render::GaussianDebugView::ShBand; }
     return std::nullopt;
 }
 

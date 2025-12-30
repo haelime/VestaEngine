@@ -78,6 +78,7 @@ enum class GaussianDebugView : uint32_t {
     SplatRadius = 6,
     ContributionCount = 7,
     SplatId = 8,
+    ShBand = 9,
 };
 
 enum class CompareMode : uint32_t {

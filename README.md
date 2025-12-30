@@ -62,7 +62,7 @@ The renderer exposes common graphics debugging views, including:
 - Metallic
 - Emissive
 - Path tracing AOVs
-- Gaussian alpha, revealage, overdraw, depth, tile occupancy, and splat ID
+- Gaussian alpha, revealage, overdraw, depth, tile occupancy, splat ID, and SH band
 
 These views are available through the runtime UI and are routed through the same render graph resources used by the frame.
 

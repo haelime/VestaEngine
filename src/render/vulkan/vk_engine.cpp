@@ -252,6 +252,8 @@ const char* GaussianDebugViewLabel(vesta::render::GaussianDebugView view)
         return "Contribution Count";
     case vesta::render::GaussianDebugView::SplatId:
         return "Splat ID";
+    case vesta::render::GaussianDebugView::ShBand:
+        return "SH Band";
     case vesta::render::GaussianDebugView::Final:
     default:
         return "Final";
@@ -2768,6 +2770,7 @@ void VestaEngine::build_debug_ui()
                 "Splat Radius",
                 "Contribution Count",
                 "Splat ID",
+                "SH Band",
             };
             int gaussianView = static_cast<int>(settings.gaussianDebugView);
             if (ImGui::Combo("Gaussian Debug View", &gaussianView, gaussianViews, IM_ARRAYSIZE(gaussianViews))) {
@@ -4316,6 +4319,7 @@ void VestaEngine::draw_gaussian_splatting_debug_panel()
         "Splat Radius",
         "Contribution Count",
         "Splat ID",
+        "SH Band",
     };
     int gaussianView = static_cast<int>(settings.gaussianDebugView);
     if (ImGui::Combo("Gaussian AOV", &gaussianView, gaussianViews, IM_ARRAYSIZE(gaussianViews))) {
@@ -4333,6 +4337,10 @@ void VestaEngine::draw_gaussian_splatting_debug_panel()
     ImGui::SameLine();
     if (ImGui::Button("Splat ID")) {
         settings.gaussianDebugView = vesta::render::GaussianDebugView::SplatId;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("SH Band")) {
+        settings.gaussianDebugView = vesta::render::GaussianDebugView::ShBand;
     }
     ImGui::Checkbox("Tile Grid Overlay", &settings.gaussianShowTileGrid);
     ImGui::Checkbox("Covariance Ellipsoids", &settings.gaussianShowCovarianceEllipsoids);
