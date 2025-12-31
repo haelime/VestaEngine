@@ -3593,6 +3593,8 @@ void VestaEngine::build_debug_ui()
                 clear_texture_preview_descriptors();
                 _texturePreviewDescriptors.assign(scene.GetTextures().size(), VK_NULL_HANDLE);
                 _texturePreviewSceneVersion = scene.GetContentVersion();
+                _selectedTexturePreviewIndex = 0;
+                _selectedBufferInspectorIndex = 0;
             }
             for (size_t textureIndex = 0; textureIndex < scene.GetTextures().size(); ++textureIndex) {
                 const uint64_t bytes = TextureAssetBytes(scene.GetTextures()[textureIndex]);
@@ -3719,9 +3721,15 @@ void VestaEngine::build_debug_ui()
                         const auto& textures = scene.GetTextures();
                         for (size_t textureIndex = 0; textureIndex < textures.size(); ++textureIndex) {
                             const auto& texture = textures[textureIndex];
+                            ImGui::PushID(static_cast<int>(textureIndex));
                             ImGui::TableNextRow();
                             ImGui::TableSetColumnIndex(0);
-                            ImGui::TextUnformatted(texture.name.empty() ? "(texture)" : texture.name.c_str());
+                            const char* textureName = texture.name.empty() ? "(texture)" : texture.name.c_str();
+                            if (ImGui::Selectable(textureName,
+                                    _selectedTexturePreviewIndex == textureIndex,
+                                    ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowItemOverlap)) {
+                                _selectedTexturePreviewIndex = textureIndex;
+                            }
                             ImGui::TableSetColumnIndex(1);
                             if (scene.HasResidentTexture(textureIndex)) {
                                 if (_texturePreviewDescriptors[textureIndex] == VK_NULL_HANDLE) {
@@ -3767,12 +3775,76 @@ void VestaEngine::build_debug_ui()
                             }
                             ImGui::TableSetColumnIndex(8);
                             ImGui::Text("%s", scene.HasResidentTexture(textureIndex) ? "Yes" : "No");
+                            ImGui::PopID();
                         }
                         ImGui::EndTable();
+                    }
+                    const auto& textures = scene.GetTextures();
+                    if (!textures.empty()) {
+                        _selectedTexturePreviewIndex = std::min(_selectedTexturePreviewIndex, textures.size() - 1u);
+                        const size_t selectedTexture = _selectedTexturePreviewIndex;
+                        const auto& texture = textures[selectedTexture];
+                        ImGui::SeparatorText("Selected Texture Preview");
+                        if (scene.HasResidentTexture(selectedTexture)) {
+                            if (_texturePreviewDescriptors[selectedTexture] == VK_NULL_HANDLE) {
+                                const vesta::render::ImageHandle image = scene.GetTextureImage(selectedTexture);
+                                if (image) {
+                                    _texturePreviewDescriptors[selectedTexture] = ImGui_ImplVulkan_AddTexture(device.GetDefaultSampler(),
+                                        device.GetImageView(image),
+                                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                                }
+                            }
+                            if (_texturePreviewDescriptors[selectedTexture] != VK_NULL_HANDLE) {
+                                const float maxPreviewSize = 192.0f;
+                                const float width = static_cast<float>(std::max(texture.width, 1u));
+                                const float height = static_cast<float>(std::max(texture.height, 1u));
+                                ImVec2 previewSize(maxPreviewSize, maxPreviewSize);
+                                if (width > height) {
+                                    previewSize.y = maxPreviewSize * (height / width);
+                                } else {
+                                    previewSize.x = maxPreviewSize * (width / height);
+                                }
+                                ImGui::Image(reinterpret_cast<ImTextureID>(_texturePreviewDescriptors[selectedTexture]), previewSize);
+                            }
+                        } else {
+                            ImGui::TextDisabled("Texture is not resident yet.");
+                        }
+                        ImGui::SameLine();
+                        ImGui::BeginGroup();
+                        ImGui::Text("Name: %s", texture.name.empty() ? "(texture)" : texture.name.c_str());
+                        ImGui::Text("Size: %ux%u", texture.width, texture.height);
+                        ImGui::Text("Format: %s", texture.srgb ? "RGBA8_sRGB" : "RGBA8");
+                        ImGui::Text("Usage: %s", TextureSemanticLabel(scene, selectedTexture).c_str());
+                        ImGui::Text("Memory: %.2f MiB", MiB(TextureAssetBytes(texture)));
+                        if (scene.HasResidentTexture(selectedTexture)) {
+                            const vesta::render::ImageHandle image = scene.GetTextureImage(selectedTexture);
+                            const uint32_t residentMipCount = image ? device.GetImageResource(image).desc.mipLevels : 1u;
+                            ImGui::Text("Mips: %u/%u", residentMipCount, FullMipCount(texture.width, texture.height));
+                            ImGui::Text("Bindless: %u", scene.GetTextureBindlessIndex(selectedTexture));
+                        } else {
+                            ImGui::TextDisabled("Mips: pending");
+                            ImGui::TextDisabled("Bindless: pending");
+                        }
+                        ImGui::EndGroup();
+                    } else {
+                        ImGui::TextDisabled("No scene textures are loaded.");
                     }
                     ImGui::EndTabItem();
                 }
                 if (ImGui::BeginTabItem("Buffers")) {
+                    struct BufferInspectorEntry {
+                        const char* name;
+                        vesta::render::BufferHandle handle;
+                        uint64_t logicalBytes;
+                    };
+                    const std::array<BufferInspectorEntry, 6> bufferEntries{
+                        BufferInspectorEntry{ "Vertex Buffer", scene.GetVertexBuffer(), vertexBytes },
+                        BufferInspectorEntry{ "Index Buffer", scene.GetIndexBuffer(), indexBytes },
+                        BufferInspectorEntry{ "Material Buffer", scene.GetMaterialBuffer(), materialBytes },
+                        BufferInspectorEntry{ "Triangle Buffer", scene.GetTriangleBuffer(), triangleBytes },
+                        BufferInspectorEntry{ "Emissive Triangle Buffer", scene.GetEmissiveTriangleBuffer(), emissiveBytes },
+                        BufferInspectorEntry{ "Gaussian Position/Covariance/SH", scene.GetGaussianBuffer(), gaussianBytes },
+                    };
                     if (ImGui::BeginTable("BufferTable", 8, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
                         ImGui::TableSetupColumn("Name");
                         ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 74.0f);
@@ -3783,13 +3855,78 @@ void VestaEngine::build_debug_ui()
                         ImGui::TableSetupColumn("Bindless", ImGuiTableColumnFlags_WidthFixed, 68.0f);
                         ImGui::TableSetupColumn("Handle", ImGuiTableColumnFlags_WidthFixed, 58.0f);
                         ImGui::TableHeadersRow();
-                        DrawBufferResourceRow("Vertex Buffer", device, scene.GetVertexBuffer(), vertexBytes);
-                        DrawBufferResourceRow("Index Buffer", device, scene.GetIndexBuffer(), indexBytes);
-                        DrawBufferResourceRow("Material Buffer", device, scene.GetMaterialBuffer(), materialBytes);
-                        DrawBufferResourceRow("Triangle Buffer", device, scene.GetTriangleBuffer(), triangleBytes);
-                        DrawBufferResourceRow("Emissive Triangle Buffer", device, scene.GetEmissiveTriangleBuffer(), emissiveBytes);
-                        DrawBufferResourceRow("Gaussian Position/Covariance/SH", device, scene.GetGaussianBuffer(), gaussianBytes);
+                        for (size_t bufferIndex = 0; bufferIndex < bufferEntries.size(); ++bufferIndex) {
+                            const BufferInspectorEntry& entry = bufferEntries[bufferIndex];
+                            ImGui::PushID(static_cast<int>(bufferIndex));
+                            ImGui::TableNextRow();
+                            ImGui::TableSetColumnIndex(0);
+                            if (ImGui::Selectable(entry.name,
+                                    _selectedBufferInspectorIndex == static_cast<int>(bufferIndex),
+                                    ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowItemOverlap)) {
+                                _selectedBufferInspectorIndex = static_cast<int>(bufferIndex);
+                            }
+                            ImGui::TableSetColumnIndex(1);
+                            ImGui::Text("%s", entry.handle ? "Resident" : "Missing");
+                            ImGui::TableSetColumnIndex(2);
+                            if (entry.handle) {
+                                const auto& buffer = device.GetBufferResource(entry.handle);
+                                ImGui::Text("%.2f MiB", MiB(static_cast<uint64_t>(buffer.desc.size)));
+                            } else {
+                                ImGui::TextUnformatted("-");
+                            }
+                            ImGui::TableSetColumnIndex(3);
+                            ImGui::Text("%.2f MiB", MiB(entry.logicalBytes));
+                            ImGui::TableSetColumnIndex(4);
+                            if (entry.handle) {
+                                const auto& buffer = device.GetBufferResource(entry.handle);
+                                ImGui::TextUnformatted(BufferGroupLabel(entry.name, buffer.desc.usage).c_str());
+                            } else {
+                                ImGui::TextUnformatted("-");
+                            }
+                            ImGui::TableSetColumnIndex(5);
+                            if (entry.handle) {
+                                const auto& buffer = device.GetBufferResource(entry.handle);
+                                ImGui::TextUnformatted(BufferUsageLabel(buffer.desc.usage).c_str());
+                            } else {
+                                ImGui::TextUnformatted("-");
+                            }
+                            ImGui::TableSetColumnIndex(6);
+                            if (entry.handle) {
+                                const auto& buffer = device.GetBufferResource(entry.handle);
+                                if (buffer.bindless.storageBuffer != vesta::render::kInvalidResourceIndex) {
+                                    ImGui::Text("%u", buffer.bindless.storageBuffer);
+                                } else {
+                                    ImGui::TextUnformatted("-");
+                                }
+                            } else {
+                                ImGui::TextUnformatted("-");
+                            }
+                            ImGui::TableSetColumnIndex(7);
+                            ImGui::Text("%u", entry.handle ? entry.handle.index : 0u);
+                            ImGui::PopID();
+                        }
                         ImGui::EndTable();
+                    }
+                    _selectedBufferInspectorIndex = std::clamp(_selectedBufferInspectorIndex, 0, static_cast<int>(bufferEntries.size() - 1u));
+                    const BufferInspectorEntry& selectedBuffer = bufferEntries[static_cast<size_t>(_selectedBufferInspectorIndex)];
+                    ImGui::SeparatorText("Selected Buffer Inspector");
+                    ImGui::Text("Name: %s", selectedBuffer.name);
+                    ImGui::Text("State: %s", selectedBuffer.handle ? "Resident" : "Missing");
+                    ImGui::Text("Logical: %.2f MiB", MiB(selectedBuffer.logicalBytes));
+                    if (selectedBuffer.handle) {
+                        const auto& buffer = device.GetBufferResource(selectedBuffer.handle);
+                        ImGui::Text("GPU Allocation: %.2f MiB", MiB(static_cast<uint64_t>(buffer.desc.size)));
+                        ImGui::Text("Group: %s", BufferGroupLabel(selectedBuffer.name, buffer.desc.usage).c_str());
+                        ImGui::TextWrapped("Usage: %s", BufferUsageLabel(buffer.desc.usage).c_str());
+                        ImGui::Text("Bindless Storage: %s",
+                            buffer.bindless.storageBuffer != vesta::render::kInvalidResourceIndex ? "Resident" : "Not registered");
+                        if (buffer.bindless.storageBuffer != vesta::render::kInvalidResourceIndex) {
+                            ImGui::SameLine();
+                            ImGui::Text("#%u", buffer.bindless.storageBuffer);
+                        }
+                        ImGui::Text("Handle Index: %u", selectedBuffer.handle.index);
+                    } else {
+                        ImGui::TextDisabled("No GPU allocation is available for this buffer.");
                     }
                     ImGui::EndTabItem();
                 }

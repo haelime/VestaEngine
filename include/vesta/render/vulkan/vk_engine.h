@@ -124,6 +124,8 @@ public:
     std::vector<std::string> _logConsoleLines;
     std::vector<VkDescriptorSet> _texturePreviewDescriptors;
     uint64_t _texturePreviewSceneVersion{ 0 };
+    size_t _selectedTexturePreviewIndex{ 0 };
+    int _selectedBufferInspectorIndex{ 0 };
 
     static VestaEngine& Get();
 
