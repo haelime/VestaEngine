@@ -531,6 +531,13 @@ vec3 resolveGaussianDebugView(vec4 gaussianColor, ivec2 pixel, vec2 uv)
         vec4 debugValue = imageLoad(storageImages[nonuniformEXT(int(pc.imageIndices1.w))], debugPixel);
         return debugValue.a > 0.0 ? debugValue.rgb : vec3(0.0);
     }
+    if (gaussianDebugView == 10u) {
+        if (!hasImage(pc.imageIndices1.w)) { return vec3(-1.0); }
+        ivec2 debugSize = imageSize(storageImages[nonuniformEXT(int(pc.imageIndices1.w))]);
+        ivec2 debugPixel = clamp(ivec2(uv * vec2(debugSize)), ivec2(0), debugSize - ivec2(1));
+        vec4 debugValue = imageLoad(storageImages[nonuniformEXT(int(pc.imageIndices1.w))], debugPixel);
+        return debugValue.a > 0.0 ? debugValue.rgb : vec3(0.0);
+    }
     return vec3(-1.0);
 }
 
