@@ -400,6 +400,9 @@ enum class SelectionKind : uint32_t {
     None = 0,
     Object = 1,
     DirectionalLight = 2,
+    PointLight = 3,
+    SpotLight = 4,
+    AreaLight = 5,
 };
 
 struct EditorSelection {
@@ -544,6 +547,9 @@ public:
     bool EnsureRayTracingScene();
     void SetStartupSafeModeActive(bool active) { _startupSafeModeActive = active; }
     void SelectDirectionalLight();
+    void SelectPointLight();
+    void SelectSpotLight();
+    void SelectAreaLight();
     bool SelectObject(uint32_t objectIndex);
     bool SetSelectedObjectPosition(glm::vec3 position);
     bool RotateSelectedObject(glm::vec3 eulerDeltaDegrees);

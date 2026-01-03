@@ -763,7 +763,9 @@ void Renderer::HandleEvent(const SDL_Event& event)
 
     if (event.type != SDL_KEYDOWN || event.key.repeat != 0) {
         if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
-            if (_selection.kind != SelectionKind::DirectionalLight) {
+            const bool selectedLight = _selection.kind == SelectionKind::DirectionalLight || _selection.kind == SelectionKind::PointLight
+                || _selection.kind == SelectionKind::SpotLight || _selection.kind == SelectionKind::AreaLight;
+            if (!selectedLight) {
                 _selection = PickSelection(glm::vec2(static_cast<float>(event.button.x), static_cast<float>(event.button.y)));
             }
             _selectionDragging = _selection.kind != SelectionKind::None;
@@ -777,6 +779,18 @@ void Renderer::HandleEvent(const SDL_Event& event)
                 _dragGrabOffset = object.bounds.center - _dragPlaneOrigin;
             } else if (_selection.kind == SelectionKind::DirectionalLight) {
                 _dragPlaneOrigin = _scene.GetBounds().center;
+                _dragPlaneNormal = _camera.GetForward();
+                _dragGrabOffset = glm::vec3(0.0f);
+            } else if (_selection.kind == SelectionKind::PointLight) {
+                _dragPlaneOrigin = glm::vec3(_settings.pointLightPositionAndIntensity);
+                _dragPlaneNormal = _camera.GetForward();
+                _dragGrabOffset = glm::vec3(0.0f);
+            } else if (_selection.kind == SelectionKind::SpotLight) {
+                _dragPlaneOrigin = glm::vec3(_settings.spotLightPositionAndIntensity);
+                _dragPlaneNormal = _camera.GetForward();
+                _dragGrabOffset = glm::vec3(0.0f);
+            } else if (_selection.kind == SelectionKind::AreaLight) {
+                _dragPlaneOrigin = glm::vec3(_settings.areaLightPositionAndIntensity);
                 _dragPlaneNormal = _camera.GetForward();
                 _dragGrabOffset = glm::vec3(0.0f);
             }
@@ -1135,6 +1149,12 @@ std::string Renderer::GetSelectionLabel() const
     }
     case SelectionKind::DirectionalLight:
         return "Directional Light";
+    case SelectionKind::PointLight:
+        return "Point Light";
+    case SelectionKind::SpotLight:
+        return "Spot Light";
+    case SelectionKind::AreaLight:
+        return "Area Light";
     case SelectionKind::None:
     default:
         return "None";
@@ -1151,6 +1171,33 @@ void Renderer::SelectDirectionalLight()
 {
     _selection = EditorSelection{
         .kind = SelectionKind::DirectionalLight,
+        .objectIndex = 0,
+    };
+    _trackSelectedObjectOrbit = false;
+}
+
+void Renderer::SelectPointLight()
+{
+    _selection = EditorSelection{
+        .kind = SelectionKind::PointLight,
+        .objectIndex = 0,
+    };
+    _trackSelectedObjectOrbit = false;
+}
+
+void Renderer::SelectSpotLight()
+{
+    _selection = EditorSelection{
+        .kind = SelectionKind::SpotLight,
+        .objectIndex = 0,
+    };
+    _trackSelectedObjectOrbit = false;
+}
+
+void Renderer::SelectAreaLight()
+{
+    _selection = EditorSelection{
+        .kind = SelectionKind::AreaLight,
         .objectIndex = 0,
     };
     _trackSelectedObjectOrbit = false;
@@ -1411,6 +1458,31 @@ void Renderer::UpdateSceneEditDrag(const glm::vec2& mousePosition)
         direction = glm::normalize(
             direction + _camera.GetForward() * (-delta.y * 0.01f) + cameraRight * (-delta.x * 0.01f));
         _settings.lightDirectionAndIntensity = glm::vec4(-direction, _settings.lightDirectionAndIntensity.w);
+        _selectionEditedSinceDragStart = true;
+        OnSceneEdited(false);
+    }
+
+    if (_selection.kind == SelectionKind::PointLight || _selection.kind == SelectionKind::SpotLight
+        || _selection.kind == SelectionKind::AreaLight) {
+        const float denominator = glm::dot(rayDirection, _dragPlaneNormal);
+        if (std::abs(denominator) < 1.0e-4f) {
+            _lastDragMousePosition = mousePosition;
+            return;
+        }
+        const float t = glm::dot(_dragPlaneOrigin - rayOrigin, _dragPlaneNormal) / denominator;
+        if (t <= 0.0f) {
+            _lastDragMousePosition = mousePosition;
+            return;
+        }
+        const glm::vec3 hitPoint = rayOrigin + rayDirection * t;
+        if (_selection.kind == SelectionKind::PointLight) {
+            _settings.pointLightPositionAndIntensity = glm::vec4(hitPoint, _settings.pointLightPositionAndIntensity.w);
+        } else if (_selection.kind == SelectionKind::SpotLight) {
+            _settings.spotLightPositionAndIntensity = glm::vec4(hitPoint, _settings.spotLightPositionAndIntensity.w);
+        } else {
+            _settings.areaLightPositionAndIntensity = glm::vec4(hitPoint, _settings.areaLightPositionAndIntensity.w);
+        }
+        _dragPlaneOrigin = hitPoint;
         _selectionEditedSinceDragStart = true;
         OnSceneEdited(false);
     }

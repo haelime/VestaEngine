@@ -2952,8 +2952,20 @@ void VestaEngine::build_debug_ui()
             }
 
             ImGui::SeparatorText("Selection");
-            if (ImGui::Button("Select Light")) {
+            if (ImGui::Button("Select Directional")) {
                 _renderer.SelectDirectionalLight();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Point")) {
+                _renderer.SelectPointLight();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Spot")) {
+                _renderer.SelectSpotLight();
+            }
+            ImGui::SameLine();
+            if (ImGui::Button("Area")) {
+                _renderer.SelectAreaLight();
             }
             ImGui::SameLine();
             if (ImGui::Button("Clear Selection")) {
@@ -2967,6 +2979,24 @@ void VestaEngine::build_debug_ui()
                 ImGui::Text("Translate %.2f %.2f %.2f", translation.x, translation.y, translation.z);
             } else if (_renderer.GetSelection().kind == vesta::render::SelectionKind::DirectionalLight) {
                 ImGui::Text("Drag LMB in viewport to rotate the directional light");
+            } else if (_renderer.GetSelection().kind == vesta::render::SelectionKind::PointLight) {
+                ImGui::Text("Point Light %.2f %.2f %.2f",
+                    settings.pointLightPositionAndIntensity.x,
+                    settings.pointLightPositionAndIntensity.y,
+                    settings.pointLightPositionAndIntensity.z);
+                ImGui::Text("Drag LMB in viewport to move it on the camera plane");
+            } else if (_renderer.GetSelection().kind == vesta::render::SelectionKind::SpotLight) {
+                ImGui::Text("Spot Light %.2f %.2f %.2f",
+                    settings.spotLightPositionAndIntensity.x,
+                    settings.spotLightPositionAndIntensity.y,
+                    settings.spotLightPositionAndIntensity.z);
+                ImGui::Text("Drag LMB in viewport to move it on the camera plane");
+            } else if (_renderer.GetSelection().kind == vesta::render::SelectionKind::AreaLight) {
+                ImGui::Text("Area Light %.2f %.2f %.2f",
+                    settings.areaLightPositionAndIntensity.x,
+                    settings.areaLightPositionAndIntensity.y,
+                    settings.areaLightPositionAndIntensity.z);
+                ImGui::Text("Drag LMB in viewport to move it on the camera plane");
             }
 
             if (settings.benchmarkOverlay && _renderer.GetFrameTimeHistoryCount() > 0) {
@@ -3307,6 +3337,46 @@ void VestaEngine::build_debug_ui()
                             ImGui::TableSetColumnIndex(3);
                             ImGui::Text("%.2f %.2f %.2f", position.x, position.y, position.z);
                         }
+                        auto drawLightRow = [&](const char* label,
+                                                vesta::render::SelectionKind kind,
+                                                bool enabled,
+                                                glm::vec3 vectorValue,
+                                                auto selectFn) {
+                            const bool selected = _renderer.GetSelection().kind == kind;
+                            ImGui::TableNextRow();
+                            ImGui::TableSetColumnIndex(0);
+                            ImGui::PushID(label);
+                            if (ImGui::Selectable(label, selected, ImGuiSelectableFlags_SpanAllColumns)) {
+                                selectFn();
+                            }
+                            ImGui::PopID();
+                            ImGui::TableSetColumnIndex(1);
+                            ImGui::TextUnformatted("Light");
+                            ImGui::TableSetColumnIndex(2);
+                            ImGui::TextUnformatted(enabled ? "On" : "Off");
+                            ImGui::TableSetColumnIndex(3);
+                            ImGui::Text("%.2f %.2f %.2f", vectorValue.x, vectorValue.y, vectorValue.z);
+                        };
+                        drawLightRow("Directional Light",
+                            vesta::render::SelectionKind::DirectionalLight,
+                            true,
+                            glm::vec3(settings.lightDirectionAndIntensity),
+                            [&]() { _renderer.SelectDirectionalLight(); });
+                        drawLightRow("Point Light",
+                            vesta::render::SelectionKind::PointLight,
+                            settings.enablePointLight,
+                            glm::vec3(settings.pointLightPositionAndIntensity),
+                            [&]() { _renderer.SelectPointLight(); });
+                        drawLightRow("Spot Light",
+                            vesta::render::SelectionKind::SpotLight,
+                            settings.enableSpotLight,
+                            glm::vec3(settings.spotLightPositionAndIntensity),
+                            [&]() { _renderer.SelectSpotLight(); });
+                        drawLightRow("Area Light",
+                            vesta::render::SelectionKind::AreaLight,
+                            settings.enableAreaLight,
+                            glm::vec3(settings.areaLightPositionAndIntensity),
+                            [&]() { _renderer.SelectAreaLight(); });
                         ImGui::EndTable();
                     }
                     if (_renderer.GetSelection().kind == vesta::render::SelectionKind::Object) {
@@ -3384,14 +3454,69 @@ void VestaEngine::build_debug_ui()
                             object.bounds.center.z);
                         ImGui::Text("Radius %.3f", object.bounds.radius);
                         ImGui::Text("Vertices %u  Triangles %u", object.vertexCount, object.triangleCount);
+                    } else if (selection.kind == vesta::render::SelectionKind::PointLight) {
+                        ImGui::TextUnformatted("Point Light");
+                        if (ImGui::DragFloat3("Position", &settings.pointLightPositionAndIntensity.x, 0.05f, -100.0f, 100.0f, "%.2f")) {
+                            _renderer.ResetAccumulation();
+                        }
+                        if (ImGui::SliderFloat("Intensity", &settings.pointLightPositionAndIntensity.w, 0.0f, 64.0f, "%.2f")) {
+                            _renderer.ResetAccumulation();
+                        }
+                        if (ImGui::ColorEdit3("Color", &settings.pointLightColor.x, ImGuiColorEditFlags_Float)) {
+                            _renderer.ResetAccumulation();
+                        }
+                    } else if (selection.kind == vesta::render::SelectionKind::SpotLight) {
+                        ImGui::TextUnformatted("Spot Light");
+                        if (ImGui::DragFloat3("Position", &settings.spotLightPositionAndIntensity.x, 0.05f, -100.0f, 100.0f, "%.2f")) {
+                            _renderer.ResetAccumulation();
+                        }
+                        float spotDirection[3] = {
+                            settings.spotLightDirectionAndAngle.x,
+                            settings.spotLightDirectionAndAngle.y,
+                            settings.spotLightDirectionAndAngle.z,
+                        };
+                        if (ImGui::SliderFloat3("Direction", spotDirection, -1.0f, 1.0f, "%.2f")) {
+                            glm::vec3 direction(spotDirection[0], spotDirection[1], spotDirection[2]);
+                            if (glm::length(direction) > 1.0e-4f) {
+                                direction = glm::normalize(direction);
+                                settings.spotLightDirectionAndAngle = glm::vec4(direction, settings.spotLightDirectionAndAngle.w);
+                                _renderer.ResetAccumulation();
+                            }
+                        }
+                        if (ImGui::SliderFloat("Intensity", &settings.spotLightPositionAndIntensity.w, 0.0f, 96.0f, "%.2f")) {
+                            _renderer.ResetAccumulation();
+                        }
+                    } else if (selection.kind == vesta::render::SelectionKind::AreaLight) {
+                        ImGui::TextUnformatted("Area Light");
+                        if (ImGui::DragFloat3("Position", &settings.areaLightPositionAndIntensity.x, 0.05f, -100.0f, 100.0f, "%.2f")) {
+                            _renderer.ResetAccumulation();
+                        }
+                        if (ImGui::SliderFloat("Size", &settings.areaLightNormalAndSize.w, 0.1f, 12.0f, "%.2f")) {
+                            _renderer.ResetAccumulation();
+                        }
+                        if (ImGui::SliderFloat("Intensity", &settings.areaLightPositionAndIntensity.w, 0.0f, 48.0f, "%.2f")) {
+                            _renderer.ResetAccumulation();
+                        }
                     } else {
-                        ImGui::TextUnformatted("No object selected");
+                        ImGui::TextUnformatted("No object or light selected");
                     }
                     ImGui::EndTabItem();
                 }
                 if (ImGui::BeginTabItem("Light")) {
                     if (ImGui::Button("Select Directional")) {
                         _renderer.SelectDirectionalLight();
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Select Point")) {
+                        _renderer.SelectPointLight();
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Select Spot")) {
+                        _renderer.SelectSpotLight();
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Select Area")) {
+                        _renderer.SelectAreaLight();
                     }
                     float lightDirection[3] = {
                         settings.lightDirectionAndIntensity.x,
