@@ -1073,6 +1073,12 @@ void VestaEngine::init_renderer()
         log_startup_event("Applied safe startup overrides");
     }
 
+    if (_launchOptions.reloadShadersOnStartup) {
+        const bool reloaded = _renderer.ReloadShaders();
+        log_startup_event(reloaded ? "Startup shader reload complete: " + _renderer.GetLastShaderReloadMessage()
+                                   : "Startup shader reload failed: " + _renderer.GetLastShaderReloadMessage());
+    }
+
     auto requestSceneLoad = [&](const std::filesystem::path& path) {
         _startupState.startupSceneRequested = true;
         log_startup_event(std::string("Startup scene requested: ") + path.string());

@@ -33,6 +33,8 @@ Major panels include:
 
 The UI is designed to make the renderer inspectable while it is running. It exposes frame time, GPU timing, render mode, debug views, pass enable state, pass order, resource usage, barrier transitions, shader reload, screenshot capture, and path tracing accumulation reset.
 
+Shader reload recompiles the GLSL sources in `shaders/` with the Vulkan SDK `glslangValidator`, writes runtime SPIR-V, and then recreates the affected render pass pipelines. If compilation fails, the existing pipelines stay active and the log console reports the compiler file/line diagnostics. The same path can be exercised at startup with `--reload-shaders`.
+
 ## Render Graph and Profiling
 
 The render graph tracks how each frame is built from individual passes. For every active pass, the engine records:

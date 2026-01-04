@@ -4,6 +4,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cctype>
 #include <fstream>
 #include <limits>
@@ -124,9 +125,166 @@ bool NeedsTemporalAAPass(const RendererSettings& settings)
     return NeedsDeferredPass(settings) && settings.enableTaa;
 }
 
+struct RuntimeShaderSource {
+    std::string_view sourceName;
+    bool requiresVulkan13{ false };
+};
+
+constexpr std::array<RuntimeShaderSource, 30> kRuntimeShaderSources{
+    RuntimeShaderSource{ "gradient.comp" },
+    RuntimeShaderSource{ "gradient_color.comp" },
+    RuntimeShaderSource{ "hardcoded_triangle.frag" },
+    RuntimeShaderSource{ "hardcoded_triangle.vert" },
+    RuntimeShaderSource{ "sky.comp" },
+    RuntimeShaderSource{ "composite.frag" },
+    RuntimeShaderSource{ "composite.vert" },
+    RuntimeShaderSource{ "deferred_lighting.comp" },
+    RuntimeShaderSource{ "gaussian.frag" },
+    RuntimeShaderSource{ "gaussian.vert" },
+    RuntimeShaderSource{ "gaussian_bin.comp" },
+    RuntimeShaderSource{ "gaussian_tile.comp" },
+    RuntimeShaderSource{ "official_gaussian_raster.comp" },
+    RuntimeShaderSource{ "official_gaussian_duplicate.comp" },
+    RuntimeShaderSource{ "official_gaussian_preprocess.comp" },
+    RuntimeShaderSource{ "official_gaussian_scan.comp" },
+    RuntimeShaderSource{ "official_gaussian_sort.comp" },
+    RuntimeShaderSource{ "official_gaussian_ranges.comp" },
+    RuntimeShaderSource{ "geometry.frag" },
+    RuntimeShaderSource{ "geometry.vert" },
+    RuntimeShaderSource{ "shadow_depth.frag" },
+    RuntimeShaderSource{ "shadow_depth.vert" },
+    RuntimeShaderSource{ "overdraw.frag" },
+    RuntimeShaderSource{ "overdraw.vert" },
+    RuntimeShaderSource{ "pathtrace.comp" },
+    RuntimeShaderSource{ "path_denoise.comp" },
+    RuntimeShaderSource{ "temporal_aa.comp" },
+    RuntimeShaderSource{ "pathtrace.rgen", true },
+    RuntimeShaderSource{ "pathtrace.rmiss", true },
+    RuntimeShaderSource{ "pathtrace.rchit", true },
+};
+
 bool UsesStreamingUpload(const RendererSettings& settings)
 {
     return settings.sceneUploadMode == SceneUploadMode::Streaming && settings.useDeviceLocalSceneBuffers;
+}
+
+std::string QuoteCommandArgument(const std::filesystem::path& path)
+{
+    std::string value = path.string();
+    size_t offset = 0;
+    while ((offset = value.find('"', offset)) != std::string::npos) {
+        value.insert(offset, "\\");
+        offset += 2;
+    }
+    return "\"" + value + "\"";
+}
+
+std::filesystem::path ResolveShaderOutputDirectory()
+{
+    return vkutil::resolve_runtime_path("shaders/composite.frag.spv").parent_path();
+}
+
+std::filesystem::path ResolveShaderSourceDirectory()
+{
+    return vkutil::resolve_runtime_path("shaders/composite.frag").parent_path();
+}
+
+std::string ReadTextFileLimited(const std::filesystem::path& path, size_t maxLines)
+{
+    std::ifstream input(path);
+    if (!input.is_open()) {
+        return {};
+    }
+
+    std::ostringstream output;
+    std::string line;
+    size_t lines = 0;
+    while (lines < maxLines && std::getline(input, line)) {
+        output << line << '\n';
+        ++lines;
+    }
+    if (input && lines == maxLines) {
+        output << "... compiler output truncated ...\n";
+    }
+    return output.str();
+}
+
+std::string GetEnvironmentVariableString(const char* name)
+{
+    char* value = nullptr;
+    size_t valueSize = 0;
+    if (_dupenv_s(&value, &valueSize, name) != 0 || value == nullptr) {
+        return {};
+    }
+
+    std::string result(value);
+    std::free(value);
+    return result;
+}
+
+bool CompileRuntimeShaders(std::string& message)
+{
+    const std::string vulkanSdk = GetEnvironmentVariableString("VULKAN_SDK");
+    if (vulkanSdk.empty()) {
+        message = "GLSL compile skipped: VULKAN_SDK is not set. Reloading existing SPIR-V.";
+        return true;
+    }
+
+    const std::filesystem::path validatorPath = std::filesystem::path(vulkanSdk) / "Bin" / "glslangValidator.exe";
+    if (!std::filesystem::exists(validatorPath)) {
+        message = "GLSL compile skipped: glslangValidator.exe was not found at " + validatorPath.string()
+            + ". Reloading existing SPIR-V.";
+        return true;
+    }
+
+    std::filesystem::path sourceDirectory;
+    std::filesystem::path outputDirectory;
+    try {
+        sourceDirectory = ResolveShaderSourceDirectory();
+        outputDirectory = ResolveShaderOutputDirectory();
+    } catch (const std::exception& error) {
+        message = std::string("GLSL compile skipped: ") + error.what() + ". Reloading existing SPIR-V.";
+        return true;
+    }
+
+    std::filesystem::create_directories(outputDirectory);
+    const std::filesystem::path logPath = outputDirectory / ".shader_hot_reload.log";
+
+    uint32_t compiledCount = 0u;
+    for (const RuntimeShaderSource& shader : kRuntimeShaderSources) {
+        const std::filesystem::path sourcePath = sourceDirectory / shader.sourceName;
+        if (!std::filesystem::exists(sourcePath)) {
+            message = "Shader source missing: " + sourcePath.string();
+            return false;
+        }
+
+        const std::filesystem::path outputPath = outputDirectory / (std::string(shader.sourceName) + ".spv");
+        std::ostringstream command;
+        command << "call " << QuoteCommandArgument(validatorPath) << ' ';
+        if (shader.requiresVulkan13) {
+            command << "--target-env vulkan1.3 ";
+        }
+        command << "-V " << QuoteCommandArgument(sourcePath) << " -o " << QuoteCommandArgument(outputPath)
+                << " > " << QuoteCommandArgument(logPath) << " 2>&1";
+
+        const int result = std::system(command.str().c_str());
+        const std::string compilerOutput = ReadTextFileLimited(logPath, 20);
+        if (result != 0) {
+            std::ostringstream failure;
+            failure << "Shader compile failed: shaders/" << shader.sourceName << '\n';
+            if (!compilerOutput.empty()) {
+                failure << compilerOutput;
+            } else {
+                failure << "Compiler process exited with code " << result << " without output.\n";
+            }
+            message = failure.str();
+            return false;
+        }
+        ++compiledCount;
+    }
+
+    message = "Compiled " + std::to_string(compiledCount) + " GLSL shaders to " + outputDirectory.string() + ".";
+    return true;
 }
 
 void ValidateSceneLoadTransition(const SceneLoadStatus& status, SceneLoadState nextState, std::string_view context)
@@ -1763,6 +1921,12 @@ bool Renderer::ReloadShaders()
         return false;
     }
 
+    std::string compileMessage;
+    if (!CompileRuntimeShaders(compileMessage)) {
+        _lastShaderReloadMessage = compileMessage;
+        return false;
+    }
+
     _device.WaitIdle();
     for (RendererFrameContext& frame : _frames) {
         ReleaseTransientResources(frame);
@@ -1802,7 +1966,11 @@ bool Renderer::ReloadShaders()
 
     _passExecutionPlanDirty = true;
     ResetAccumulation();
-    _lastShaderReloadMessage = success ? "All render passes reloaded." : message.str();
+    if (success) {
+        _lastShaderReloadMessage = compileMessage + "\nAll render passes reloaded.";
+    } else {
+        _lastShaderReloadMessage = compileMessage + "\n" + message.str();
+    }
     return success;
 }
 

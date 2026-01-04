@@ -49,6 +49,7 @@ void PrintUsage()
         << "  --screenshot <png-path>       Save a PNG capture during benchmark.\n"
         << "  --benchmark-seconds <value>   Benchmark capture duration.\n"
         << "  --warmup-seconds <value>      Benchmark warmup duration.\n"
+        << "  --reload-shaders              Compile GLSL to runtime SPIR-V and reload passes on startup.\n"
         << "  --show-ui                     Force ImGui UI on.\n"
         << "  --no-ui                       Disable ImGui UI.\n"
         << "  --help                        Show this help.\n";
@@ -725,6 +726,10 @@ int main(int argc, char* argv[])
                 options.benchmark = BenchmarkConfig{};
             }
             options.benchmark->warmupSeconds = seconds;
+            continue;
+        }
+        if (argument == "--reload-shaders") {
+            options.reloadShadersOnStartup = true;
             continue;
         }
         if (argument == "--show-ui") {

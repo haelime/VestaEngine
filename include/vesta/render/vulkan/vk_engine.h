@@ -61,6 +61,7 @@ struct EngineLaunchOptions {
     bool deferRayTracingBuildUntilAfterFirstPresent{ true };
     bool enableUi{ true };
     bool showDebugUi{ false };
+    bool reloadShadersOnStartup{ false };
 };
 
 [[nodiscard]] inline vesta::render::RendererSettings ApplyStartupSafeRendererSettings(
