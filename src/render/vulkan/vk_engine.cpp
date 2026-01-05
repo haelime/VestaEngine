@@ -849,6 +849,81 @@ std::string MakeTimestampedLogLine(std::string_view message)
     return stream.str();
 }
 
+std::string TrimCopy(std::string_view value)
+{
+    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.front()))) {
+        value.remove_prefix(1);
+    }
+    while (!value.empty() && std::isspace(static_cast<unsigned char>(value.back()))) {
+        value.remove_suffix(1);
+    }
+    return std::string(value);
+}
+
+std::vector<std::string> SplitPhysicalLogLines(const std::string& line)
+{
+    std::vector<std::string> result;
+    std::istringstream stream(line);
+    std::string physicalLine;
+    while (std::getline(stream, physicalLine)) {
+        result.push_back(std::move(physicalLine));
+    }
+    if (result.empty()) {
+        result.push_back(line);
+    }
+    return result;
+}
+
+struct ShaderCompilerDiagnostic {
+    std::string severity;
+    std::string file;
+    int line{ 0 };
+    std::string message;
+};
+
+std::optional<ShaderCompilerDiagnostic> ParseShaderCompilerDiagnostic(std::string_view line)
+{
+    std::string_view severity = "ERROR";
+    size_t marker = line.find("ERROR:");
+    if (marker == std::string_view::npos) {
+        marker = line.find("WARNING:");
+        severity = "WARNING";
+    }
+    if (marker == std::string_view::npos) {
+        return std::nullopt;
+    }
+
+    const std::string restStorage = TrimCopy(line.substr(marker + severity.size() + 1));
+    const std::string_view rest{ restStorage };
+    for (size_t cursor = 0; cursor < rest.size();) {
+        const size_t colon = rest.find(':', cursor);
+        if (colon == std::string_view::npos || colon + 1 >= rest.size()) {
+            break;
+        }
+
+        size_t digitEnd = colon + 1;
+        while (digitEnd < rest.size() && std::isdigit(static_cast<unsigned char>(rest[digitEnd]))) {
+            ++digitEnd;
+        }
+        if (digitEnd > colon + 1 && digitEnd < rest.size() && rest[digitEnd] == ':') {
+            ShaderCompilerDiagnostic diagnostic;
+            diagnostic.severity = std::string(severity);
+            diagnostic.file = TrimCopy(rest.substr(0, colon));
+            diagnostic.line = std::max(0, std::stoi(std::string(rest.substr(colon + 1, digitEnd - colon - 1))));
+            diagnostic.message = TrimCopy(rest.substr(digitEnd + 1));
+            return diagnostic;
+        }
+
+        cursor = colon + 1;
+    }
+
+    ShaderCompilerDiagnostic diagnostic;
+    diagnostic.severity = std::string(severity);
+    diagnostic.file = "(compiler)";
+    diagnostic.message = TrimCopy(rest);
+    return diagnostic;
+}
+
 std::filesystem::path MakeTimestampedCapturePath(std::string_view prefix, std::string_view extension)
 {
     const auto now = std::chrono::system_clock::now();
@@ -4176,6 +4251,7 @@ void VestaEngine::build_debug_ui()
             int deviceMessages = 0;
             int errors = 0;
             int visibleLines = 0;
+            std::vector<ShaderCompilerDiagnostic> shaderDiagnostics;
             for (const std::string& line : _logConsoleLines) {
                 const auto cls = classifyLogLine(line);
                 perfWarnings += cls.perf ? 1 : 0;
@@ -4185,6 +4261,11 @@ void VestaEngine::build_debug_ui()
                 deviceMessages += cls.device ? 1 : 0;
                 errors += cls.error ? 1 : 0;
                 visibleLines += lineMatchesFilters(line) ? 1 : 0;
+                for (const std::string& physicalLine : SplitPhysicalLogLines(line)) {
+                    if (auto diagnostic = ParseShaderCompilerDiagnostic(physicalLine); diagnostic.has_value()) {
+                        shaderDiagnostics.push_back(std::move(*diagnostic));
+                    }
+                }
             }
             ImGui::Text("Visible %d/%zu  Perf %d  Validation %d  Resource %d  Shader %d  Device %d  Errors %d",
                 visibleLines,
@@ -4240,6 +4321,41 @@ void VestaEngine::build_debug_ui()
                     slowest != nullptr ? fmt::format(" Slowest {} {:.2f} ms", slowest->name, slowest->gpuMs) : std::string{}));
             }
             ImGui::Separator();
+            if (!shaderDiagnostics.empty()) {
+                ImGui::SeparatorText("Shader Diagnostics");
+                if (ImGui::BeginTable("ShaderDiagnosticsTable", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
+                    ImGui::TableSetupColumn("Severity", ImGuiTableColumnFlags_WidthFixed, 72.0f);
+                    ImGui::TableSetupColumn("File", ImGuiTableColumnFlags_WidthStretch);
+                    ImGui::TableSetupColumn("Line", ImGuiTableColumnFlags_WidthFixed, 54.0f);
+                    ImGui::TableSetupColumn("Message", ImGuiTableColumnFlags_WidthStretch);
+                    ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 62.0f);
+                    ImGui::TableHeadersRow();
+                    for (size_t index = 0; index < shaderDiagnostics.size(); ++index) {
+                        const ShaderCompilerDiagnostic& diagnostic = shaderDiagnostics[index];
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        const ImVec4 severityColor = diagnostic.severity == "ERROR" ? ImVec4(1.0f, 0.36f, 0.28f, 1.0f)
+                                                                                       : ImVec4(1.0f, 0.78f, 0.28f, 1.0f);
+                        ImGui::TextColored(severityColor, "%s", diagnostic.severity.c_str());
+                        ImGui::TableSetColumnIndex(1);
+                        ImGui::TextUnformatted(diagnostic.file.c_str());
+                        ImGui::TableSetColumnIndex(2);
+                        ImGui::Text("%d", diagnostic.line);
+                        ImGui::TableSetColumnIndex(3);
+                        ImGui::TextWrapped("%s", diagnostic.message.c_str());
+                        ImGui::TableSetColumnIndex(4);
+                        ImGui::PushID(static_cast<int>(index));
+                        if (ImGui::SmallButton("Copy")) {
+                            const std::string clipboard =
+                                diagnostic.file + ":" + std::to_string(diagnostic.line) + " " + diagnostic.message;
+                            ImGui::SetClipboardText(clipboard.c_str());
+                        }
+                        ImGui::PopID();
+                    }
+                    ImGui::EndTable();
+                }
+                ImGui::Separator();
+            }
             ImGui::BeginChild("LogScroll", ImVec2(0.0f, 0.0f), true);
             for (const std::string& line : _logConsoleLines) {
                 if (!lineMatchesFilters(line)) {
