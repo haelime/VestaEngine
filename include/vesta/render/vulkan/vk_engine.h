@@ -148,6 +148,7 @@ private:
     void build_main_menu_bar();
     void build_debug_dockspace();
     void build_debug_ui();
+    void draw_light_gizmo_overlay();
     void build_render_mode_control_panel();
     void draw_killer_demo_panel();
     void draw_rasterizer_debug_panel();

@@ -924,6 +924,28 @@ std::optional<ShaderCompilerDiagnostic> ParseShaderCompilerDiagnostic(std::strin
     return diagnostic;
 }
 
+std::optional<ImVec2> ProjectWorldToViewport(const Camera& camera, glm::vec3 position, ImVec2 origin, ImVec2 size)
+{
+    if (size.x <= 1.0f || size.y <= 1.0f) {
+        return std::nullopt;
+    }
+
+    const glm::vec4 clip = camera.GetViewProjection() * glm::vec4(position, 1.0f);
+    if (clip.w <= 0.001f) {
+        return std::nullopt;
+    }
+
+    const glm::vec3 ndc = glm::vec3(clip) / clip.w;
+    if (ndc.x < -1.2f || ndc.x > 1.2f || ndc.y < -1.2f || ndc.y > 1.2f || ndc.z < -0.05f || ndc.z > 1.05f) {
+        return std::nullopt;
+    }
+
+    return ImVec2{
+        origin.x + (ndc.x * 0.5f + 0.5f) * size.x,
+        origin.y + (ndc.y * 0.5f + 0.5f) * size.y,
+    };
+}
+
 std::filesystem::path MakeTimestampedCapturePath(std::string_view prefix, std::string_view extension)
 {
     const auto now = std::chrono::system_clock::now();
@@ -2104,6 +2126,7 @@ void VestaEngine::begin_imgui_frame(float deltaSeconds)
     build_main_menu_bar();
     build_debug_dockspace();
     build_debug_ui();
+    draw_light_gizmo_overlay();
     ImGui::Render();
 }
 
@@ -2135,6 +2158,102 @@ void VestaEngine::build_debug_dockspace()
     ImGui::End();
     ImGui::PopStyleVar(3);
 #endif
+}
+
+void VestaEngine::draw_light_gizmo_overlay()
+{
+    if (!_imguiInitialized || !_showDebugUi) {
+        return;
+    }
+
+    const auto& selection = _renderer.GetSelection();
+    if (selection.kind != vesta::render::SelectionKind::PointLight && selection.kind != vesta::render::SelectionKind::SpotLight
+        && selection.kind != vesta::render::SelectionKind::AreaLight) {
+        return;
+    }
+
+    ImGuiViewport* viewport = ImGui::GetMainViewport();
+    if (viewport == nullptr) {
+        return;
+    }
+
+    const Camera& camera = _renderer.GetCamera();
+    const auto& settings = _renderer.GetSettings();
+    ImDrawList* drawList = ImGui::GetForegroundDrawList();
+    const ImVec2 origin = viewport->Pos;
+    const ImVec2 size = viewport->Size;
+
+    auto project = [&](glm::vec3 position) {
+        return ProjectWorldToViewport(camera, position, origin, size);
+    };
+    auto normalized = [](glm::vec3 value, glm::vec3 fallback) {
+        const float length = glm::length(value);
+        return length > 1.0e-4f ? value / length : fallback;
+    };
+    auto drawLabel = [&](ImVec2 anchor, const char* label, ImU32 color) {
+        const ImVec2 textPos(anchor.x + 12.0f, anchor.y - 18.0f);
+        drawList->AddText(ImVec2(textPos.x + 1.0f, textPos.y + 1.0f), IM_COL32(0, 0, 0, 180), label);
+        drawList->AddText(textPos, color, label);
+    };
+
+    if (selection.kind == vesta::render::SelectionKind::PointLight) {
+        const glm::vec3 position(settings.pointLightPositionAndIntensity);
+        const auto screen = project(position);
+        if (!screen.has_value()) {
+            return;
+        }
+        const ImU32 color = settings.enablePointLight ? IM_COL32(255, 203, 82, 255) : IM_COL32(150, 150, 150, 180);
+        drawList->AddCircleFilled(*screen, 5.0f, color, 24);
+        drawList->AddCircle(*screen, 15.0f, color, 32, 2.0f);
+        drawList->AddLine(ImVec2(screen->x - 20.0f, screen->y), ImVec2(screen->x + 20.0f, screen->y), color, 1.5f);
+        drawList->AddLine(ImVec2(screen->x, screen->y - 20.0f), ImVec2(screen->x, screen->y + 20.0f), color, 1.5f);
+        drawLabel(*screen, "Point Light", color);
+        return;
+    }
+
+    if (selection.kind == vesta::render::SelectionKind::SpotLight) {
+        const glm::vec3 position(settings.spotLightPositionAndIntensity);
+        const glm::vec3 direction = normalized(glm::vec3(settings.spotLightDirectionAndAngle), glm::vec3(0.0f, -1.0f, 0.0f));
+        const auto screen = project(position);
+        const auto tip = project(position + direction * 1.2f);
+        if (!screen.has_value()) {
+            return;
+        }
+        const ImU32 color = settings.enableSpotLight ? IM_COL32(255, 174, 88, 255) : IM_COL32(150, 150, 150, 180);
+        drawList->AddCircleFilled(*screen, 5.0f, color, 20);
+        drawList->AddCircle(*screen, 13.0f, color, 28, 2.0f);
+        if (tip.has_value()) {
+            drawList->AddLine(*screen, *tip, color, 2.0f);
+            drawList->AddTriangleFilled(
+                *tip, ImVec2(tip->x - 5.0f, tip->y + 10.0f), ImVec2(tip->x + 5.0f, tip->y + 10.0f), color);
+        }
+        drawLabel(*screen, "Spot Light", color);
+        return;
+    }
+
+    if (selection.kind == vesta::render::SelectionKind::AreaLight) {
+        const glm::vec3 position(settings.areaLightPositionAndIntensity);
+        const glm::vec3 normal = normalized(glm::vec3(settings.areaLightNormalAndSize), glm::vec3(0.0f, -1.0f, 0.0f));
+        const auto screen = project(position);
+        const auto normalTip = project(position + normal * 1.0f);
+        if (!screen.has_value()) {
+            return;
+        }
+        const ImU32 color = settings.enableAreaLight ? IM_COL32(129, 188, 255, 255) : IM_COL32(150, 150, 150, 180);
+        const float halfExtent = 13.0f;
+        drawList->AddQuad(
+            ImVec2(screen->x, screen->y - halfExtent),
+            ImVec2(screen->x + halfExtent, screen->y),
+            ImVec2(screen->x, screen->y + halfExtent),
+            ImVec2(screen->x - halfExtent, screen->y),
+            color,
+            2.0f);
+        drawList->AddCircleFilled(*screen, 4.0f, color, 16);
+        if (normalTip.has_value()) {
+            drawList->AddLine(*screen, *normalTip, color, 2.0f);
+        }
+        drawLabel(*screen, "Area Light", color);
+    }
 }
 
 void VestaEngine::build_main_menu_bar()
