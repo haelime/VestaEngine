@@ -3047,7 +3047,7 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
     gbufferDesc.extent = renderExtent;
     gbufferDesc.format = VK_FORMAT_R16G16B16A16_SFLOAT;
     gbufferDesc.aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT;
-    gbufferDesc.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
+    gbufferDesc.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     gbufferDesc.registerBindlessStorage = true;
 
     ImageDesc depthDesc{};
@@ -3065,7 +3065,8 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
     storageDesc.extent = renderExtent;
     storageDesc.format = VK_FORMAT_R16G16B16A16_SFLOAT;
     storageDesc.aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT;
-    storageDesc.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    storageDesc.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT
+        | VK_IMAGE_USAGE_SAMPLED_BIT;
     storageDesc.registerBindlessStorage = true;
 
     ImageDesc pathTraceDesc = storageDesc;

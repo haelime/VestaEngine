@@ -124,8 +124,11 @@ public:
     std::vector<std::filesystem::path> _recentScenePaths;
     std::vector<std::string> _logConsoleLines;
     std::vector<VkDescriptorSet> _texturePreviewDescriptors;
+    std::vector<VkDescriptorSet> _frameTexturePreviewDescriptors;
+    std::vector<vesta::render::ImageHandle> _frameTexturePreviewImages;
     uint64_t _texturePreviewSceneVersion{ 0 };
     size_t _selectedTexturePreviewIndex{ 0 };
+    size_t _selectedFrameTexturePreviewIndex{ 0 };
     int _selectedBufferInspectorIndex{ 0 };
 
     static VestaEngine& Get();

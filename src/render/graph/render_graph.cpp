@@ -187,9 +187,11 @@ void RenderGraph::Compile(RenderDevice& device)
             const TextureResource& resource = _textures[access.texture.index];
             return RenderGraphPassTiming::ResourceAccess{
                 .name = resource.name,
+                .texture = access.texture,
                 .usage = access.usage,
                 .format = resource.desc.format,
                 .extent = resource.desc.extent,
+                .imported = resource.imported,
             };
         };
 
@@ -394,6 +396,17 @@ void RenderGraph::Execute(RenderGraphExecutionContext& executionContext)
                     .toUsage = barrier.toUsage,
                 });
             }
+            auto inputs = compiledPass.inputs;
+            auto outputs = compiledPass.outputs;
+            auto attachResolvedImages = [&](std::vector<RenderGraphPassTiming::ResourceAccess>& accesses) {
+                for (auto& access : accesses) {
+                    if (access.texture && access.texture.index < resolvedImages.size()) {
+                        access.image = resolvedImages[access.texture.index];
+                    }
+                }
+            };
+            attachResolvedImages(inputs);
+            attachResolvedImages(outputs);
             executionContext.passTimings->push_back(RenderGraphPassTiming{
                 .name = std::string(compiledPass.pass->Name()),
                 .readCount = compiledPass.readCount,
@@ -402,8 +415,8 @@ void RenderGraph::Execute(RenderGraphExecutionContext& executionContext)
                 .cpuMs = cpuMs,
                 .gpuMs = gpuMs,
                 .gpuTimingValid = gpuTimingValid,
-                .inputs = compiledPass.inputs,
-                .outputs = compiledPass.outputs,
+                .inputs = std::move(inputs),
+                .outputs = std::move(outputs),
                 .barriers = std::move(barrierInfo),
             });
         }

@@ -50,9 +50,12 @@ struct RenderGraphPassNode {
 struct RenderGraphPassTiming {
     struct ResourceAccess {
         std::string name;
+        GraphTextureHandle texture{};
+        ImageHandle image{};
         ResourceUsage usage{ ResourceUsage::Undefined };
         VkFormat format{ VK_FORMAT_UNDEFINED };
         VkExtent3D extent{ 1, 1, 1 };
+        bool imported{ false };
     };
     struct BarrierInfo {
         std::string name;

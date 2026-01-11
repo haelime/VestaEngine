@@ -382,6 +382,47 @@ const char* VkFormatLabel(VkFormat format)
     }
 }
 
+VkImageLayout PreviewLayoutForResourceUsage(vesta::render::ResourceUsage usage)
+{
+    switch (usage) {
+    case vesta::render::ResourceUsage::DepthRead:
+        return VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+    case vesta::render::ResourceUsage::StorageRead:
+    case vesta::render::ResourceUsage::StorageWrite:
+        return VK_IMAGE_LAYOUT_GENERAL;
+    case vesta::render::ResourceUsage::SampledRead:
+        return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    default:
+        return VK_IMAGE_LAYOUT_UNDEFINED;
+    }
+}
+
+bool IsPreviewableFrameTexture(const vesta::render::RenderDevice& device,
+    const vesta::render::RenderGraphPassTiming::ResourceAccess& access)
+{
+    if (!access.image || access.imported) {
+        return false;
+    }
+    const VkImageLayout layout = PreviewLayoutForResourceUsage(access.usage);
+    if (layout == VK_IMAGE_LAYOUT_UNDEFINED) {
+        return false;
+    }
+    return (device.GetImageResource(access.image).desc.usage & VK_IMAGE_USAGE_SAMPLED_BIT) != 0;
+}
+
+ImVec2 FitPreviewSize(VkExtent3D extent, float maxSize)
+{
+    const float width = static_cast<float>(std::max(extent.width, 1u));
+    const float height = static_cast<float>(std::max(extent.height, 1u));
+    ImVec2 previewSize(maxSize, maxSize);
+    if (width > height) {
+        previewSize.y = maxSize * (height / width);
+    } else {
+        previewSize.x = maxSize * (width / height);
+    }
+    return previewSize;
+}
+
 struct FrameTimingStats {
     float averageMs{ 0.0f };
     float minMs{ 0.0f };
@@ -2096,6 +2137,8 @@ void VestaEngine::clear_texture_preview_descriptors()
 {
     if (!_imguiInitialized) {
         _texturePreviewDescriptors.clear();
+        _frameTexturePreviewDescriptors.clear();
+        _frameTexturePreviewImages.clear();
         _texturePreviewSceneVersion = 0;
         return;
     }
@@ -2106,7 +2149,14 @@ void VestaEngine::clear_texture_preview_descriptors()
             ImGui_ImplVulkan_RemoveTexture(descriptor);
         }
     }
+    for (VkDescriptorSet descriptor : _frameTexturePreviewDescriptors) {
+        if (descriptor != VK_NULL_HANDLE) {
+            ImGui_ImplVulkan_RemoveTexture(descriptor);
+        }
+    }
     _texturePreviewDescriptors.clear();
+    _frameTexturePreviewDescriptors.clear();
+    _frameTexturePreviewImages.clear();
     _texturePreviewSceneVersion = 0;
 }
 
@@ -3969,6 +4019,16 @@ void VestaEngine::build_debug_ui()
             std::sort(frameTextures.begin(), frameTextures.end(), [](const FrameTextureRow& lhs, const FrameTextureRow& rhs) {
                 return lhs.access.name < rhs.access.name;
             });
+            if (_frameTexturePreviewDescriptors.size() != frameTextures.size()) {
+                for (VkDescriptorSet descriptor : _frameTexturePreviewDescriptors) {
+                    if (descriptor != VK_NULL_HANDLE) {
+                        ImGui_ImplVulkan_RemoveTexture(descriptor);
+                    }
+                }
+                _frameTexturePreviewDescriptors.assign(frameTextures.size(), VK_NULL_HANDLE);
+                _frameTexturePreviewImages.assign(frameTextures.size(), {});
+                _selectedFrameTexturePreviewIndex = 0;
+            }
 
             if (ImGui::BeginTabBar("ResourceTabs")) {
                 if (ImGui::BeginTabItem("Summary")) {
@@ -3998,8 +4058,18 @@ void VestaEngine::build_debug_ui()
                     ImGui::EndTabItem();
                 }
                 if (ImGui::BeginTabItem("Frame Textures")) {
-                    if (ImGui::BeginTable("FrameTextureTable", 7, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+                    if (frameTextures.empty()) {
+                        ImGui::TextDisabled("No render graph frame textures are available yet.");
+                    } else {
+                        _selectedFrameTexturePreviewIndex =
+                            std::min(_selectedFrameTexturePreviewIndex, frameTextures.size() - 1u);
+                    }
+                    if (ImGui::BeginTable("FrameTextureTable",
+                            8,
+                            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
+                            ImVec2(0.0f, 180.0f))) {
                         ImGui::TableSetupColumn("Name");
+                        ImGui::TableSetupColumn("Preview", ImGuiTableColumnFlags_WidthFixed, 64.0f);
                         ImGui::TableSetupColumn("Last Usage", ImGuiTableColumnFlags_WidthFixed, 108.0f);
                         ImGui::TableSetupColumn("Format", ImGuiTableColumnFlags_WidthFixed, 82.0f);
                         ImGui::TableSetupColumn("Resolution", ImGuiTableColumnFlags_WidthFixed, 96.0f);
@@ -4007,27 +4077,85 @@ void VestaEngine::build_debug_ui()
                         ImGui::TableSetupColumn("Writes", ImGuiTableColumnFlags_WidthFixed, 48.0f);
                         ImGui::TableSetupColumn("Scale", ImGuiTableColumnFlags_WidthFixed, 72.0f);
                         ImGui::TableHeadersRow();
-                        for (const FrameTextureRow& row : frameTextures) {
+                        for (size_t textureIndex = 0; textureIndex < frameTextures.size(); ++textureIndex) {
+                            const FrameTextureRow& row = frameTextures[textureIndex];
+                            ImGui::PushID(static_cast<int>(textureIndex));
                             ImGui::TableNextRow();
                             ImGui::TableSetColumnIndex(0);
-                            ImGui::TextUnformatted(row.access.name.c_str());
+                            if (ImGui::Selectable(row.access.name.c_str(),
+                                    _selectedFrameTexturePreviewIndex == textureIndex,
+                                    ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowItemOverlap)) {
+                                _selectedFrameTexturePreviewIndex = textureIndex;
+                            }
                             ImGui::TableSetColumnIndex(1);
-                            ImGui::TextUnformatted(ResourceUsageLabel(row.access.usage));
+                            const bool previewable = IsPreviewableFrameTexture(device, row.access);
+                            if (textureIndex < _frameTexturePreviewImages.size()
+                                && _frameTexturePreviewImages[textureIndex] != row.access.image) {
+                                if (_frameTexturePreviewDescriptors[textureIndex] != VK_NULL_HANDLE) {
+                                    ImGui_ImplVulkan_RemoveTexture(_frameTexturePreviewDescriptors[textureIndex]);
+                                    _frameTexturePreviewDescriptors[textureIndex] = VK_NULL_HANDLE;
+                                }
+                                _frameTexturePreviewImages[textureIndex] = row.access.image;
+                            }
+                            if (previewable && _frameTexturePreviewDescriptors[textureIndex] == VK_NULL_HANDLE) {
+                                _frameTexturePreviewDescriptors[textureIndex] = ImGui_ImplVulkan_AddTexture(device.GetDefaultSampler(),
+                                    device.GetImageView(row.access.image),
+                                    PreviewLayoutForResourceUsage(row.access.usage));
+                                _frameTexturePreviewImages[textureIndex] = row.access.image;
+                            }
+                            if (previewable && _frameTexturePreviewDescriptors[textureIndex] != VK_NULL_HANDLE) {
+                                ImGui::Image(reinterpret_cast<ImTextureID>(_frameTexturePreviewDescriptors[textureIndex]),
+                                    ImVec2(48.0f, 48.0f));
+                            } else if (row.access.imported) {
+                                ImGui::TextDisabled("import");
+                            } else {
+                                ImGui::TextDisabled("-");
+                            }
                             ImGui::TableSetColumnIndex(2);
-                            ImGui::TextUnformatted(VkFormatLabel(row.access.format));
+                            ImGui::TextUnformatted(ResourceUsageLabel(row.access.usage));
                             ImGui::TableSetColumnIndex(3);
-                            ImGui::Text("%ux%u", row.access.extent.width, row.access.extent.height);
+                            ImGui::TextUnformatted(VkFormatLabel(row.access.format));
                             ImGui::TableSetColumnIndex(4);
-                            ImGui::Text("%u", row.readers);
+                            ImGui::Text("%ux%u", row.access.extent.width, row.access.extent.height);
                             ImGui::TableSetColumnIndex(5);
-                            ImGui::Text("%u", row.writers);
+                            ImGui::Text("%u", row.readers);
                             ImGui::TableSetColumnIndex(6);
+                            ImGui::Text("%u", row.writers);
+                            ImGui::TableSetColumnIndex(7);
                             const VkExtent2D swapchainExtent = device.GetSwapchainExtent();
                             const bool fullRes = row.access.extent.width == swapchainExtent.width
                                 && row.access.extent.height == swapchainExtent.height;
                             ImGui::TextUnformatted(fullRes ? "full-res" : "scaled");
+                            ImGui::PopID();
                         }
                         ImGui::EndTable();
+                    }
+                    if (!frameTextures.empty()) {
+                        const FrameTextureRow& selected = frameTextures[_selectedFrameTexturePreviewIndex];
+                        ImGui::SeparatorText("Selected Frame Texture");
+                        const bool previewable = IsPreviewableFrameTexture(device, selected.access);
+                        if (previewable && _frameTexturePreviewDescriptors[_selectedFrameTexturePreviewIndex] != VK_NULL_HANDLE) {
+                            ImGui::Image(reinterpret_cast<ImTextureID>(
+                                             _frameTexturePreviewDescriptors[_selectedFrameTexturePreviewIndex]),
+                                FitPreviewSize(selected.access.extent, 192.0f));
+                        } else {
+                            ImGui::BeginDisabled();
+                            ImGui::Button("No Preview", ImVec2(160.0f, 96.0f));
+                            ImGui::EndDisabled();
+                        }
+                        ImGui::SameLine();
+                        ImGui::BeginGroup();
+                        ImGui::Text("Name: %s", selected.access.name.c_str());
+                        ImGui::Text("Usage: %s", ResourceUsageLabel(selected.access.usage));
+                        ImGui::Text("Format: %s", VkFormatLabel(selected.access.format));
+                        ImGui::Text("Resolution: %ux%u", selected.access.extent.width, selected.access.extent.height);
+                        ImGui::Text("Reads/Writes: %u/%u", selected.readers, selected.writers);
+                        ImGui::Text("Image Handle: %s",
+                            selected.access.image ? std::to_string(selected.access.image.index).c_str() : "none");
+                        if (!previewable) {
+                            ImGui::TextDisabled("Preview requires a non-imported sampled image in a readable layout.");
+                        }
+                        ImGui::EndGroup();
                     }
                     ImGui::EndTabItem();
                 }
