@@ -32,6 +32,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <commdlg.h>
+#include <shellapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
 #include <windows.h>
@@ -921,6 +922,61 @@ struct ShaderCompilerDiagnostic {
     int line{ 0 };
     std::string message;
 };
+
+std::filesystem::path ResolveShaderDiagnosticPath(const ShaderCompilerDiagnostic& diagnostic)
+{
+    if (diagnostic.file.empty() || diagnostic.file == "(compiler)") {
+        return {};
+    }
+
+    std::filesystem::path filePath(diagnostic.file);
+    std::vector<std::filesystem::path> candidates;
+    if (filePath.is_absolute()) {
+        candidates.push_back(filePath);
+    } else {
+        candidates.push_back(std::filesystem::current_path() / filePath);
+        candidates.push_back(std::filesystem::current_path() / "shaders" / filePath.filename());
+    }
+
+    for (const auto& candidate : candidates) {
+        std::error_code error;
+        const std::filesystem::path normalized = std::filesystem::weakly_canonical(candidate, error);
+        const std::filesystem::path resolved = error ? candidate.lexically_normal() : normalized;
+        if (std::filesystem::exists(resolved)) {
+            return resolved;
+        }
+    }
+    return {};
+}
+
+bool OpenSourceFileAtLine(const std::filesystem::path& path, int line)
+{
+    if (path.empty() || !std::filesystem::exists(path)) {
+        return false;
+    }
+
+#if defined(_WIN32)
+    std::wstring normalized = path.wstring();
+    for (wchar_t& character : normalized) {
+        if (character == L'\\') {
+            character = L'/';
+        }
+    }
+    const std::wstring vscodeUri = L"vscode://file/" + normalized + L":" + std::to_wstring(std::max(line, 1));
+    const HINSTANCE vscodeResult =
+        ShellExecuteW(nullptr, L"open", vscodeUri.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    if (reinterpret_cast<intptr_t>(vscodeResult) > 32) {
+        return true;
+    }
+
+    const HINSTANCE fileResult =
+        ShellExecuteW(nullptr, L"open", path.wstring().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    return reinterpret_cast<intptr_t>(fileResult) > 32;
+#else
+    (void)line;
+    return false;
+#endif
+}
 
 std::optional<ShaderCompilerDiagnostic> ParseShaderCompilerDiagnostic(std::string_view line)
 {
@@ -4575,10 +4631,11 @@ void VestaEngine::build_debug_ui()
                     ImGui::TableSetupColumn("File", ImGuiTableColumnFlags_WidthStretch);
                     ImGui::TableSetupColumn("Line", ImGuiTableColumnFlags_WidthFixed, 54.0f);
                     ImGui::TableSetupColumn("Message", ImGuiTableColumnFlags_WidthStretch);
-                    ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 62.0f);
+                    ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 112.0f);
                     ImGui::TableHeadersRow();
                     for (size_t index = 0; index < shaderDiagnostics.size(); ++index) {
                         const ShaderCompilerDiagnostic& diagnostic = shaderDiagnostics[index];
+                        const std::filesystem::path sourcePath = ResolveShaderDiagnosticPath(diagnostic);
                         ImGui::TableNextRow();
                         ImGui::TableSetColumnIndex(0);
                         const ImVec4 severityColor = diagnostic.severity == "ERROR" ? ImVec4(1.0f, 0.36f, 0.28f, 1.0f)
@@ -4592,6 +4649,16 @@ void VestaEngine::build_debug_ui()
                         ImGui::TextWrapped("%s", diagnostic.message.c_str());
                         ImGui::TableSetColumnIndex(4);
                         ImGui::PushID(static_cast<int>(index));
+                        if (sourcePath.empty()) {
+                            ImGui::BeginDisabled();
+                            ImGui::SmallButton("Open");
+                            ImGui::EndDisabled();
+                        } else if (ImGui::SmallButton("Open")) {
+                            const bool opened = OpenSourceFileAtLine(sourcePath, diagnostic.line);
+                            log_startup_event(opened ? "Opened shader source: " + sourcePath.string()
+                                                     : "Failed to open shader source: " + sourcePath.string());
+                        }
+                        ImGui::SameLine();
                         if (ImGui::SmallButton("Copy")) {
                             const std::string clipboard =
                                 diagnostic.file + ":" + std::to_string(diagnostic.line) + " " + diagnostic.message;
