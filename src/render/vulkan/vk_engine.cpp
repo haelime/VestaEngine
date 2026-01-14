@@ -21,10 +21,12 @@
 #include <fstream>
 #include <functional>
 #include <iomanip>
+#include <limits>
 #include <numeric>
 #include <sstream>
 #include <string_view>
 #include <thread>
+#include <utility>
 
 #include <vesta/core/debug.h>
 
@@ -1041,6 +1043,20 @@ std::optional<ImVec2> ProjectWorldToViewport(const Camera& camera, glm::vec3 pos
         origin.x + (ndc.x * 0.5f + 0.5f) * size.x,
         origin.y + (ndc.y * 0.5f + 0.5f) * size.y,
     };
+}
+
+glm::vec3 RotateByGaussianQuaternion(const glm::vec4& quaternion, glm::vec3 vector)
+{
+    const glm::vec4 q = glm::length(quaternion) > 1.0e-4f ? quaternion / glm::length(quaternion) : glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+    const glm::vec3 t = 2.0f * glm::cross(glm::vec3(q), vector);
+    return vector + q.w * t + glm::cross(glm::vec3(q), t);
+}
+
+glm::vec3 GaussianBaseColor(const vesta::scene::GaussianPrimitive& gaussian)
+{
+    constexpr float kShC0 = 0.28209479177387814f;
+    const glm::vec3 color = glm::vec3(gaussian.shCoefficients[0]) * kShC0 + glm::vec3(0.5f);
+    return glm::clamp(color, glm::vec3(0.0f), glm::vec3(1.0f));
 }
 
 std::filesystem::path MakeTimestampedCapturePath(std::string_view prefix, std::string_view extension)
@@ -2273,8 +2289,12 @@ void VestaEngine::draw_light_gizmo_overlay()
     }
 
     const auto& selection = _renderer.GetSelection();
-    if (selection.kind != vesta::render::SelectionKind::PointLight && selection.kind != vesta::render::SelectionKind::SpotLight
-        && selection.kind != vesta::render::SelectionKind::AreaLight) {
+    const bool lightSelected = selection.kind == vesta::render::SelectionKind::PointLight
+        || selection.kind == vesta::render::SelectionKind::SpotLight || selection.kind == vesta::render::SelectionKind::AreaLight;
+    const auto& scene = _renderer.GetScene();
+    const auto& settings = _renderer.GetSettings();
+    const bool gaussianOverlay = settings.gaussianShowCovarianceEllipsoids && !scene.GetGaussians().empty();
+    if (!lightSelected && !gaussianOverlay) {
         return;
     }
 
@@ -2284,7 +2304,6 @@ void VestaEngine::draw_light_gizmo_overlay()
     }
 
     const Camera& camera = _renderer.GetCamera();
-    const auto& settings = _renderer.GetSettings();
     ImDrawList* drawList = ImGui::GetForegroundDrawList();
     const ImVec2 origin = viewport->Pos;
     const ImVec2 size = viewport->Size;
@@ -2301,6 +2320,50 @@ void VestaEngine::draw_light_gizmo_overlay()
         drawList->AddText(ImVec2(textPos.x + 1.0f, textPos.y + 1.0f), IM_COL32(0, 0, 0, 180), label);
         drawList->AddText(textPos, color, label);
     };
+
+    if (gaussianOverlay) {
+        const auto& gaussians = scene.GetGaussians();
+        _selectedGaussianInspectorIndex =
+            std::min(_selectedGaussianInspectorIndex, static_cast<uint32_t>(gaussians.size() - 1u));
+        const auto& gaussian = gaussians[_selectedGaussianInspectorIndex];
+        const glm::vec3 center(gaussian.positionOpacity);
+        const auto centerScreen = project(center);
+        if (centerScreen.has_value()) {
+            const float sceneRadius = std::max(scene.GetBounds().radius, 0.001f);
+            const glm::vec3 rawScale = glm::max(glm::abs(glm::vec3(gaussian.scale)), glm::vec3(1.0e-5f));
+            const glm::vec3 axisLength = glm::clamp(rawScale * _gaussianInspectorOverlayScale,
+                glm::vec3(sceneRadius * 0.002f),
+                glm::vec3(sceneRadius * 0.14f));
+            const glm::vec3 baseColor = GaussianBaseColor(gaussian);
+            const ImU32 centerColor = IM_COL32(
+                static_cast<int>(baseColor.r * 255.0f),
+                static_cast<int>(baseColor.g * 255.0f),
+                static_cast<int>(baseColor.b * 255.0f),
+                255);
+            drawList->AddCircleFilled(*centerScreen, 4.0f, centerColor, 20);
+            drawList->AddCircle(*centerScreen, 12.0f, IM_COL32(255, 255, 255, 220), 28, 1.5f);
+            if (_gaussianInspectorShowAxes) {
+                const std::array<std::pair<glm::vec3, ImU32>, 3> axes{
+                    std::pair<glm::vec3, ImU32>{ glm::vec3(axisLength.x, 0.0f, 0.0f), IM_COL32(255, 90, 90, 230) },
+                    std::pair<glm::vec3, ImU32>{ glm::vec3(0.0f, axisLength.y, 0.0f), IM_COL32(90, 255, 130, 230) },
+                    std::pair<glm::vec3, ImU32>{ glm::vec3(0.0f, 0.0f, axisLength.z), IM_COL32(100, 160, 255, 230) },
+                };
+                for (const auto& [axis, color] : axes) {
+                    const auto positive = project(center + RotateByGaussianQuaternion(gaussian.rotation, axis));
+                    const auto negative = project(center - RotateByGaussianQuaternion(gaussian.rotation, axis));
+                    if (positive.has_value() && negative.has_value()) {
+                        drawList->AddLine(*negative, *positive, color, 2.0f);
+                    }
+                }
+            }
+            const std::string label = fmt::format("Gaussian #{}  opacity {:.2f}", _selectedGaussianInspectorIndex, gaussian.positionOpacity.w);
+            drawLabel(*centerScreen, label.c_str(), IM_COL32(255, 255, 255, 255));
+        }
+    }
+
+    if (!lightSelected) {
+        return;
+    }
 
     if (selection.kind == vesta::render::SelectionKind::PointLight) {
         const glm::vec3 position(settings.pointLightPositionAndIntensity);
@@ -5051,6 +5114,66 @@ void VestaEngine::draw_gaussian_splatting_debug_panel()
     ImGui::Checkbox("Tile Grid Overlay", &settings.gaussianShowTileGrid);
     ImGui::Checkbox("Covariance Ellipsoids", &settings.gaussianShowCovarianceEllipsoids);
     ImGui::Checkbox("Spatial Bounds", &settings.gaussianShowSpatialBounds);
+
+    ImGui::SeparatorText("Splat Inspector");
+    const auto& gaussians = scene.GetGaussians();
+    if (gaussians.empty()) {
+        ImGui::TextDisabled("No Gaussian primitives are loaded.");
+        return;
+    }
+
+    _selectedGaussianInspectorIndex = std::min(_selectedGaussianInspectorIndex, static_cast<uint32_t>(gaussians.size() - 1u));
+    int selectedGaussian = static_cast<int>(_selectedGaussianInspectorIndex);
+    if (ImGui::InputInt("Selected Splat", &selectedGaussian)) {
+        selectedGaussian = std::clamp(selectedGaussian, 0, static_cast<int>(gaussians.size() - 1u));
+        _selectedGaussianInspectorIndex = static_cast<uint32_t>(selectedGaussian);
+    }
+    if (ImGui::Button("Prev")) {
+        _selectedGaussianInspectorIndex = _selectedGaussianInspectorIndex > 0u ? _selectedGaussianInspectorIndex - 1u : 0u;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Next")) {
+        _selectedGaussianInspectorIndex =
+            std::min<uint32_t>(_selectedGaussianInspectorIndex + 1u, static_cast<uint32_t>(gaussians.size() - 1u));
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Nearest Camera")) {
+        const glm::vec3 cameraPosition = _renderer.GetCamera().GetPosition();
+        float bestDistanceSq = std::numeric_limits<float>::max();
+        uint32_t bestIndex = _selectedGaussianInspectorIndex;
+        for (uint32_t index = 0; index < gaussians.size(); ++index) {
+            const glm::vec3 delta = glm::vec3(gaussians[index].positionOpacity) - cameraPosition;
+            const float distanceSq = glm::dot(delta, delta);
+            if (distanceSq < bestDistanceSq) {
+                bestDistanceSq = distanceSq;
+                bestIndex = index;
+            }
+        }
+        _selectedGaussianInspectorIndex = bestIndex;
+    }
+    ImGui::Checkbox("Inspector Axis Overlay", &_gaussianInspectorShowAxes);
+    ImGui::SameLine();
+    if (ImGui::Checkbox("Show Selected Ellipsoid", &settings.gaussianShowCovarianceEllipsoids)
+        && settings.gaussianShowCovarianceEllipsoids) {
+        settings.gaussianDebugView = vesta::render::GaussianDebugView::Covariance;
+    }
+    ImGui::SliderFloat("Ellipsoid Overlay Scale", &_gaussianInspectorOverlayScale, 0.05f, 8.0f, "%.2fx");
+
+    const auto& selected = gaussians[_selectedGaussianInspectorIndex];
+    const glm::vec3 color = GaussianBaseColor(selected);
+    ImGui::Text("Position %.3f %.3f %.3f  Opacity %.3f",
+        selected.positionOpacity.x,
+        selected.positionOpacity.y,
+        selected.positionOpacity.z,
+        selected.positionOpacity.w);
+    ImGui::Text("Scale %.5f %.5f %.5f", selected.scale.x, selected.scale.y, selected.scale.z);
+    ImGui::Text("Rotation %.3f %.3f %.3f %.3f", selected.rotation.x, selected.rotation.y, selected.rotation.z, selected.rotation.w);
+    ImGui::ColorButton("DC Color", ImVec4(color.r, color.g, color.b, 1.0f), ImGuiColorEditFlags_NoTooltip, ImVec2(32.0f, 18.0f));
+    ImGui::SameLine();
+    ImGui::Text("SH degree %u  coefficients %u",
+        scene.GetGaussianShDegree(),
+        std::min<uint32_t>((scene.GetGaussianShDegree() + 1u) * (scene.GetGaussianShDegree() + 1u),
+            vesta::scene::kGaussianMaxShCoefficients));
 }
 
 void VestaEngine::draw_ray_tracing_debug_panel()

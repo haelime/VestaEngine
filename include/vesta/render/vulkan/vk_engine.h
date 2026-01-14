@@ -129,6 +129,9 @@ public:
     uint64_t _texturePreviewSceneVersion{ 0 };
     size_t _selectedTexturePreviewIndex{ 0 };
     size_t _selectedFrameTexturePreviewIndex{ 0 };
+    uint32_t _selectedGaussianInspectorIndex{ 0 };
+    float _gaussianInspectorOverlayScale{ 1.0f };
+    bool _gaussianInspectorShowAxes{ true };
     int _selectedBufferInspectorIndex{ 0 };
 
     static VestaEngine& Get();
