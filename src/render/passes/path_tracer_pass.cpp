@@ -31,6 +31,10 @@ struct ComputePathTracePushConstants {
     uint32_t triangleBufferIndex{ 0 };
     uint32_t triangleCount{ 0 };
     uint32_t frameIndex{ 0 };
+    uint32_t debugView{ 0 };
+    uint32_t reserved0{ 0 };
+    uint32_t reserved1{ 0 };
+    uint32_t reserved2{ 0 };
 };
 
 struct HardwarePathTracePushConstants {
@@ -49,18 +53,25 @@ struct HardwarePathTracePushConstants {
     float fireflyClamp{ 8.0f };
     uint32_t pathTraceFlags{ 0u };
     uint32_t reserved0{ 0 };
+    uint32_t reserved1{ 0 };
+    uint32_t reserved2{ 0 };
+    uint32_t reserved3{ 0 };
     glm::uvec4 accumulationImageIndices0{ kInvalidResourceIndex };
     glm::uvec4 accumulationImageIndices1{ kInvalidResourceIndex };
     glm::uvec4 pathTraceParams{ 0u, 1u, 4u, 0u }; // debug view, spp, max bounces, reserved
     glm::uvec4 guideImageIndices{ kInvalidResourceIndex };
-    uint32_t reserved2{ 0 };
-    uint32_t reserved3{ 0 };
-    uint32_t reserved4{ 0 };
 };
+
+static_assert(sizeof(HardwarePathTracePushConstants) == 256);
 
 uint32_t AlignUp(uint32_t value, uint32_t alignment)
 {
     return (value + alignment - 1u) & ~(alignment - 1u);
+}
+
+uint32_t PackStorageImagePair(uint32_t first, uint32_t second)
+{
+    return (first & 0xFFFFu) | ((second & 0xFFFFu) << 16u);
 }
 
 void ClearOutput(const RenderGraphContext& context, GraphTextureHandle output)
@@ -168,7 +179,7 @@ void PathTracerPass::EnsureAccumulationImage(RenderDevice& device, VkExtent3D ex
     }
 
     DestroyAccumulationImage(device);
-    constexpr std::array<const char*, 7> kDebugNames{
+    constexpr std::array<const char*, 11> kDebugNames{
         "PathTraceAccum.Final",
         "PathTraceAccum.Albedo",
         "PathTraceAccum.Normal",
@@ -176,6 +187,10 @@ void PathTracerPass::EnsureAccumulationImage(RenderDevice& device, VkExtent3D ex
         "PathTraceAccum.Direct",
         "PathTraceAccum.Indirect",
         "PathTraceAccum.RayCount",
+        "PathTraceAccum.DiffuseBounce",
+        "PathTraceAccum.SpecularBounce",
+        "PathTraceAccum.Throughput",
+        "PathTraceAccum.PDF",
     };
     for (size_t imageIndex = 0; imageIndex < _accumulationImages.size(); ++imageIndex) {
         _accumulationImages[imageIndex] = device.CreateImage(ImageDesc{
@@ -434,9 +449,15 @@ void PathTracerPass::Execute(const RenderGraphContext& context)
             .fireflyClamp = _fireflyClamp,
             .pathTraceFlags = (_nextEventEstimation ? 1u : 0u) | (_russianRoulette ? 2u : 0u),
             .accumulationImageIndices0 = glm::uvec4(
-                accumulationIndex(0), accumulationIndex(1), accumulationIndex(2), accumulationIndex(3)),
+                PackStorageImagePair(accumulationIndex(0), accumulationIndex(1)),
+                PackStorageImagePair(accumulationIndex(2), accumulationIndex(3)),
+                PackStorageImagePair(accumulationIndex(4), accumulationIndex(5)),
+                PackStorageImagePair(accumulationIndex(6), accumulationIndex(7))),
             .accumulationImageIndices1 = glm::uvec4(
-                accumulationIndex(4), accumulationIndex(5), accumulationIndex(6), kInvalidResourceIndex),
+                PackStorageImagePair(accumulationIndex(8), accumulationIndex(9)),
+                PackStorageImagePair(accumulationIndex(10), 0xFFFFu),
+                0u,
+                0u),
             .pathTraceParams = glm::uvec4(static_cast<uint32_t>(_debugView), _samplesPerPixel, _maxBounces, 0u),
             .guideImageIndices = glm::uvec4(
                 _normalGuide ? context.GetDevice().GetImageResource(context.GetTextureHandle(_normalGuide)).bindless.storageImage : kInvalidResourceIndex,
@@ -530,6 +551,7 @@ void PathTracerPass::Execute(const RenderGraphContext& context)
         .triangleBufferIndex = triangleBufferIndex,
         .triangleCount = static_cast<uint32_t>(_scene->GetTriangles().size()),
         .frameIndex = _frameIndex,
+        .debugView = static_cast<uint32_t>(_debugView),
     };
 
     VkCommandBuffer commandBuffer = context.GetCommandBuffer();

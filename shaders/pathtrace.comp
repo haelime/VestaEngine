@@ -40,9 +40,24 @@ layout(push_constant) uniform PathTracePushConstants {
     uint triangleBufferIndex;
     uint triangleCount;
     uint frameIndex;
+    uint debugView;
+    uint reserved0;
+    uint reserved1;
+    uint reserved2;
 } pc;
 
 const uint kInvalidResourceIndex = 0xFFFFFFFFu;
+const uint DEBUG_FINAL = 0u;
+const uint DEBUG_ALBEDO = 1u;
+const uint DEBUG_NORMAL = 2u;
+const uint DEBUG_DEPTH = 3u;
+const uint DEBUG_DIRECT = 4u;
+const uint DEBUG_INDIRECT = 5u;
+const uint DEBUG_RAY_COUNT = 6u;
+const uint DEBUG_DIFFUSE_BOUNCE = 7u;
+const uint DEBUG_SPECULAR_BOUNCE = 8u;
+const uint DEBUG_THROUGHPUT = 9u;
+const uint DEBUG_PDF = 10u;
 const float PI = 3.14159265359;
 
 struct HitInfo {
@@ -172,7 +187,19 @@ vec4 sampleOptional(uint textureIndex, vec2 uv, vec4 fallback)
     return fallback * texture(sampledImages[nonuniformEXT(int(textureIndex))], uv);
 }
 
-vec3 shadeTriangle(Triangle tri, vec3 ro, vec3 rd, float u, float v, vec2 seed)
+vec3 shadeTriangle(Triangle tri,
+    vec3 ro,
+    vec3 rd,
+    float u,
+    float v,
+    vec2 seed,
+    out vec3 albedoOut,
+    out vec3 normalOut,
+    out vec3 directOut,
+    out vec3 diffuseBounceOut,
+    out vec3 specularBounceOut,
+    out vec3 throughputOut,
+    out float pdfOut)
 {
     float w = 1.0 - u - v;
     vec2 uv = tri.uv0.xy * w + tri.uv1.xy * u + tri.uv2.xy * v;
@@ -215,16 +242,36 @@ vec3 shadeTriangle(Triangle tri, vec3 ro, vec3 rd, float u, float v, vec2 seed)
     vec3 bounceDir = sampleHemisphere(N, seed);
     vec3 bounceColor = sampleSky(bounceDir) * baseColor * (1.0 - metallic) * 0.12;
 
+    albedoOut = baseColor;
+    normalOut = N;
+    directOut = direct;
+    diffuseBounceOut = ambientDiffuse + bounceColor;
+    specularBounceOut = ambientSpecular;
+    throughputOut = clamp(baseColor * (1.0 - metallic) + F * metallic, vec3(0.0), vec3(1.0));
+    pdfOut = max(dot(N, bounceDir), 0.0) / PI;
+
     return ambientDiffuse + ambientSpecular + direct + bounceColor + emissive;
 }
 
-vec3 traceScene(vec3 ro, vec3 rd, vec2 seed) {
+vec3 traceScene(vec3 ro,
+    vec3 rd,
+    vec2 seed,
+    out vec3 albedoOut,
+    out vec3 normalOut,
+    out float depthOut,
+    out vec3 directOut,
+    out vec3 diffuseBounceOut,
+    out vec3 specularBounceOut,
+    out vec3 throughputOut,
+    out float pdfOut,
+    out float rayCostOut) {
     HitInfo hit;
     hit.t = 1e20;
     hit.u = 0.0;
     hit.v = 0.0;
     hit.triangleIndex = 0u;
     bool found = false;
+    rayCostOut = 1.0;
 
     for (uint i = 0; i < pc.triangleCount; ++i) {
         float t = 0.0;
@@ -241,11 +288,20 @@ vec3 traceScene(vec3 ro, vec3 rd, vec2 seed) {
     }
 
     if (!found) {
+        albedoOut = vec3(0.0);
+        normalOut = vec3(0.5, 0.5, 1.0);
+        depthOut = 0.0;
+        directOut = vec3(0.0);
+        diffuseBounceOut = sampleSky(rd);
+        specularBounceOut = vec3(0.0);
+        throughputOut = vec3(1.0);
+        pdfOut = 0.0;
         return sampleSky(rd);
     }
 
     Triangle tri = triangleBuffers[nonuniformEXT(int(pc.triangleBufferIndex))].triangles[hit.triangleIndex];
-    return shadeTriangle(tri, ro, rd, hit.u, hit.v, seed);
+    depthOut = hit.t;
+    return shadeTriangle(tri, ro, rd, hit.u, hit.v, seed, albedoOut, normalOut, directOut, diffuseBounceOut, specularBounceOut, throughputOut, pdfOut);
 }
 
 void main() {
@@ -271,6 +327,39 @@ void main() {
         rayOrigin += pc.cameraRightAperture.xyz * lensSample.x + pc.cameraUpFocalDistance.xyz * lensSample.y;
         rayDirection = normalize(focalPoint - rayOrigin);
     }
-    vec3 color = traceScene(rayOrigin, rayDirection, vec2(pixel) + pc.cameraPositionAndFrame.w);
-    imageStore(storageImages[nonuniformEXT(int(pc.outputImageIndex))], pixel, vec4(color, 1.0));
+    vec3 albedo;
+    vec3 normal;
+    float depth;
+    vec3 direct;
+    vec3 diffuseBounce;
+    vec3 specularBounce;
+    vec3 throughput;
+    float pdf;
+    float rayCost;
+    vec3 color = traceScene(rayOrigin, rayDirection, vec2(pixel) + pc.cameraPositionAndFrame.w, albedo, normal, depth, direct, diffuseBounce, specularBounce, throughput, pdf, rayCost);
+    vec3 indirect = max(color - direct, vec3(0.0));
+
+    vec3 outputColor = color;
+    if (pc.debugView == DEBUG_ALBEDO) {
+        outputColor = albedo;
+    } else if (pc.debugView == DEBUG_NORMAL) {
+        outputColor = normalize(normal) * 0.5 + 0.5;
+    } else if (pc.debugView == DEBUG_DEPTH) {
+        outputColor = vec3(clamp(depth / 100.0, 0.0, 1.0));
+    } else if (pc.debugView == DEBUG_DIRECT) {
+        outputColor = direct;
+    } else if (pc.debugView == DEBUG_INDIRECT) {
+        outputColor = indirect;
+    } else if (pc.debugView == DEBUG_RAY_COUNT) {
+        outputColor = vec3(clamp(rayCost / 24.0, 0.0, 1.0));
+    } else if (pc.debugView == DEBUG_DIFFUSE_BOUNCE) {
+        outputColor = diffuseBounce;
+    } else if (pc.debugView == DEBUG_SPECULAR_BOUNCE) {
+        outputColor = specularBounce;
+    } else if (pc.debugView == DEBUG_THROUGHPUT) {
+        outputColor = throughput;
+    } else if (pc.debugView == DEBUG_PDF) {
+        outputColor = vec3(clamp(pdf, 0.0, 1.0));
+    }
+    imageStore(storageImages[nonuniformEXT(int(pc.outputImageIndex))], pixel, vec4(outputColor, 1.0));
 }

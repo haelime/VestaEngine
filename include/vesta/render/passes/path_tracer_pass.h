@@ -66,7 +66,7 @@ private:
     uint32_t _russianRouletteDepth{ 3 };
     float _fireflyClamp{ 8.0f };
     PathTraceDebugView _debugView{ PathTraceDebugView::Final };
-    std::array<ImageHandle, 7> _accumulationImages{};
+    std::array<ImageHandle, 11> _accumulationImages{};
     VkExtent3D _accumulationExtent{};
     bool _accumulationInitialized{ false };
     VkPipelineLayout _pipelineLayout{ VK_NULL_HANDLE };

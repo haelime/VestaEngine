@@ -179,6 +179,14 @@ const char* PathTraceDebugViewLabel(vesta::render::PathTraceDebugView view)
         return "Indirect";
     case vesta::render::PathTraceDebugView::RayCountHeatmap:
         return "Ray Count Heatmap";
+    case vesta::render::PathTraceDebugView::DiffuseBounce:
+        return "Diffuse Bounce";
+    case vesta::render::PathTraceDebugView::SpecularBounce:
+        return "Specular Bounce";
+    case vesta::render::PathTraceDebugView::Throughput:
+        return "Throughput";
+    case vesta::render::PathTraceDebugView::Pdf:
+        return "PDF";
     case vesta::render::PathTraceDebugView::Final:
     default:
         return "Final";
@@ -3126,7 +3134,7 @@ void VestaEngine::build_debug_ui()
             }
             ImGui::TextDisabled("Raster GBuffer views are live when the raster pass is active.");
 
-            const char* pathTraceDebugViews[] = { "Final", "Albedo", "Normal", "Depth", "Direct", "Indirect", "Ray Count Heatmap" };
+            const char* pathTraceDebugViews[] = { "Final", "Albedo", "Normal", "Depth", "Direct", "Indirect", "Ray Count Heatmap", "Diffuse Bounce", "Specular Bounce", "Throughput", "PDF" };
             int pathTraceDebugView = static_cast<int>(settings.pathTraceDebugView);
             if (ImGui::Combo("Path Tracing AOV", &pathTraceDebugView, pathTraceDebugViews, IM_ARRAYSIZE(pathTraceDebugViews))) {
                 settings.pathTraceDebugView = static_cast<vesta::render::PathTraceDebugView>(pathTraceDebugView);
@@ -3523,7 +3531,7 @@ void VestaEngine::build_debug_ui()
             _renderer.ResetAccumulation();
         }
 
-        const char* pathTraceDebugViews[] = { "Final", "Albedo", "Normal", "Depth", "Direct", "Indirect", "Ray Count Heatmap" };
+        const char* pathTraceDebugViews[] = { "Final", "Albedo", "Normal", "Depth", "Direct", "Indirect", "Ray Count Heatmap", "Diffuse Bounce", "Specular Bounce", "Throughput", "PDF" };
         int pathTraceDebugView = static_cast<int>(settings.pathTraceDebugView);
         if (ImGui::Combo("PT Debug View", &pathTraceDebugView, pathTraceDebugViews, IM_ARRAYSIZE(pathTraceDebugViews))) {
             settings.pathTraceDebugView = static_cast<vesta::render::PathTraceDebugView>(pathTraceDebugView);
@@ -5008,7 +5016,7 @@ void VestaEngine::draw_path_tracing_debug_panel()
     }
 
     ImGui::SeparatorText("Debug Views");
-    const char* debugViews[] = { "Final", "Albedo", "Normal", "Depth", "Direct", "Indirect", "Ray Cost Heatmap" };
+    const char* debugViews[] = { "Final", "Albedo", "Normal", "Depth", "Direct", "Indirect", "Ray Cost Heatmap", "Diffuse Bounce", "Specular Bounce", "Throughput", "PDF" };
     int debugView = static_cast<int>(settings.pathTraceDebugView);
     if (ImGui::Combo("Path Trace AOV", &debugView, debugViews, IM_ARRAYSIZE(debugViews))) {
         settings.pathTraceDebugView = static_cast<vesta::render::PathTraceDebugView>(debugView);

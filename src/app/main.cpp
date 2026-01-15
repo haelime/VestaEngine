@@ -15,7 +15,7 @@ void PrintUsage()
         << "  --mode <composite|raster|deferred|gaussian|pathtrace>\n"
         << "  --compare <off|split|difference>\n"
         << "  --debug-view <final|albedo|normal|world-position|depth|uv|material-id|object-id|roughness|metallic|emissive|ao|motion-vector|direct|indirect|reflection|denoised|difference-reference|wireframe|mip-level|shadow-map|overdraw>\n"
-        << "  --pt-debug <final|albedo|normal|depth|direct|indirect|ray-count>\n"
+        << "  --pt-debug <final|albedo|normal|depth|direct|indirect|ray-count|diffuse-bounce|specular-bounce|throughput|pdf>\n"
         << "  --gaussian-debug <final|alpha|revealage|overdraw|depth|tile-occupancy|radius|contribution-count|splat-id|sh-band|covariance>\n"
         << "  --compare-split <0.05-0.95>\n"
         << "  --compare-scale <value>\n"
@@ -174,6 +174,10 @@ std::optional<vesta::render::PathTraceDebugView> ParsePathTraceDebugView(std::st
     if (value == "ray-count" || value == "ray-heatmap" || value == "ray-count-heatmap") {
         return vesta::render::PathTraceDebugView::RayCountHeatmap;
     }
+    if (value == "diffuse-bounce" || value == "diffuse") { return vesta::render::PathTraceDebugView::DiffuseBounce; }
+    if (value == "specular-bounce" || value == "specular") { return vesta::render::PathTraceDebugView::SpecularBounce; }
+    if (value == "throughput") { return vesta::render::PathTraceDebugView::Throughput; }
+    if (value == "pdf") { return vesta::render::PathTraceDebugView::Pdf; }
     return std::nullopt;
 }
 
