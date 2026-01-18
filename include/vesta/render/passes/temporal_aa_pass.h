@@ -1,10 +1,14 @@
 #pragma once
 
+#include <cstdint>
+
 #include <glm/glm.hpp>
 
 #include <vesta/render/graph/render_graph.h>
 
 namespace vesta::render {
+enum class RendererDebugView : uint32_t;
+
 class TemporalAAPass final : public IRenderPass {
 public:
     void SetInputs(GraphTextureHandle input, GraphTextureHandle normalRoughness, GraphTextureHandle motion, GraphTextureHandle depth);
@@ -13,6 +17,7 @@ public:
     void SetFeedback(float feedback);
     void SetFrameIndex(uint32_t frameIndex);
     void SetCameraMatrices(const glm::mat4& viewProjection, const glm::mat4& inverseViewProjection);
+    void SetDebugView(RendererDebugView debugView);
 
     [[nodiscard]] std::string_view Name() const override { return "TemporalAAPass"; }
     void Initialize(RenderDevice& device) override;
@@ -29,6 +34,7 @@ private:
     bool _enabled{ true };
     float _feedback{ 0.88f };
     uint32_t _frameIndex{ 0 };
+    RendererDebugView _debugView{};
     glm::mat4 _viewProjection{ 1.0f };
     glm::mat4 _inverseViewProjection{ 1.0f };
     glm::mat4 _previousViewProjection{ 1.0f };

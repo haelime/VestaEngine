@@ -66,6 +66,11 @@ enum class RendererDebugView : uint32_t {
     MipLevel = 19,
     ShadowMap = 20,
     Overdraw = 21,
+    TemporalHistoryColor = 22,
+    TemporalHistoryDepth = 23,
+    TemporalReprojection = 24,
+    TemporalDisocclusion = 25,
+    TemporalJitter = 26,
 };
 
 enum class GaussianDebugView : uint32_t {

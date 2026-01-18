@@ -238,6 +238,16 @@ const char* RendererDebugViewLabel(vesta::render::RendererDebugView view)
         return "Shadow Map";
     case vesta::render::RendererDebugView::Overdraw:
         return "Overdraw";
+    case vesta::render::RendererDebugView::TemporalHistoryColor:
+        return "Temporal History Color";
+    case vesta::render::RendererDebugView::TemporalHistoryDepth:
+        return "Temporal History Depth";
+    case vesta::render::RendererDebugView::TemporalReprojection:
+        return "Temporal Reprojection";
+    case vesta::render::RendererDebugView::TemporalDisocclusion:
+        return "Temporal Disocclusion";
+    case vesta::render::RendererDebugView::TemporalJitter:
+        return "Temporal Jitter";
     case vesta::render::RendererDebugView::FinalColor:
     default:
         return "Final Color";
@@ -3126,6 +3136,11 @@ void VestaEngine::build_debug_ui()
                 "Mip Level",
                 "Shadow Map",
                 "Overdraw",
+                "Temporal History Color",
+                "Temporal History Depth",
+                "Temporal Reprojection",
+                "Temporal Disocclusion",
+                "Temporal Jitter",
             };
             int commonView = static_cast<int>(settings.debugView);
             if (ImGui::Combo("Debug View", &commonView, commonViews, IM_ARRAYSIZE(commonViews))) {
@@ -4970,6 +4985,16 @@ void VestaEngine::draw_rasterizer_debug_panel()
     if (ImGui::Button("Overdraw")) { settings.debugView = vesta::render::RendererDebugView::Overdraw; }
     ImGui::SameLine();
     if (ImGui::Button("Wireframe")) { settings.debugView = vesta::render::RendererDebugView::Wireframe; }
+
+    ImGui::SeparatorText("Temporal Debug");
+    if (ImGui::Button("History Color")) { settings.debugView = vesta::render::RendererDebugView::TemporalHistoryColor; }
+    ImGui::SameLine();
+    if (ImGui::Button("History Depth")) { settings.debugView = vesta::render::RendererDebugView::TemporalHistoryDepth; }
+    if (ImGui::Button("Reprojection")) { settings.debugView = vesta::render::RendererDebugView::TemporalReprojection; }
+    ImGui::SameLine();
+    if (ImGui::Button("Disocclusion")) { settings.debugView = vesta::render::RendererDebugView::TemporalDisocclusion; }
+    ImGui::SameLine();
+    if (ImGui::Button("Jitter")) { settings.debugView = vesta::render::RendererDebugView::TemporalJitter; }
 }
 
 void VestaEngine::draw_path_tracing_debug_panel()

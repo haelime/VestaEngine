@@ -302,6 +302,10 @@ vec3 resolveDebugView(ivec2 pixel)
         vec3 overdrawValue = loadStorage(pc.imageIndices4.y, pixel).rgb;
         return heatmap(clamp(overdrawValue.r, 0.0, 1.0));
     }
+    if (debugView >= 22u && debugView <= 26u) {
+        if (!hasImage(pc.imageIndices0.x)) { return vec3(-1.0); }
+        return loadStorage(pc.imageIndices0.x, pixel).rgb;
+    }
     return vec3(-1.0);
 }
 

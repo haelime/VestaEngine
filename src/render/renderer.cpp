@@ -120,9 +120,18 @@ bool NeedsPathDenoisePass(const RendererSettings& settings)
     return NeedsPathTracePass(settings) && settings.enablePathTraceDenoiser && settings.pathTraceDebugView == PathTraceDebugView::Final;
 }
 
+bool IsTemporalDebugView(RendererDebugView debugView)
+{
+    return debugView == RendererDebugView::TemporalHistoryColor
+        || debugView == RendererDebugView::TemporalHistoryDepth
+        || debugView == RendererDebugView::TemporalReprojection
+        || debugView == RendererDebugView::TemporalDisocclusion
+        || debugView == RendererDebugView::TemporalJitter;
+}
+
 bool NeedsTemporalAAPass(const RendererSettings& settings)
 {
-    return NeedsDeferredPass(settings) && settings.enableTaa;
+    return NeedsDeferredPass(settings) && (settings.enableTaa || IsTemporalDebugView(settings.debugView));
 }
 
 struct RuntimeShaderSource {
@@ -752,6 +761,7 @@ void ConfigureTemporalAAPass(Renderer& renderer, IRenderPass& pass, const Render
     temporalPass.SetFeedback(renderer.GetSettings().taaFeedback);
     temporalPass.SetFrameIndex(renderer.GetPathTraceFrameIndex());
     temporalPass.SetCameraMatrices(renderer.GetCamera().GetViewProjection(), renderer.GetCamera().GetInverseViewProjection());
+    temporalPass.SetDebugView(renderer.GetSettings().debugView);
 }
 
 void ConfigureCompositePass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)

@@ -6,6 +6,7 @@
 #include <vesta/render/vulkan/vk_images.h>
 #include <vesta/render/vulkan/vk_loader.h>
 #include <vesta/render/vulkan/vk_pipelines.h>
+#include <vesta/render/renderer.h>
 
 namespace vesta::render {
 namespace {
@@ -19,7 +20,7 @@ struct TemporalAAPushConstants {
     uint32_t frameIndex{ 0 };
     float feedback{ 0.88f };
     uint32_t enabled{ 1 };
-    uint32_t reserved0{ 0 };
+    uint32_t debugView{ 0 };
     uint32_t reserved1{ 0 };
     uint32_t reserved2{ 0 };
     glm::mat4 inverseViewProjection{ 1.0f };
@@ -59,6 +60,11 @@ void TemporalAAPass::SetCameraMatrices(const glm::mat4& viewProjection, const gl
 {
     _viewProjection = viewProjection;
     _inverseViewProjection = inverseViewProjection;
+}
+
+void TemporalAAPass::SetDebugView(RendererDebugView debugView)
+{
+    _debugView = debugView;
 }
 
 void TemporalAAPass::EnsureHistoryImage(RenderDevice& device, VkExtent3D extent)
@@ -162,6 +168,7 @@ void TemporalAAPass::Execute(const RenderGraphContext& context)
         .frameIndex = _frameIndex,
         .feedback = _feedback,
         .enabled = _enabled ? 1u : 0u,
+        .debugView = static_cast<uint32_t>(_debugView),
         .inverseViewProjection = _inverseViewProjection,
         .previousViewProjection = _hasPreviousViewProjection ? _previousViewProjection : _viewProjection,
     };

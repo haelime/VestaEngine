@@ -14,7 +14,7 @@ void PrintUsage()
         << "  --preset <recommended|performance|balanced|quality>\n"
         << "  --mode <composite|raster|deferred|gaussian|pathtrace>\n"
         << "  --compare <off|split|difference>\n"
-        << "  --debug-view <final|albedo|normal|world-position|depth|uv|material-id|object-id|roughness|metallic|emissive|ao|motion-vector|direct|indirect|reflection|denoised|difference-reference|wireframe|mip-level|shadow-map|overdraw>\n"
+        << "  --debug-view <final|albedo|normal|world-position|depth|uv|material-id|object-id|roughness|metallic|emissive|ao|motion-vector|direct|indirect|reflection|denoised|difference-reference|wireframe|mip-level|shadow-map|overdraw|history-color|history-depth|reprojection|disocclusion|jitter>\n"
         << "  --pt-debug <final|albedo|normal|depth|direct|indirect|ray-count|diffuse-bounce|specular-bounce|throughput|pdf>\n"
         << "  --gaussian-debug <final|alpha|revealage|overdraw|depth|tile-occupancy|radius|contribution-count|splat-id|sh-band|covariance>\n"
         << "  --compare-split <0.05-0.95>\n"
@@ -160,6 +160,11 @@ std::optional<vesta::render::RendererDebugView> ParseDebugView(std::string_view 
     if (value == "mip-level" || value == "miplevel" || value == "mip") { return vesta::render::RendererDebugView::MipLevel; }
     if (value == "shadow-map" || value == "shadow" || value == "shadows") { return vesta::render::RendererDebugView::ShadowMap; }
     if (value == "overdraw" || value == "raster-overdraw") { return vesta::render::RendererDebugView::Overdraw; }
+    if (value == "history-color" || value == "temporal-history" || value == "history") { return vesta::render::RendererDebugView::TemporalHistoryColor; }
+    if (value == "history-depth" || value == "temporal-history-depth") { return vesta::render::RendererDebugView::TemporalHistoryDepth; }
+    if (value == "reprojection" || value == "temporal-reprojection") { return vesta::render::RendererDebugView::TemporalReprojection; }
+    if (value == "disocclusion" || value == "disocclusion-mask") { return vesta::render::RendererDebugView::TemporalDisocclusion; }
+    if (value == "jitter" || value == "jitter-pattern" || value == "temporal-jitter") { return vesta::render::RendererDebugView::TemporalJitter; }
     return std::nullopt;
 }
 
