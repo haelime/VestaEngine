@@ -71,6 +71,7 @@ enum class RendererDebugView : uint32_t {
     TemporalReprojection = 24,
     TemporalDisocclusion = 25,
     TemporalJitter = 26,
+    ContactShadow = 27,
 };
 
 enum class GaussianDebugView : uint32_t {
@@ -320,6 +321,9 @@ struct RendererSettings {
     float shadowStrength{ 0.82f };
     bool enablePcssShadows{ false };
     float shadowFilterRadius{ 1.0f };
+    bool enableContactShadows{ true };
+    float contactShadowLength{ 1.2f };
+    float contactShadowIntensity{ 0.35f };
     bool animationPlaying{ false };
     float animationTimeScale{ 1.0f };
     float animationTimeSeconds{ 0.0f };

@@ -650,6 +650,8 @@ void ConfigureDeferredLightingPass(Renderer& renderer, IRenderPass& pass, const 
         settings.enableSsr, settings.ssrMaxDistance, settings.ssrThickness, settings.ssrIntensity);
     lightingPass.SetScreenSpaceGlobalIllumination(
         settings.enableSsgi, settings.ssgiRadius, settings.ssgiIntensity, settings.ssgiSampleCount);
+    lightingPass.SetContactShadows(
+        settings.enableContactShadows, settings.contactShadowLength, settings.contactShadowIntensity);
     if (resources.shadowMap && renderer.GetScene().HasRasterGeometry()) {
         lightingPass.SetShadowMap(resources.shadowMap,
             BuildDirectionalShadowViewProjection(renderer.GetScene().GetBounds(), settings.lightDirectionAndIntensity),

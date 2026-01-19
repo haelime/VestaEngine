@@ -14,7 +14,7 @@ void PrintUsage()
         << "  --preset <recommended|performance|balanced|quality>\n"
         << "  --mode <composite|raster|deferred|gaussian|pathtrace>\n"
         << "  --compare <off|split|difference>\n"
-        << "  --debug-view <final|albedo|normal|world-position|depth|uv|material-id|object-id|roughness|metallic|emissive|ao|motion-vector|direct|indirect|reflection|denoised|difference-reference|wireframe|mip-level|shadow-map|overdraw|history-color|history-depth|reprojection|disocclusion|jitter>\n"
+        << "  --debug-view <final|albedo|normal|world-position|depth|uv|material-id|object-id|roughness|metallic|emissive|ao|motion-vector|direct|indirect|reflection|denoised|difference-reference|wireframe|mip-level|shadow-map|overdraw|history-color|history-depth|reprojection|disocclusion|jitter|contact-shadow>\n"
         << "  --pt-debug <final|albedo|normal|depth|direct|indirect|ray-count|diffuse-bounce|specular-bounce|throughput|pdf>\n"
         << "  --gaussian-debug <final|alpha|revealage|overdraw|depth|tile-occupancy|radius|contribution-count|splat-id|sh-band|covariance>\n"
         << "  --compare-split <0.05-0.95>\n"
@@ -165,6 +165,7 @@ std::optional<vesta::render::RendererDebugView> ParseDebugView(std::string_view 
     if (value == "reprojection" || value == "temporal-reprojection") { return vesta::render::RendererDebugView::TemporalReprojection; }
     if (value == "disocclusion" || value == "disocclusion-mask") { return vesta::render::RendererDebugView::TemporalDisocclusion; }
     if (value == "jitter" || value == "jitter-pattern" || value == "temporal-jitter") { return vesta::render::RendererDebugView::TemporalJitter; }
+    if (value == "contact-shadow" || value == "contact-shadows") { return vesta::render::RendererDebugView::ContactShadow; }
     return std::nullopt;
 }
 

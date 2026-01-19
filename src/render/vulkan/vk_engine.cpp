@@ -248,6 +248,8 @@ const char* RendererDebugViewLabel(vesta::render::RendererDebugView view)
         return "Temporal Disocclusion";
     case vesta::render::RendererDebugView::TemporalJitter:
         return "Temporal Jitter";
+    case vesta::render::RendererDebugView::ContactShadow:
+        return "Contact Shadow";
     case vesta::render::RendererDebugView::FinalColor:
     default:
         return "Final Color";
@@ -1763,7 +1765,7 @@ void VestaEngine::finish_benchmark()
                << "taa,taa_feedback,"
                << "ssr,ssr_max_distance,ssr_thickness,ssr_intensity,"
                << "ssgi,ssgi_radius,ssgi_intensity,ssgi_samples,"
-               << "shadow_map,shadow_map_size,shadow_bias,shadow_normal_bias,shadow_strength,shadow_pcss,shadow_filter_radius,"
+               << "shadow_map,shadow_map_size,shadow_bias,shadow_normal_bias,shadow_strength,shadow_pcss,shadow_filter_radius,contact_shadows,contact_shadow_length,contact_shadow_intensity,"
                << "pt_nee,pt_rr,pt_rr_depth,pt_firefly_clamp,"
                << "pt_denoiser,pt_denoiser_strength,pt_denoiser_temporal,pt_denoiser_iterations,"
                << "requested_backend,active_backend,scene_upload_mode,"
@@ -1839,6 +1841,9 @@ void VestaEngine::finish_benchmark()
            << settings.shadowStrength << ','
            << (settings.enablePcssShadows ? "true" : "false") << ','
            << settings.shadowFilterRadius << ','
+           << (settings.enableContactShadows ? "true" : "false") << ','
+           << settings.contactShadowLength << ','
+           << settings.contactShadowIntensity << ','
            << (settings.pathTraceNextEventEstimation ? "true" : "false") << ','
            << (settings.pathTraceRussianRoulette ? "true" : "false") << ','
            << settings.pathTraceRussianRouletteDepth << ','
@@ -2004,6 +2009,9 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "  \"shadow_strength\": " << settings.shadowStrength << ",\n"
            << "  \"shadow_pcss\": " << (settings.enablePcssShadows ? "true" : "false") << ",\n"
            << "  \"shadow_filter_radius\": " << settings.shadowFilterRadius << ",\n"
+           << "  \"contact_shadows\": " << (settings.enableContactShadows ? "true" : "false") << ",\n"
+           << "  \"contact_shadow_length\": " << settings.contactShadowLength << ",\n"
+           << "  \"contact_shadow_intensity\": " << settings.contactShadowIntensity << ",\n"
            << "  \"point_light\": " << (settings.enablePointLight ? "true" : "false") << ",\n"
            << "  \"spot_light\": " << (settings.enableSpotLight ? "true" : "false") << ",\n"
            << "  \"area_light\": " << (settings.enableAreaLight ? "true" : "false") << ",\n"
@@ -3141,6 +3149,7 @@ void VestaEngine::build_debug_ui()
                 "Temporal Reprojection",
                 "Temporal Disocclusion",
                 "Temporal Jitter",
+                "Contact Shadow",
             };
             int commonView = static_cast<int>(settings.debugView);
             if (ImGui::Combo("Debug View", &commonView, commonViews, IM_ARRAYSIZE(commonViews))) {
@@ -3595,6 +3604,15 @@ void VestaEngine::build_debug_ui()
             _renderer.ResetAccumulation();
         }
         if (ImGui::SliderFloat("Shadow Filter Radius", &settings.shadowFilterRadius, 0.5f, 4.0f, "%.2f")) {
+            _renderer.ResetAccumulation();
+        }
+        if (ImGui::Checkbox("Contact Shadows", &settings.enableContactShadows)) {
+            _renderer.ResetAccumulation();
+        }
+        if (ImGui::SliderFloat("Contact Length", &settings.contactShadowLength, 0.05f, 8.0f, "%.2f")) {
+            _renderer.ResetAccumulation();
+        }
+        if (ImGui::SliderFloat("Contact Intensity", &settings.contactShadowIntensity, 0.0f, 1.0f, "%.2f")) {
             _renderer.ResetAccumulation();
         }
 
@@ -4967,6 +4985,15 @@ void VestaEngine::draw_rasterizer_debug_panel()
     if (ImGui::SliderFloat("Shadow Filter Radius", &settings.shadowFilterRadius, 0.5f, 4.0f, "%.2f")) {
         _renderer.ResetAccumulation();
     }
+    if (ImGui::Checkbox("Contact Shadows", &settings.enableContactShadows)) {
+        _renderer.ResetAccumulation();
+    }
+    if (ImGui::SliderFloat("Contact Length", &settings.contactShadowLength, 0.05f, 8.0f, "%.2f")) {
+        _renderer.ResetAccumulation();
+    }
+    if (ImGui::SliderFloat("Contact Intensity", &settings.contactShadowIntensity, 0.0f, 1.0f, "%.2f")) {
+        _renderer.ResetAccumulation();
+    }
 
     ImGui::SeparatorText("Culling");
     ImGui::Checkbox("Frustum Culling", &settings.enableFrustumCulling);
@@ -4985,6 +5012,8 @@ void VestaEngine::draw_rasterizer_debug_panel()
     if (ImGui::Button("Overdraw")) { settings.debugView = vesta::render::RendererDebugView::Overdraw; }
     ImGui::SameLine();
     if (ImGui::Button("Wireframe")) { settings.debugView = vesta::render::RendererDebugView::Wireframe; }
+    ImGui::SameLine();
+    if (ImGui::Button("Contact Shadow")) { settings.debugView = vesta::render::RendererDebugView::ContactShadow; }
 
     ImGui::SeparatorText("Temporal Debug");
     if (ImGui::Button("History Color")) { settings.debugView = vesta::render::RendererDebugView::TemporalHistoryColor; }

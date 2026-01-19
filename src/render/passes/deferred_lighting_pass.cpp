@@ -39,6 +39,7 @@ struct DeferredLightingConstants {
     glm::mat4 lightViewProjection{ 1.0f };
     glm::vec4 shadowParams{ 0.0015f, 0.015f, 0.82f, 0.0f }; // bias, normal bias, strength, enabled
     glm::vec4 shadowFilterParams{ 1.0f, 0.0f, 0.0f, 0.0f }; // filter radius, PCSS enabled
+    glm::vec4 contactShadowParams{ 1.0f, 1.2f, 0.35f, 0.0f }; // enabled, length, intensity
     glm::uvec4 shadowIndices{ kInvalidResourceIndex, 0u, 0u, 0u };
     glm::vec4 directionalColor{ 1.0f, 1.0f, 1.0f, 0.0f };
     glm::vec4 pointPositionAndIntensity{ 0.0f, 2.0f, 0.0f, 0.0f };
@@ -156,6 +157,14 @@ void DeferredLightingPass::SetScreenSpaceGlobalIllumination(bool enabled, float 
         static_cast<float>(std::clamp(sampleCount, 4u, 16u)));
 }
 
+void DeferredLightingPass::SetContactShadows(bool enabled, float length, float intensity)
+{
+    _contactShadowParams = glm::vec4(enabled ? 1.0f : 0.0f,
+        std::clamp(length, 0.05f, 8.0f),
+        std::clamp(intensity, 0.0f, 1.0f),
+        0.0f);
+}
+
 void DeferredLightingPass::SetShadowMap(
     GraphTextureHandle shadowMap,
     glm::mat4 lightViewProjection,
@@ -247,6 +256,7 @@ void DeferredLightingPass::Execute(const RenderGraphContext& context)
             .lightViewProjection = _lightViewProjection,
             .shadowParams = glm::vec4(_shadowParams.x, _shadowParams.y, _shadowParams.z, shadowMapIndex != kInvalidResourceIndex ? _shadowParams.w : 0.0f),
             .shadowFilterParams = _shadowFilterParams,
+            .contactShadowParams = _contactShadowParams,
             .shadowIndices = glm::uvec4(shadowMapIndex, 0u, 0u, 0u),
             .directionalColor = _directionalLightColor,
             .pointPositionAndIntensity = _pointLightPositionAndIntensity,
