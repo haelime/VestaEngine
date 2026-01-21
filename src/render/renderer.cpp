@@ -1877,6 +1877,48 @@ std::vector<RenderPassDebugInfo> Renderer::GetRenderPassDebugInfo() const
         std::max(1u, static_cast<uint32_t>(std::ceil(static_cast<float>(extent.height) * _settings.pathTraceResolutionScale))),
     };
     const uint32_t pathTraceDispatchGrid = computeDispatchGrid(pathTraceExtent, 8u);
+    const auto estimatePathRayWork = [&]() {
+        struct PathRayWork {
+            uint64_t primary{ 0 };
+            uint64_t shadow{ 0 };
+            uint64_t diffuse{ 0 };
+            uint64_t specular{ 0 };
+
+            [[nodiscard]] uint64_t total() const { return primary + shadow + diffuse + specular; }
+        };
+
+        const uint64_t sampleCount = static_cast<uint64_t>(pathTraceExtent.width) * pathTraceExtent.height
+            * std::max(1u, _settings.pathTraceSamplesPerPixel);
+        PathRayWork work{};
+        work.primary = sampleCount;
+
+        if (GetActivePathTraceBackend() != PathTraceBackend::HardwareRT) {
+            return work;
+        }
+
+        const uint32_t bounceLimit = std::clamp(_settings.pathTraceMaxBounces, 1u, 12u);
+        const uint64_t secondary = sampleCount * static_cast<uint64_t>(bounceLimit - 1u);
+        const float averageMetallic = [&]() {
+            const auto& materials = _scene.GetMaterials();
+            if (materials.empty()) {
+                return 0.0f;
+            }
+            float sum = 0.0f;
+            for (const auto& material : materials) {
+                sum += std::clamp(material.materialParams.x, 0.0f, 1.0f);
+            }
+            return sum / static_cast<float>(materials.size());
+        }();
+        const float specularShare = std::clamp(0.25f + averageMetallic * 0.5f, 0.1f, 0.75f);
+        work.specular = static_cast<uint64_t>(std::round(static_cast<double>(secondary) * specularShare));
+        work.diffuse = secondary - work.specular;
+
+        if (_settings.pathTraceNextEventEstimation) {
+            const uint64_t emissiveSamples = _scene.GetEmissiveTriangles().empty() ? 0ull : 4ull;
+            work.shadow = sampleCount * static_cast<uint64_t>(bounceLimit) * (1ull + emissiveSamples);
+        }
+        return work;
+    };
 
     std::vector<RenderPassDebugInfo> result;
     result.reserve(_passRegistry.size());
@@ -1904,7 +1946,12 @@ std::vector<RenderPassDebugInfo> Renderer::GetRenderPassDebugInfo() const
         } else if (entry.id == "path-tracer") {
             info.dispatchCount = 1u;
             info.triangleCount = _scene.GetTriangles().size();
-            info.rayCount = static_cast<uint64_t>(pathTraceExtent.width) * pathTraceExtent.height * _settings.pathTraceSamplesPerPixel;
+            const auto rayWork = estimatePathRayWork();
+            info.primaryRayCount = rayWork.primary;
+            info.shadowRayCount = rayWork.shadow;
+            info.diffuseRayCount = rayWork.diffuse;
+            info.specularRayCount = rayWork.specular;
+            info.rayCount = rayWork.total();
         } else if (entry.id == "path-denoise") {
             info.dispatchCount = 1u;
             info.rayCount = static_cast<uint64_t>(pathTraceDispatchGrid) * 64ull;

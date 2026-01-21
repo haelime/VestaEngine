@@ -441,6 +441,10 @@ struct RenderPassDebugInfo {
     uint64_t triangleCount{ 0 };
     uint64_t instanceCount{ 0 };
     uint64_t rayCount{ 0 };
+    uint64_t primaryRayCount{ 0 };
+    uint64_t shadowRayCount{ 0 };
+    uint64_t diffuseRayCount{ 0 };
+    uint64_t specularRayCount{ 0 };
     uint64_t splatCount{ 0 };
 };
 

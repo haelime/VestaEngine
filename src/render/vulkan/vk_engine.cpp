@@ -1768,6 +1768,7 @@ void VestaEngine::finish_benchmark()
                << "shadow_map,shadow_map_size,shadow_bias,shadow_normal_bias,shadow_strength,shadow_pcss,shadow_filter_radius,contact_shadows,contact_shadow_length,contact_shadow_intensity,"
                << "pt_nee,pt_rr,pt_rr_depth,pt_firefly_clamp,"
                << "pt_denoiser,pt_denoiser_strength,pt_denoiser_temporal,pt_denoiser_iterations,"
+               << "pt_primary_rays,pt_shadow_rays,pt_diffuse_rays,pt_specular_rays,pt_total_rays,"
                << "requested_backend,active_backend,scene_upload_mode,"
                << "gaussian,path_tracing,texture_streaming,indirect_draw,frustum_culling,distance_culling,"
                << "gaussian_trained,gaussian_count,gaussian_sh_degree,gaussian_view_dependent_color,gaussian_antialiasing,"
@@ -1804,6 +1805,13 @@ void VestaEngine::finish_benchmark()
         const uint32_t sampleCount = _benchmarkState.passGpuSampleCounts[passIndex];
         return sampleCount > 0u ? _benchmarkState.passGpuMsSums[passIndex] / static_cast<float>(sampleCount) : 0.0f;
     };
+    vesta::render::RenderPassDebugInfo pathTracePassInfo{};
+    for (const auto& pass : _renderer.GetRenderPassDebugInfo()) {
+        if (pass.id == "path-tracer") {
+            pathTracePassInfo = pass;
+            break;
+        }
+    }
 
     output << CsvEscape(timestampStream.str()) << ','
            << CsvEscape(scene.GetSourcePath().string()) << ','
@@ -1852,6 +1860,11 @@ void VestaEngine::finish_benchmark()
            << settings.pathTraceDenoiserStrength << ','
            << settings.pathTraceDenoiserTemporalBlend << ','
            << settings.pathTraceDenoiserIterations << ','
+           << pathTracePassInfo.primaryRayCount << ','
+           << pathTracePassInfo.shadowRayCount << ','
+           << pathTracePassInfo.diffuseRayCount << ','
+           << pathTracePassInfo.specularRayCount << ','
+           << pathTracePassInfo.rayCount << ','
            << PathTraceBackendLabel(settings.pathTraceBackend) << ','
            << PathTraceBackendLabel(_renderer.GetActivePathTraceBackend()) << ','
            << CsvEscape(SceneUploadModeLabel(settings.sceneUploadMode)) << ','
@@ -2072,6 +2085,10 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
                << "      \"triangle_count\": " << pass.triangleCount << ",\n"
                << "      \"instance_count\": " << pass.instanceCount << ",\n"
                << "      \"ray_count\": " << pass.rayCount << ",\n"
+               << "      \"primary_ray_count\": " << pass.primaryRayCount << ",\n"
+               << "      \"shadow_ray_count\": " << pass.shadowRayCount << ",\n"
+               << "      \"diffuse_ray_count\": " << pass.diffuseRayCount << ",\n"
+               << "      \"specular_ray_count\": " << pass.specularRayCount << ",\n"
                << "      \"splat_count\": " << pass.splatCount << "\n"
                << "    }" << (passIndex + 1 < passDebugInfo.size() ? "," : "") << "\n";
     }
@@ -2989,6 +3006,13 @@ void VestaEngine::build_debug_ui()
                         ImGui::Text("%llu splats", static_cast<unsigned long long>(pass.splatCount));
                     } else if (pass.rayCount > 0u) {
                         ImGui::Text("%llu rays", static_cast<unsigned long long>(pass.rayCount));
+                        if (pass.primaryRayCount > 0u && ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip("primary %llu\nshadow %llu\ndiffuse %llu\nspecular %llu",
+                                static_cast<unsigned long long>(pass.primaryRayCount),
+                                static_cast<unsigned long long>(pass.shadowRayCount),
+                                static_cast<unsigned long long>(pass.diffuseRayCount),
+                                static_cast<unsigned long long>(pass.specularRayCount));
+                        }
                     } else if (pass.triangleCount > 0u) {
                         ImGui::Text("%llu tris", static_cast<unsigned long long>(pass.triangleCount));
                     } else {
@@ -3026,6 +3050,10 @@ void VestaEngine::build_debug_ui()
             uint32_t totalDraws = 0;
             uint32_t totalDispatches = 0;
             uint64_t totalRayWork = 0;
+            uint64_t totalPrimaryRays = 0;
+            uint64_t totalShadowRays = 0;
+            uint64_t totalDiffuseRays = 0;
+            uint64_t totalSpecularRays = 0;
             for (const auto& pass : passInfo) {
                 if (!pass.enabled) {
                     continue;
@@ -3033,12 +3061,23 @@ void VestaEngine::build_debug_ui()
                 totalDraws += pass.drawCount;
                 totalDispatches += pass.dispatchCount;
                 totalRayWork += pass.rayCount;
+                totalPrimaryRays += pass.primaryRayCount;
+                totalShadowRays += pass.shadowRayCount;
+                totalDiffuseRays += pass.diffuseRayCount;
+                totalSpecularRays += pass.specularRayCount;
             }
             ImGui::Text("CPU Frame %.3f ms", _renderer.GetFrameTimeMs());
             ImGui::Text("GPU Frame %.3f ms", gpuFrameMs);
             ImGui::Text("Draw / Dispatch %u / %u", totalDraws, totalDispatches);
             ImGui::Text("Triangles %zu", scene.GetTriangles().size());
             ImGui::Text("Estimated Ray Work %llu", static_cast<unsigned long long>(totalRayWork));
+            if (totalPrimaryRays > 0u) {
+                ImGui::Text("Ray Types P/S/D/Spec %llu / %llu / %llu / %llu",
+                    static_cast<unsigned long long>(totalPrimaryRays),
+                    static_cast<unsigned long long>(totalShadowRays),
+                    static_cast<unsigned long long>(totalDiffuseRays),
+                    static_cast<unsigned long long>(totalSpecularRays));
+            }
             ImGui::Text("Visible Surfaces %u / %zu", _renderer.GetVisibleSurfaceCount(), scene.GetSurfaces().size());
             const uint32_t totalGaussians = scene.GetGaussianCount();
             const uint32_t projectedGaussians = _renderer.GetOfficialGaussianProjectedCount();
@@ -3091,6 +3130,13 @@ void VestaEngine::build_debug_ui()
                         ImGui::Text("%llu splats", static_cast<unsigned long long>(pass.splatCount));
                     } else if (pass.rayCount > 0u) {
                         ImGui::Text("%llu rays", static_cast<unsigned long long>(pass.rayCount));
+                        if (pass.primaryRayCount > 0u && ImGui::IsItemHovered()) {
+                            ImGui::SetTooltip("primary %llu\nshadow %llu\ndiffuse %llu\nspecular %llu",
+                                static_cast<unsigned long long>(pass.primaryRayCount),
+                                static_cast<unsigned long long>(pass.shadowRayCount),
+                                static_cast<unsigned long long>(pass.diffuseRayCount),
+                                static_cast<unsigned long long>(pass.specularRayCount));
+                        }
                     } else {
                         ImGui::TextUnformatted("-");
                     }
@@ -5084,6 +5130,18 @@ void VestaEngine::draw_path_tracing_debug_panel()
         log_startup_event("Path tracing accumulation reset from mode panel");
     }
     ImGui::Text("Accumulated Frames %u", _renderer.GetPathTraceFrameIndex());
+    for (const auto& pass : _renderer.GetRenderPassDebugInfo()) {
+        if (pass.id != "path-tracer") {
+            continue;
+        }
+        ImGui::SeparatorText("Ray Type Counters");
+        ImGui::Text("Total Estimated Rays %llu", static_cast<unsigned long long>(pass.rayCount));
+        ImGui::Text("Primary %llu", static_cast<unsigned long long>(pass.primaryRayCount));
+        ImGui::Text("Shadow %llu", static_cast<unsigned long long>(pass.shadowRayCount));
+        ImGui::Text("Diffuse %llu", static_cast<unsigned long long>(pass.diffuseRayCount));
+        ImGui::Text("Specular %llu", static_cast<unsigned long long>(pass.specularRayCount));
+        break;
+    }
 }
 
 void VestaEngine::draw_gaussian_splatting_debug_panel()
