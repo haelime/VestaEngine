@@ -16,7 +16,7 @@ void PrintUsage()
         << "  --compare <off|split|difference>\n"
         << "  --debug-view <final|albedo|normal|world-position|depth|uv|material-id|object-id|roughness|metallic|emissive|ao|motion-vector|direct|indirect|reflection|denoised|difference-reference|wireframe|mip-level|shadow-map|overdraw|history-color|history-depth|reprojection|disocclusion|jitter|contact-shadow>\n"
         << "  --pt-debug <final|albedo|normal|depth|direct|indirect|ray-count|diffuse-bounce|specular-bounce|throughput|pdf>\n"
-        << "  --gaussian-debug <final|alpha|revealage|overdraw|depth|tile-occupancy|radius|contribution-count|splat-id|sh-band|covariance>\n"
+        << "  --gaussian-debug <final|alpha|revealage|overdraw|depth|tile-occupancy|radius|contribution-count|splat-id|sh-band|covariance|raster-depth|composition-mask|depth-difference>\n"
         << "  --compare-split <0.05-0.95>\n"
         << "  --compare-scale <value>\n"
         << "  --pt-backend <auto|compute|hardwarert>\n"
@@ -200,6 +200,9 @@ std::optional<vesta::render::GaussianDebugView> ParseGaussianDebugView(std::stri
     if (value == "splat-id" || value == "id" || value == "gaussian-id") { return vesta::render::GaussianDebugView::SplatId; }
     if (value == "sh-band" || value == "sh" || value == "spherical-harmonics") { return vesta::render::GaussianDebugView::ShBand; }
     if (value == "covariance" || value == "covariance-ellipsoid" || value == "ellipsoid") { return vesta::render::GaussianDebugView::Covariance; }
+    if (value == "raster-depth" || value == "mesh-depth") { return vesta::render::GaussianDebugView::RasterDepth; }
+    if (value == "composition-mask" || value == "hybrid-mask" || value == "compose-mask") { return vesta::render::GaussianDebugView::CompositionMask; }
+    if (value == "depth-difference" || value == "depth-diff") { return vesta::render::GaussianDebugView::DepthDifference; }
     return std::nullopt;
 }
 

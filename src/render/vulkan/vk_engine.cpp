@@ -279,6 +279,12 @@ const char* GaussianDebugViewLabel(vesta::render::GaussianDebugView view)
         return "SH Band";
     case vesta::render::GaussianDebugView::Covariance:
         return "Covariance";
+    case vesta::render::GaussianDebugView::RasterDepth:
+        return "Raster Depth";
+    case vesta::render::GaussianDebugView::CompositionMask:
+        return "Composition Mask";
+    case vesta::render::GaussianDebugView::DepthDifference:
+        return "Depth Difference";
     case vesta::render::GaussianDebugView::Final:
     default:
         return "Final";
@@ -3221,6 +3227,9 @@ void VestaEngine::build_debug_ui()
                 "Splat ID",
                 "SH Band",
                 "Covariance",
+                "Raster Depth",
+                "Composition Mask",
+                "Depth Difference",
             };
             int gaussianView = static_cast<int>(settings.gaussianDebugView);
             if (ImGui::Combo("Gaussian Debug View", &gaussianView, gaussianViews, IM_ARRAYSIZE(gaussianViews))) {
@@ -4975,8 +4984,8 @@ void VestaEngine::draw_killer_demo_panel()
         settings.enableRaster = true;
         settings.enableGaussian = true;
         settings.enablePathTracing = false;
-        settings.debugView = vesta::render::RendererDebugView::Depth;
-        settings.gaussianDebugView = vesta::render::GaussianDebugView::Depth;
+        settings.debugView = vesta::render::RendererDebugView::FinalColor;
+        settings.gaussianDebugView = vesta::render::GaussianDebugView::CompositionMask;
         settings.hybridDepthCompositeDebug = true;
         _showRenderGraphPanel = true;
         _showResourceInspectorPanel = true;
@@ -5205,6 +5214,9 @@ void VestaEngine::draw_gaussian_splatting_debug_panel()
         "Splat ID",
         "SH Band",
         "Covariance",
+        "Raster Depth",
+        "Composition Mask",
+        "Depth Difference",
     };
     int gaussianView = static_cast<int>(settings.gaussianDebugView);
     if (ImGui::Combo("Gaussian AOV", &gaussianView, gaussianViews, IM_ARRAYSIZE(gaussianViews))) {
@@ -5230,6 +5242,13 @@ void VestaEngine::draw_gaussian_splatting_debug_panel()
     ImGui::SameLine();
     if (ImGui::Button("Covariance")) {
         settings.gaussianDebugView = vesta::render::GaussianDebugView::Covariance;
+    }
+    if (ImGui::Button("Composition Mask")) {
+        settings.gaussianDebugView = vesta::render::GaussianDebugView::CompositionMask;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Depth Difference")) {
+        settings.gaussianDebugView = vesta::render::GaussianDebugView::DepthDifference;
     }
     ImGui::Checkbox("Tile Grid Overlay", &settings.gaussianShowTileGrid);
     ImGui::Checkbox("Covariance Ellipsoids", &settings.gaussianShowCovarianceEllipsoids);

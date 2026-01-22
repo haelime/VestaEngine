@@ -86,6 +86,9 @@ enum class GaussianDebugView : uint32_t {
     SplatId = 8,
     ShBand = 9,
     Covariance = 10,
+    RasterDepth = 11,
+    CompositionMask = 12,
+    DepthDifference = 13,
 };
 
 enum class CompareMode : uint32_t {

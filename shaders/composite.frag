@@ -542,6 +542,40 @@ vec3 resolveGaussianDebugView(vec4 gaussianColor, ivec2 pixel, vec2 uv)
         vec4 debugValue = imageLoad(storageImages[nonuniformEXT(int(pc.imageIndices1.w))], debugPixel);
         return debugValue.a > 0.0 ? debugValue.rgb : vec3(0.0);
     }
+    if (gaussianDebugView == 11u) {
+        if (!hasImage(pc.imageIndices2.w)) { return vec3(-1.0); }
+        ivec2 depthSize = textureSize(sampledImages[nonuniformEXT(int(pc.imageIndices2.w))], 0);
+        ivec2 depthPixel = clamp(ivec2(uv * vec2(depthSize)), ivec2(0), depthSize - ivec2(1));
+        float rasterDepth = texelFetch(sampledImages[nonuniformEXT(int(pc.imageIndices2.w))], depthPixel, 0).r;
+        return vec3(1.0 - clamp(rasterDepth, 0.0, 1.0));
+    }
+    if (gaussianDebugView == 12u) {
+        bool rasterVisible = false;
+        if (hasImage(pc.imageIndices2.w)) {
+            ivec2 depthSize = textureSize(sampledImages[nonuniformEXT(int(pc.imageIndices2.w))], 0);
+            ivec2 depthPixel = clamp(ivec2(uv * vec2(depthSize)), ivec2(0), depthSize - ivec2(1));
+            float rasterDepth = texelFetch(sampledImages[nonuniformEXT(int(pc.imageIndices2.w))], depthPixel, 0).r;
+            rasterVisible = rasterDepth < 0.99999;
+        }
+        bool gaussianVisible = gaussianColor.a > 0.02;
+        if (!rasterVisible && !gaussianVisible) {
+            return vec3(0.0);
+        }
+        return vec3(rasterVisible ? 0.16 : 0.0, gaussianVisible ? 0.95 : 0.0, rasterVisible && gaussianVisible ? 0.85 : 0.08);
+    }
+    if (gaussianDebugView == 13u) {
+        if (!hasImage(pc.imageIndices2.w) || !hasImage(pc.imageIndices1.w)) { return vec3(-1.0); }
+        ivec2 depthSize = textureSize(sampledImages[nonuniformEXT(int(pc.imageIndices2.w))], 0);
+        ivec2 depthPixel = clamp(ivec2(uv * vec2(depthSize)), ivec2(0), depthSize - ivec2(1));
+        float rasterDepth = texelFetch(sampledImages[nonuniformEXT(int(pc.imageIndices2.w))], depthPixel, 0).r;
+        ivec2 debugSize = imageSize(storageImages[nonuniformEXT(int(pc.imageIndices1.w))]);
+        ivec2 debugPixel = clamp(ivec2(uv * vec2(debugSize)), ivec2(0), debugSize - ivec2(1));
+        vec4 debugValue = imageLoad(storageImages[nonuniformEXT(int(pc.imageIndices1.w))], debugPixel);
+        if (debugValue.a <= 0.0 || rasterDepth >= 0.99999) {
+            return vec3(0.0);
+        }
+        return heatmap(clamp(abs(debugValue.x - rasterDepth) * 64.0, 0.0, 1.0));
+    }
     return vec3(-1.0);
 }
 
