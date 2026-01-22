@@ -18,6 +18,7 @@ struct SDL_Window;
 union SDL_Event;
 
 namespace vesta::render {
+// High-level view modes exposed to the app and debug UI.
 enum class RendererDisplayMode : uint32_t {
     Composite = 0,
     DeferredLighting = 1,
@@ -32,6 +33,8 @@ enum class RendererPreset : uint32_t {
     Quality = 3,
 };
 
+// RendererSettings collects the knobs that can safely change at runtime.
+// When one of these changes in a way that affects history, accumulation resets.
 struct RendererSettings {
     RendererDisplayMode displayMode{ RendererDisplayMode::Composite };
     bool enableGaussian{ true };
@@ -43,6 +46,8 @@ struct RendererSettings {
     PathTraceBackend pathTraceBackend{ PathTraceBackend::Auto };
 };
 
+// Each overlapping frame owns its own command buffer and sync objects so the CPU
+// can prepare the next frame while the GPU is still finishing the previous one.
 struct RendererFrameContext {
     VkCommandPool commandPool{ VK_NULL_HANDLE };
     VkCommandBuffer commandBuffer{ VK_NULL_HANDLE };
@@ -52,6 +57,7 @@ struct RendererFrameContext {
     std::vector<BufferHandle> transientBuffers;
 };
 
+// These are the logical edges between passes in the frame graph.
 struct RendererGraphResources {
     GraphTextureHandle swapchainTarget{};
     GraphTextureHandle gbufferAlbedo{};
@@ -101,6 +107,8 @@ struct TransientImagePoolEntry {
 
 class TransientImagePool {
 public:
+    // Reuses images with identical descriptions to avoid creating temporary
+    // Vulkan images every frame.
     [[nodiscard]] ImageHandle Acquire(RenderDevice& device, const ImageDesc& desc);
     void Release(ImageHandle handle);
     void Purge(RenderDevice& device);
@@ -115,6 +123,8 @@ class Renderer {
 public:
     static constexpr uint32_t kFrameOverlap = 2;
 
+    // Renderer drives the per-frame flow:
+    // input -> camera update -> graph build -> pass execution -> presentation.
     bool Initialize(SDL_Window* window, VkExtent2D initialExtent, bool enableValidation);
     void Shutdown();
     void HandleEvent(const SDL_Event& event);

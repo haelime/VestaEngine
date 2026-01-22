@@ -11,6 +11,8 @@ struct PipelineShaderStages {
     VkShaderModule computeShader{ VK_NULL_HANDLE };
 };
 
+// GraphicsPipelineDesc mirrors the major decisions that shape a graphics
+// pipeline: render target formats, fixed function state, and shader stages.
 struct GraphicsPipelineDesc {
     VkPipelineLayout layout{ VK_NULL_HANDLE };
     std::vector<VkFormat> colorFormats;

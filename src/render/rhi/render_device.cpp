@@ -21,6 +21,8 @@ constexpr uint32_t kRequiredVulkanPatch = 0;
 
 uint32_t CalculateDedicatedVideoMemoryMiB(VkPhysicalDevice physicalDevice)
 {
+    // On most discrete GPUs the largest DEVICE_LOCAL heap is a good proxy for
+    // dedicated VRAM. It is not perfect, but it is enough for preset selection.
     VkPhysicalDeviceMemoryProperties memoryProperties{};
     vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memoryProperties);
 
@@ -48,6 +50,8 @@ VkDescriptorSetLayoutBinding make_bindless_binding(uint32_t binding, VkDescripto
 
 void BindlessDescriptorManager::Initialize(VkDevice device)
 {
+    // This project uses one large descriptor set instead of binding a new set
+    // for every pass/resource pair. That keeps sample shaders short.
     const std::array<VkDescriptorPoolSize, 3> poolSizes{
         VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, kMaxSampledImages },
         VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kMaxStorageImages },
@@ -194,6 +198,8 @@ bool RenderDevice::Initialize(SDL_Window* window, const RenderDeviceDesc& desc)
 {
     _window = window;
 
+    // Vulkan instance/device creation happens before the allocator because VMA
+    // needs both handles to manage memory allocations for buffers and images.
     CreateInstanceAndDevice(desc);
     CreateAllocator();
     _bindless.Initialize(_device);
@@ -297,6 +303,8 @@ ImageHandle RenderDevice::CreateImage(const ImageDesc& desc)
     viewInfo.subresourceRange.layerCount = desc.arrayLayers;
     VK_CHECK(vkCreateImageView(_device, &viewInfo, nullptr, &image.defaultView));
 
+    // Registering in the bindless heap stores the slot index once so passes can
+    // push only integers instead of full descriptor updates every frame.
     if (desc.registerBindlessSampled) {
         image.bindless.sampledImage =
             _bindless.RegisterSampledImage(_device, image.defaultView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
@@ -350,6 +358,8 @@ void RenderDevice::ImmediateSubmit(const std::function<void(VkCommandBuffer)>& r
         return;
     }
 
+    // ImmediateSubmit is useful for setup work such as uploads or AS builds.
+    // It records a short-lived command buffer, submits it, and waits right away.
     VkCommandPool commandPool = VK_NULL_HANDLE;
     VkCommandPoolCreateInfo poolInfo = vkinit::command_pool_create_info(_graphicsQueueFamily);
     VK_CHECK(vkCreateCommandPool(_device, &poolInfo, nullptr, &commandPool));
@@ -442,6 +452,8 @@ void RenderDevice::CreateInstanceAndDevice(const RenderDeviceDesc& desc)
 
     _rayTracingSupport = {};
 
+    // Hardware RT is optional. We probe it and keep a compute fallback so the
+    // rest of the renderer does not depend on RT support.
     const bool hasRequiredRayTracingExtensions = physicalDevice.is_extension_present(VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME)
         && physicalDevice.is_extension_present(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME)
         && physicalDevice.is_extension_present(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME);
@@ -497,6 +509,8 @@ void RenderDevice::CreateInstanceAndDevice(const RenderDeviceDesc& desc)
     _presentQueueFamily = device.get_queue_index(vkb::QueueType::present).value();
 
     if (_rayTracingSupport.supported) {
+        // KHR ray tracing entry points are device-level function pointers, so
+        // they must be queried after logical device creation.
         _rayTracingFunctions.vkCreateAccelerationStructureKHR = reinterpret_cast<PFN_vkCreateAccelerationStructureKHR>(
             vkGetDeviceProcAddr(_device, "vkCreateAccelerationStructureKHR"));
         _rayTracingFunctions.vkDestroyAccelerationStructureKHR =
@@ -554,6 +568,7 @@ void RenderDevice::CreateSwapchain(VkExtent2D extent)
     vkb::SwapchainBuilder swapchainBuilder{ _physicalDevice, _device, _surface };
     _swapchainImageFormat = VK_FORMAT_B8G8R8A8_UNORM;
 
+    // FIFO is chosen as the safe default because it is universally supported.
     vkb::Swapchain swapchain = swapchainBuilder.set_desired_format(
             VkSurfaceFormatKHR{ .format = _swapchainImageFormat, .colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR })
         .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)

@@ -14,6 +14,7 @@ class RenderDevice;
 }
 
 namespace vesta::scene {
+// CPU-side vertex layout used by rasterization and as the source data for BLAS builds.
 struct SceneVertex {
     glm::vec3 position{ 0.0f };
     glm::vec3 normal{ 0.0f, 1.0f, 0.0f };
@@ -41,6 +42,8 @@ struct SceneBounds {
 
 class Scene {
 public:
+    // LoadFromFile() builds a simple internal scene representation that both
+    // raster and path tracing passes can consume.
     bool LoadFromFile(const std::filesystem::path& path);
     void UploadToGpu(render::RenderDevice& device);
     void DestroyGpu(render::RenderDevice& device);

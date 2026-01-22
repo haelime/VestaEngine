@@ -3,6 +3,7 @@
 #include <vesta/render/vulkan/vk_types.h>
 
 namespace vkutil {
+// Image helpers centralize common layout transitions and view creation patterns.
 [[nodiscard]] VkImageSubresourceRange make_image_subresource_range(
     VkImageAspectFlags aspectMask,
     uint32_t mipLevels = 1,

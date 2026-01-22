@@ -11,6 +11,8 @@
 
 namespace vesta::render {
 namespace {
+// params.x = point size, params.y = opacity. Keeping UI-driven tuning values in
+// push constants makes iteration cheap without rebuilding descriptor sets.
 struct GaussianPushConstants {
     glm::mat4 viewProjection{ 1.0f };
     glm::vec4 params{ 6.0f, 0.35f, 0.0f, 0.0f };
@@ -69,6 +71,8 @@ void GaussianSplatPass::Initialize(RenderDevice& device)
     binding.stride = sizeof(vesta::scene::SceneVertex);
     binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
+    // The splat shaders only need position and color. Normal is intentionally
+    // omitted here so the vertex layout matches the shader exactly.
     std::array<VkVertexInputAttributeDescription, 2> attributes{};
     attributes[0] = VkVertexInputAttributeDescription{
         .location = 0,

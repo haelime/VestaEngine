@@ -12,6 +12,8 @@ namespace vesta::render {
 class TransientImagePool;
 struct RendererFrameContext;
 
+// GraphTextureHandle points at a logical resource, not necessarily a unique VkImage.
+// The graph can recycle transient images between frames when descriptions match.
 struct GraphTextureHandle {
     uint32_t index{ kInvalidResourceIndex };
 
@@ -32,6 +34,8 @@ enum class ResourceUsage {
     Present,
 };
 
+// A pass declares intent ("read as sampled", "write as storage"), and the graph
+// derives the Vulkan barrier and layout transition needed between passes.
 struct RenderGraphTextureAccess {
     GraphTextureHandle texture{};
     ResourceUsage usage{ ResourceUsage::Undefined };
@@ -92,6 +96,8 @@ private:
 
 class RenderGraph {
 public:
+    // CreateTexture() declares a transient graph resource. ImportTexture() wraps
+    // an externally owned image such as a swapchain image.
     GraphTextureHandle CreateTexture(std::string_view name, const ImageDesc& desc);
     GraphTextureHandle ImportTexture(std::string_view name, ImageHandle image, ResourceUsage initialUsage);
     void SetFinalUsage(GraphTextureHandle texture, ResourceUsage usage);
@@ -133,6 +139,8 @@ private:
         VkImageLayout layout{ VK_IMAGE_LAYOUT_UNDEFINED };
     };
 
+    // Compile() converts high-level resource usage declarations into the exact
+    // per-pass barriers that Vulkan expects before command recording.
     [[nodiscard]] static TextureState ResolveUsage(const TextureResource& resource, ResourceUsage usage);
     [[nodiscard]] static bool IsWriteUsage(ResourceUsage usage);
 

@@ -4,6 +4,8 @@
 
 struct SDL_Window;
 
+// Small standalone context kept from earlier experiments. Most runtime code now
+// goes through RenderDevice, but this remains useful as a stripped-down example.
 struct VulkanContext {
     VkInstance instance{ VK_NULL_HANDLE };
     VkDebugUtilsMessengerEXT debugMessenger{ VK_NULL_HANDLE };

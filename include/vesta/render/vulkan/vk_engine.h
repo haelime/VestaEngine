@@ -22,16 +22,11 @@ public:
 
     static VestaEngine& Get();
 
-    // initializes everything in the engine
+    // Owns the application loop around the renderer. The renderer itself stays
+    // focused on Vulkan work; SDL event handling and ImGui live here.
     void init();
-
-    // shuts down the engine
     void cleanup();
-
-    // draw loop
     void draw(float deltaSeconds);
-
-    // run main loop
     void run();
 
 private:

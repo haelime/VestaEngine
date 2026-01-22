@@ -4,6 +4,8 @@
 #include <vesta/render/vulkan/vk_initializers.h>
 
 namespace vesta::render {
+// RenderGraphBuilder is intentionally tiny. Passes only say "I read this" or
+// "I write that", and the graph handles the synchronization details later.
 void RenderGraphBuilder::Read(GraphTextureHandle texture, ResourceUsage usage)
 {
     _passNode->reads.push_back(RenderGraphTextureAccess{ texture, usage });
@@ -147,6 +149,8 @@ bool RenderGraph::IsWriteUsage(ResourceUsage usage)
 
 void RenderGraph::Compile(RenderDevice& device)
 {
+    // Compile walks the pass list once and simulates texture state over time.
+    // That lets us emit the exact image barriers needed before each pass.
     std::vector<TextureState> states(_textures.size());
     _compiledResources.clear();
     _compiledResources.resize(_textures.size());
@@ -243,6 +247,8 @@ void RenderGraph::Execute(RenderGraphExecutionContext& executionContext)
         Compile(executionContext.device);
     }
 
+    // Transient graph resources become real images here. Imported resources such
+    // as the swapchain keep their existing image handles.
     std::vector<ImageHandle> resolvedImages(_compiledResources.size());
     for (size_t textureIndex = 0; textureIndex < _compiledResources.size(); ++textureIndex) {
         const CompiledTextureResource& resource = _compiledResources[textureIndex];

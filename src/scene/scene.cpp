@@ -40,6 +40,8 @@ glm::mat4 MakeDemoRootLayoutTransform(size_t rootIndex, size_t rootCount)
 
 glm::mat4 NodeToMatrix(const fastgltf::Node& node)
 {
+    // glTF nodes can be stored either as a baked matrix or as TRS components.
+    // Converting both to one glm::mat4 keeps the traversal path simple.
     if (const auto* matrix = std::get_if<fastgltf::Node::TransformMatrix>(&node.transform)) {
         glm::mat4 result(1.0f);
         std::memcpy(&result[0][0], matrix->data(), sizeof(float) * 16);
@@ -131,6 +133,8 @@ VkTransformMatrixKHR MakeIdentityTransformMatrix()
 
 bool Scene::LoadFromFile(const std::filesystem::path& path)
 {
+    // Rebuild CPU-side scene data from scratch on every load so a failed load
+    // cannot leave mixed data from an older scene behind.
     _sourcePath.clear();
     _vertices.clear();
     _indices.clear();
@@ -170,6 +174,8 @@ bool Scene::LoadFromFile(const std::filesystem::path& path)
     const size_t sceneIndex = gltf.defaultScene.value_or(0);
     const fastgltf::Scene& rootScene = gltf.scenes.at(sceneIndex);
 
+    // The internal scene format is deliberately simple: flatten glTF nodes into
+    // one world-space vertex/index list so raster and PT paths share geometry.
     std::function<void(size_t, const glm::mat4&)> appendNode = [&](size_t nodeIndex, const glm::mat4& parentMatrix) {
         const fastgltf::Node& node = gltf.nodes.at(nodeIndex);
         const glm::mat4 worldMatrix = parentMatrix * NodeToMatrix(node);
@@ -224,6 +230,8 @@ bool Scene::LoadFromFile(const std::filesystem::path& path)
                 }
 
                 if (!hasNormals) {
+                    // If the asset has no normals, generate flat face normals so
+                    // both raster shading and path tracing still have something usable.
                     for (size_t triangle = 0; triangle + 2 < primitiveIndices.size(); triangle += 3) {
                         const uint32_t i0 = baseVertex + primitiveIndices[triangle + 0];
                         const uint32_t i1 = baseVertex + primitiveIndices[triangle + 1];
@@ -287,6 +295,8 @@ void Scene::UploadToGpu(vesta::render::RenderDevice& device)
         return;
     }
 
+    // The sample keeps geometry in host-visible buffers for simplicity. A more
+    // optimized renderer would stage into device-local memory.
     constexpr VmaAllocationCreateFlags kMappedHostFlags =
         VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
@@ -335,6 +345,7 @@ void Scene::UploadToGpu(vesta::render::RenderDevice& device)
     const auto& rt = device.GetRayTracingFunctions();
 
     auto buildBottomLevel = [&]() {
+        // BLAS describes the raw triangle geometry.
         VkAccelerationStructureGeometryTrianglesDataKHR triangles{};
         triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
         triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
@@ -404,6 +415,8 @@ void Scene::UploadToGpu(vesta::render::RenderDevice& device)
     };
 
     auto buildTopLevel = [&]() {
+        // TLAS describes scene instances. This sample uses a single instance
+        // that points at the one BLAS built from the flattened scene.
         VkAccelerationStructureDeviceAddressInfoKHR blasAddressInfo{
             VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_DEVICE_ADDRESS_INFO_KHR
         };
