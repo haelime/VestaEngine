@@ -250,6 +250,8 @@ const char* RendererDebugViewLabel(vesta::render::RendererDebugView view)
         return "Temporal Jitter";
     case vesta::render::RendererDebugView::ContactShadow:
         return "Contact Shadow";
+    case vesta::render::RendererDebugView::ShadowCascade:
+        return "Shadow Cascade";
     case vesta::render::RendererDebugView::FinalColor:
     default:
         return "Final Color";
@@ -3202,6 +3204,7 @@ void VestaEngine::build_debug_ui()
                 "Temporal Disocclusion",
                 "Temporal Jitter",
                 "Contact Shadow",
+                "Shadow Cascade",
             };
             int commonView = static_cast<int>(settings.debugView);
             if (ImGui::Combo("Debug View", &commonView, commonViews, IM_ARRAYSIZE(commonViews))) {
@@ -5011,7 +5014,9 @@ void VestaEngine::draw_rasterizer_debug_panel()
     }
 
     ImGui::Checkbox("G-Buffer Preview Strip", &settings.showGBufferPreview);
-    ImGui::Checkbox("Shadow Cascade Overlay", &settings.showShadowCascadeOverlay);
+    if (ImGui::Checkbox("Shadow Cascade Overlay", &settings.showShadowCascadeOverlay)) {
+        _renderer.ResetAccumulation();
+    }
     int cascadeCount = static_cast<int>(settings.shadowCascadeCount);
     if (ImGui::SliderInt("Shadow Cascades", &cascadeCount, 1, 4)) {
         settings.shadowCascadeCount = static_cast<uint32_t>(std::clamp(cascadeCount, 1, 4));
@@ -5019,6 +5024,9 @@ void VestaEngine::draw_rasterizer_debug_panel()
     }
     if (ImGui::SliderFloat("Cascade Split Lambda", &settings.shadowCascadeLambda, 0.0f, 1.0f, "%.2f")) {
         _renderer.ResetAccumulation();
+    }
+    if (ImGui::Button("Shadow Cascade Debug")) {
+        settings.debugView = vesta::render::RendererDebugView::ShadowCascade;
     }
     int shadowMapSize = static_cast<int>(settings.shadowMapSize);
     if (ImGui::SliderInt("Shadow Map Size", &shadowMapSize, 512, 4096)) {

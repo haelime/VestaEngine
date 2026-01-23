@@ -98,6 +98,48 @@ vec3 applyFxaa(vec3 color, vec2 uv);
 vec3 applyMotionBlur(vec3 color, vec2 uv);
 vec3 heatmap(float value);
 
+vec3 resolveShadowCascadeColor(ivec2 pixel)
+{
+    if (!hasImage(pc.imageIndices2.w)) {
+        return vec3(-1.0);
+    }
+
+    ivec2 size = textureSize(sampledImages[nonuniformEXT(int(pc.imageIndices2.w))], 0);
+    ivec2 clampedPixel = clamp(pixel, ivec2(0), size - ivec2(1));
+    float depth = texelFetch(sampledImages[nonuniformEXT(int(pc.imageIndices2.w))], clampedPixel, 0).r;
+    if (depth >= 0.99999) {
+        return vec3(0.0);
+    }
+
+    float nearPlane = max(pc.params.z, 0.0001);
+    float farPlane = max(pc.params.w, nearPlane + 0.0001);
+    float linearDepth = (nearPlane * farPlane) / max(farPlane + depth * (nearPlane - farPlane), 0.0001);
+    uint cascadeCount = uint(clamp(pc.ssaoParams.w, 1.0, 4.0));
+    float lambda = clamp(pc.motionBlurParams.w, 0.0, 1.0);
+
+    uint cascadeIndex = cascadeCount - 1u;
+    for (uint i = 0u; i < 4u; ++i) {
+        if (i >= cascadeCount) {
+            break;
+        }
+        float p = float(i + 1u) / float(cascadeCount);
+        float uniformSplit = nearPlane + (farPlane - nearPlane) * p;
+        float logSplit = nearPlane * pow(farPlane / nearPlane, p);
+        float splitDepth = mix(uniformSplit, logSplit, lambda);
+        if (linearDepth <= splitDepth) {
+            cascadeIndex = i;
+            break;
+        }
+    }
+
+    const vec3 cascadeColors[4] = vec3[](
+        vec3(0.1, 0.85, 0.95),
+        vec3(0.35, 0.95, 0.2),
+        vec3(1.0, 0.82, 0.08),
+        vec3(1.0, 0.18, 0.28));
+    return cascadeColors[cascadeIndex];
+}
+
 float computeScreenSpaceAo(ivec2 pixel, ivec2 size, vec3 worldPosition, vec3 normal, float depth)
 {
     if (pc.ssaoParams.x < 0.5 || depth >= 0.99999 || !hasImage(pc.imageIndices2.w)) {
@@ -296,6 +338,9 @@ vec3 resolveDebugView(ivec2 pixel)
         ivec2 shadowPixel = clamp(ivec2(uv * vec2(shadowSize)), ivec2(0), shadowSize - ivec2(1));
         float depth = texelFetch(sampledImages[nonuniformEXT(int(pc.imageIndices4.x))], shadowPixel, 0).r;
         return vec3(1.0 - clamp(depth, 0.0, 1.0));
+    }
+    if (debugView == 28u) {
+        return resolveShadowCascadeColor(pixel);
     }
     if (debugView == 21u) {
         if (!hasImage(pc.imageIndices4.y)) { return vec3(-1.0); }
@@ -652,6 +697,12 @@ void main() {
 
     if (pc.imageIndices1.x != 2u) {
         composite = applyDisplayTransform(composite);
+    }
+    if (pc.imageIndices4.z != 0u) {
+        vec3 cascadeColor = resolveShadowCascadeColor(pixel);
+        if (cascadeColor.x >= 0.0) {
+            composite = mix(composite, cascadeColor, 0.36);
+        }
     }
     composite = applyMotionBlur(composite, uv);
     composite = applyFxaa(composite, uv);

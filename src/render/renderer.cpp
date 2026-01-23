@@ -811,6 +811,9 @@ void ConfigureCompositePass(Renderer& renderer, IRenderPass& pass, const Rendere
         renderer.GetSettings().motionBlurStrength);
     compositePass.SetAmbientOcclusion(
         renderer.GetSettings().enableSsao, renderer.GetSettings().ssaoRadius, renderer.GetSettings().ssaoIntensity);
+    compositePass.SetShadowCascadeDebug(renderer.GetSettings().shadowCascadeCount,
+        renderer.GetSettings().shadowCascadeLambda,
+        renderer.GetSettings().showShadowCascadeOverlay);
     compositePass.SetCameraMatrices(renderer.GetCamera().GetViewProjection(), renderer.GetCamera().GetInverseViewProjection());
     compositePass.SetDepthRange(renderer.GetCamera().GetNearPlane(), renderer.GetCamera().GetFarPlane());
 }

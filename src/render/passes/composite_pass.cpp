@@ -138,6 +138,14 @@ void CompositePass::SetAmbientOcclusion(bool enabled, float radius, float intens
     _ssaoParams = glm::vec4(enabled ? 1.0f : 0.0f, std::max(radius, 0.01f), std::clamp(intensity, 0.0f, 4.0f), 0.0f);
 }
 
+void CompositePass::SetShadowCascadeDebug(uint32_t cascadeCount, float splitLambda, bool overlayEnabled)
+{
+    _shadowCascadeParams = glm::vec4(static_cast<float>(std::clamp(cascadeCount, 1u, 4u)),
+        std::clamp(splitLambda, 0.0f, 1.0f),
+        overlayEnabled ? 1.0f : 0.0f,
+        0.0f);
+}
+
 void CompositePass::SetCameraMatrices(const glm::mat4& viewProjection, const glm::mat4& inverseViewProjection)
 {
     _viewProjection = viewProjection;
@@ -238,14 +246,14 @@ void CompositePass::Execute(const RenderGraphContext& context)
         .imageIndices1 = glm::uvec4(_mode, _debugView, _gaussianDebugView, kInvalidImageIndex),
         .imageIndices2 = glm::uvec4(kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex),
         .imageIndices3 = glm::uvec4(kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex),
-        .imageIndices4 = glm::uvec4(kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex),
+        .imageIndices4 = glm::uvec4(kInvalidImageIndex, kInvalidImageIndex, _shadowCascadeParams.z > 0.5f ? 1u : 0u, kInvalidImageIndex),
         .gaussianDebug = glm::uvec4(_gaussianTileRangeBufferIndex, _gaussianTileCountX, _gaussianTileCountY, 8u),
         .params = glm::vec4(_gaussianMix, _exposureEv, _nearPlane, _farPlane),
         .compareParams = glm::vec4(static_cast<float>(_compareMode), _compareSplitPosition, _compareDifferenceScale, static_cast<float>(_toneMappingMode)),
         .postParams = glm::vec4(_saturation, _contrast, _vignetteEnabled ? 1.0f : 0.0f, _vignetteStrength),
         .bloomParams = glm::vec4(_bloomThreshold, _bloomIntensity, _bloomEnabled ? 1.0f : 0.0f, _fxaaEnabled ? 1.0f : 0.0f),
-        .ssaoParams = _ssaoParams,
-        .motionBlurParams = glm::vec4(_motionBlurEnabled ? 1.0f : 0.0f, _motionBlurStrength, 5.0f, 0.0f),
+        .ssaoParams = glm::vec4(_ssaoParams.x, _ssaoParams.y, _ssaoParams.z, _shadowCascadeParams.x),
+        .motionBlurParams = glm::vec4(_motionBlurEnabled ? 1.0f : 0.0f, _motionBlurStrength, 5.0f, _shadowCascadeParams.y),
         .inverseViewProjection = _inverseViewProjection,
     };
 
