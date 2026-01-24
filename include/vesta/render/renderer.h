@@ -349,6 +349,13 @@ struct RendererSettings {
     float environmentIntensity{ 1.0f };
     float environmentRotationDegrees{ 0.0f };
     uint32_t environmentPreset{ 0 };
+    std::filesystem::path externalHdriPath{};
+    bool externalHdriAvailable{ false };
+    bool externalHdriIsHdr{ false };
+    uint32_t externalHdriWidth{ 0 };
+    uint32_t externalHdriHeight{ 0 };
+    uint32_t externalHdriChannels{ 0 };
+    std::string externalHdriStatus{ "Procedural IBL" };
     float environmentDiffuseStrength{ 0.22f };
     float environmentSpecularStrength{ 0.45f };
     float cameraExposureEv{ 0.0f };

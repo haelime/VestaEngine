@@ -11,6 +11,7 @@
 #include <imgui.h>
 #include <imgui_impl_sdl2.h>
 #include <imgui_impl_vulkan.h>
+#include <stb_image.h>
 
 #include <algorithm>
 #include <array>
@@ -1280,6 +1281,10 @@ void VestaEngine::init_renderer()
         settings.environmentSpecularStrength = std::clamp(*_launchOptions.startupEnvironmentSpecularStrength, 0.0f, 2.0f);
         resetAccumulation = true;
     }
+    if (_launchOptions.startupExternalHdriPath.has_value()) {
+        apply_external_hdri_path(*_launchOptions.startupExternalHdriPath);
+        resetAccumulation = true;
+    }
     if (_launchOptions.startupPcssShadowsEnabled.has_value()) {
         settings.enablePcssShadows = *_launchOptions.startupPcssShadowsEnabled;
         resetAccumulation = true;
@@ -1781,7 +1786,7 @@ void VestaEngine::finish_benchmark()
                << "gaussian,path_tracing,texture_streaming,indirect_draw,frustum_culling,distance_culling,"
                << "gaussian_trained,gaussian_count,gaussian_sh_degree,gaussian_view_dependent_color,gaussian_antialiasing,"
                << "gaussian_fast_culling,gaussian_opacity,gaussian_mix,gaussian_interactive_preview,"
-               << "pt_scale,environment_intensity,environment_rotation_deg,environment_preset,ibl_diffuse,ibl_specular,exposure_ev,"
+               << "pt_scale,environment_intensity,environment_rotation_deg,environment_preset,external_hdri,external_hdri_path,external_hdri_resolution,external_hdri_hdr,ibl_diffuse,ibl_specular,exposure_ev,"
                << "bloom,bloom_threshold,bloom_intensity,fxaa,motion_blur,motion_blur_strength,vignette,vignette_strength,saturation,contrast,"
                << "aperture_radius,focal_distance,"
                << "avg_frame_ms,p95_frame_ms,min_frame_ms,max_frame_ms,avg_fps,frame_count,"
@@ -1895,6 +1900,10 @@ void VestaEngine::finish_benchmark()
            << settings.environmentIntensity << ','
            << settings.environmentRotationDegrees << ','
            << CsvEscape(EnvironmentPresetLabel(settings.environmentPreset)) << ','
+           << (settings.externalHdriAvailable ? "true" : "false") << ','
+           << CsvEscape(settings.externalHdriPath.string()) << ','
+           << CsvEscape(settings.externalHdriAvailable ? fmt::format("{}x{}", settings.externalHdriWidth, settings.externalHdriHeight) : "") << ','
+           << (settings.externalHdriIsHdr ? "true" : "false") << ','
            << settings.environmentDiffuseStrength << ','
            << settings.environmentSpecularStrength << ','
            << settings.cameraExposureEv << ','
@@ -2050,6 +2059,13 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "  \"environment_intensity\": " << settings.environmentIntensity << ",\n"
            << "  \"environment_rotation_degrees\": " << settings.environmentRotationDegrees << ",\n"
            << "  \"environment_preset\": \"" << EnvironmentPresetLabel(settings.environmentPreset) << "\",\n"
+           << "  \"external_hdri_available\": " << (settings.externalHdriAvailable ? "true" : "false") << ",\n"
+           << "  \"external_hdri_path\": \"" << JsonEscape(settings.externalHdriPath.string()) << "\",\n"
+           << "  \"external_hdri_width\": " << settings.externalHdriWidth << ",\n"
+           << "  \"external_hdri_height\": " << settings.externalHdriHeight << ",\n"
+           << "  \"external_hdri_channels\": " << settings.externalHdriChannels << ",\n"
+           << "  \"external_hdri_is_hdr\": " << (settings.externalHdriIsHdr ? "true" : "false") << ",\n"
+           << "  \"external_hdri_status\": \"" << JsonEscape(settings.externalHdriStatus) << "\",\n"
            << "  \"ibl_diffuse_strength\": " << settings.environmentDiffuseStrength << ",\n"
            << "  \"ibl_specular_strength\": " << settings.environmentSpecularStrength << ",\n"
            << "  \"exposure_ev\": " << settings.cameraExposureEv << ",\n"
@@ -2741,6 +2757,7 @@ void VestaEngine::build_main_menu_bar()
                 if (ImGui::SliderFloat("IBL Specular", &settings.environmentSpecularStrength, 0.0f, 2.0f, "%.2f")) {
                     _renderer.ResetAccumulation();
                 }
+                ImGui::Text("HDRI: %s", settings.externalHdriAvailable ? settings.externalHdriStatus.c_str() : "Procedural only");
                 if (ImGui::MenuItem("Select For Drag")) {
                     _renderer.SelectDirectionalLight();
                 }
@@ -4097,6 +4114,16 @@ void VestaEngine::build_debug_ui()
                         _renderer.ResetAccumulation();
                     }
                     ImGui::Text("Source Procedural IBL: %s", EnvironmentPresetLabel(settings.environmentPreset));
+                    ImGui::Text("External HDRI: %s", settings.externalHdriAvailable ? "Probed" : "Not active");
+                    if (settings.externalHdriAvailable) {
+                        ImGui::Text("%ux%u  %uch  %s",
+                            settings.externalHdriWidth,
+                            settings.externalHdriHeight,
+                            settings.externalHdriChannels,
+                            settings.externalHdriIsHdr ? "HDR" : "LDR");
+                    }
+                    ImGui::TextWrapped("%s", settings.externalHdriStatus.c_str());
+                    ImGui::TextDisabled("External HDRI metadata is ready; irradiance/prefilter/BRDF LUT generation remains staged.");
                     ImGui::EndTabItem();
                 }
                 if (ImGui::BeginTabItem("Animation")) {
@@ -5669,6 +5696,55 @@ void VestaEngine::load_scene_path(const std::filesystem::path& path)
     if (started) {
         remember_recent_scene(normalizedPath);
     }
+}
+
+void VestaEngine::apply_external_hdri_path(const std::filesystem::path& path)
+{
+    auto& settings = _renderer.GetSettings();
+    settings.externalHdriPath = path;
+    settings.externalHdriAvailable = false;
+    settings.externalHdriIsHdr = false;
+    settings.externalHdriWidth = 0;
+    settings.externalHdriHeight = 0;
+    settings.externalHdriChannels = 0;
+
+    if (path.empty()) {
+        settings.externalHdriStatus = "Procedural IBL";
+        return;
+    }
+
+    std::filesystem::path normalizedPath = path;
+    if (normalizedPath.is_relative()) {
+        normalizedPath = std::filesystem::current_path() / normalizedPath;
+    }
+    settings.externalHdriPath = normalizedPath;
+
+    if (!std::filesystem::exists(normalizedPath)) {
+        settings.externalHdriStatus = "External HDRI missing: " + normalizedPath.string();
+        log_startup_event(settings.externalHdriStatus);
+        return;
+    }
+
+    int width = 0;
+    int height = 0;
+    int channels = 0;
+    if (stbi_info(normalizedPath.string().c_str(), &width, &height, &channels) == 0 || width <= 0 || height <= 0) {
+        settings.externalHdriStatus = "External HDRI probe failed: " + normalizedPath.string();
+        log_startup_event(settings.externalHdriStatus);
+        return;
+    }
+
+    settings.externalHdriAvailable = true;
+    settings.externalHdriIsHdr = stbi_is_hdr(normalizedPath.string().c_str()) != 0;
+    settings.externalHdriWidth = static_cast<uint32_t>(width);
+    settings.externalHdriHeight = static_cast<uint32_t>(height);
+    settings.externalHdriChannels = static_cast<uint32_t>(std::max(channels, 0));
+    settings.externalHdriStatus = fmt::format("External environment probed: {}x{} {}ch {}",
+        width,
+        height,
+        channels,
+        settings.externalHdriIsHdr ? "HDR" : "LDR");
+    log_startup_event(settings.externalHdriStatus);
 }
 
 void VestaEngine::remember_recent_scene(const std::filesystem::path& path)

@@ -45,6 +45,7 @@ void PrintUsage()
         << "  --env-preset <studio|sunset|night|forest>\n"
         << "  --ibl-diffuse <0-2>           Diffuse environment lighting strength.\n"
         << "  --ibl-specular <0-2>          Specular environment reflection strength.\n"
+        << "  --hdri <path>                 Probe an external HDRI/image for IBL pipeline metadata.\n"
         << "  --benchmark <csv-path>        Run a timed benchmark and exit.\n"
         << "  --screenshot <png-path>       Save a PNG capture during benchmark.\n"
         << "  --benchmark-seconds <value>   Benchmark capture duration.\n"
@@ -661,6 +662,14 @@ int main(int argc, char* argv[])
                 std::cerr << "Unknown environment preset: " << value << "\n";
                 return 1;
             }
+            continue;
+        }
+        if (argument == "--hdri") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            options.startupExternalHdriPath = value;
             continue;
         }
         if (argument == "--ibl-diffuse") {
