@@ -1790,7 +1790,9 @@ void VestaEngine::finish_benchmark()
                << "bloom,bloom_threshold,bloom_intensity,fxaa,motion_blur,motion_blur_strength,vignette,vignette_strength,saturation,contrast,"
                << "aperture_radius,focal_distance,"
                << "avg_frame_ms,p95_frame_ms,min_frame_ms,max_frame_ms,avg_fps,frame_count,"
-               << "vertices,triangles,surfaces,textures_total,textures_resident,parse_ms,prepare_ms,"
+               << "vertices,triangles,surfaces,textures_total,textures_resident,"
+               << "bindless_sampled_images,bindless_sampled_image_capacity,bindless_storage_images,bindless_storage_image_capacity,"
+               << "bindless_storage_buffers,bindless_storage_buffer_capacity,parse_ms,prepare_ms,"
                << "geometry_upload_ms,texture_upload_ms,blas_ms,tlas_ms,"
                << "gaussian_projected,gaussian_duplicates,gaussian_padded_duplicates,gaussian_tiles,gaussian_avg_tiles_touched,gaussian_rebuilds,"
                << "gaussian_preprocess_ms,gaussian_scan_ms,gaussian_duplicate_ms,gaussian_sort_ms,gaussian_range_ms,"
@@ -1813,7 +1815,9 @@ void VestaEngine::finish_benchmark()
     const auto& settings = _renderer.GetSettings();
     const auto& scene = _renderer.GetScene();
     const auto& status = _renderer.GetSceneLoadStatus();
-    const auto extent = _renderer.GetRenderDevice().GetSwapchainExtent();
+    const auto& device = _renderer.GetRenderDevice();
+    const auto extent = device.GetSwapchainExtent();
+    const auto bindlessStats = device.GetBindlessStats();
     const auto averagePassGpuMs = [&](size_t passIndex) {
         const uint32_t sampleCount = _benchmarkState.passGpuSampleCounts[passIndex];
         return sampleCount > 0u ? _benchmarkState.passGpuMsSums[passIndex] / static_cast<float>(sampleCount) : 0.0f;
@@ -1829,7 +1833,7 @@ void VestaEngine::finish_benchmark()
     output << CsvEscape(timestampStream.str()) << ','
            << CsvEscape(scene.GetSourcePath().string()) << ','
            << CsvEscape(SceneKindLabel(scene.GetSceneKind())) << ','
-           << CsvEscape(_renderer.GetRenderDevice().GetGpuName()) << ','
+           << CsvEscape(device.GetGpuName()) << ','
            << CsvEscape(fmt::format("{}x{}", extent.width, extent.height)) << ','
            << (settings.enableVSync ? "true" : "false") << ','
            << PresentModeLabel(_renderer.GetRenderDevice().GetPresentMode()) << ','
@@ -1930,6 +1934,12 @@ void VestaEngine::finish_benchmark()
            << scene.GetSurfaces().size() << ','
            << scene.GetTextures().size() << ','
            << _renderer.GetResidentTextureCount() << ','
+           << bindlessStats.sampledImagesUsed << ','
+           << bindlessStats.sampledImagesCapacity << ','
+           << bindlessStats.storageImagesUsed << ','
+           << bindlessStats.storageImagesCapacity << ','
+           << bindlessStats.storageBuffersUsed << ','
+           << bindlessStats.storageBuffersCapacity << ','
            << status.parseMs << ','
            << status.prepareMs << ','
            << status.geometryUploadMs << ','
@@ -1985,6 +1995,7 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
     const auto& graphTimings = _renderer.GetLastRenderGraphTimings();
     const std::vector<vesta::render::RenderPassDebugInfo> passDebugInfo = _renderer.GetRenderPassDebugInfo();
     const auto& device = _renderer.GetRenderDevice();
+    const auto bindlessStats = device.GetBindlessStats();
     const uint64_t sceneBufferBytes = BufferSizeBytes(device, scene.GetVertexBuffer())
         + BufferSizeBytes(device, scene.GetIndexBuffer())
         + BufferSizeBytes(device, scene.GetMaterialBuffer())
@@ -2091,6 +2102,12 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "    \"surfaces\": " << scene.GetSurfaces().size() << ",\n"
            << "    \"textures_total\": " << scene.GetTextures().size() << ",\n"
            << "    \"textures_resident\": " << scene.GetResidentTextureCount() << ",\n"
+           << "    \"bindless_sampled_images\": " << bindlessStats.sampledImagesUsed << ",\n"
+           << "    \"bindless_sampled_image_capacity\": " << bindlessStats.sampledImagesCapacity << ",\n"
+           << "    \"bindless_storage_images\": " << bindlessStats.storageImagesUsed << ",\n"
+           << "    \"bindless_storage_image_capacity\": " << bindlessStats.storageImagesCapacity << ",\n"
+           << "    \"bindless_storage_buffers\": " << bindlessStats.storageBuffersUsed << ",\n"
+           << "    \"bindless_storage_buffer_capacity\": " << bindlessStats.storageBuffersCapacity << ",\n"
            << "    \"gaussians\": " << scene.GetGaussianCount() << ",\n"
            << "    \"scene_buffer_bytes\": " << sceneBufferBytes << ",\n"
            << "    \"acceleration_structure_bytes\": " << accelerationBytes << ",\n"
@@ -3111,6 +3128,14 @@ void VestaEngine::build_debug_ui()
             ImGui::Text("Culled Gaussians %u", culledGaussians);
             ImGui::Text("Splats rendered %u", _renderer.GetOfficialGaussianDuplicateCount());
             ImGui::Text("VRAM Dedicated %u MiB", device.GetDedicatedVideoMemoryMiB());
+            const auto bindlessStats = device.GetBindlessStats();
+            ImGui::Text("Bindless Srv/StorageImg/StorageBuf %u/%u  %u/%u  %u/%u",
+                bindlessStats.sampledImagesUsed,
+                bindlessStats.sampledImagesCapacity,
+                bindlessStats.storageImagesUsed,
+                bindlessStats.storageImagesCapacity,
+                bindlessStats.storageBuffersUsed,
+                bindlessStats.storageBuffersCapacity);
             if (ImGui::BeginTable("GpuPassTiming", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
                 ImGui::TableSetupColumn("Pass");
                 ImGui::TableSetupColumn("CPU ms", ImGuiTableColumnFlags_WidthFixed, 70.0f);
@@ -4300,6 +4325,22 @@ void VestaEngine::build_debug_ui()
                     ImGui::Text("Upload Last %.2f MiB  Pending %.2f MiB",
                         MiB(static_cast<uint64_t>(device.GetUploadBatchStats().lastSubmittedBytes)),
                         MiB(static_cast<uint64_t>(device.GetUploadBatchStats().pendingBytes)));
+                    const auto bindlessStats = device.GetBindlessStats();
+                    ImGui::SeparatorText("Bindless Heap");
+                    auto bindlessUsageRow = [](const char* label, uint32_t used, uint32_t capacity) {
+                        const float fraction = capacity > 0u ? static_cast<float>(used) / static_cast<float>(capacity) : 0.0f;
+                        ImGui::Text("%s %u / %u", label, used, capacity);
+                        ImGui::SameLine(190.0f);
+                        ImGui::ProgressBar(fraction, ImVec2(-1.0f, 0.0f));
+                    };
+                    bindlessUsageRow("Sampled Images", bindlessStats.sampledImagesUsed, bindlessStats.sampledImagesCapacity);
+                    bindlessUsageRow("Storage Images", bindlessStats.storageImagesUsed, bindlessStats.storageImagesCapacity);
+                    bindlessUsageRow("Storage Buffers", bindlessStats.storageBuffersUsed, bindlessStats.storageBuffersCapacity);
+                    if (bindlessStats.sampledImagesUsed > bindlessStats.sampledImagesCapacity * 8u / 10u
+                        || bindlessStats.storageImagesUsed > bindlessStats.storageImagesCapacity * 8u / 10u
+                        || bindlessStats.storageBuffersUsed > bindlessStats.storageBuffersCapacity * 8u / 10u) {
+                        ImGui::TextColored(ImVec4(1.0f, 0.72f, 0.18f, 1.0f), "Warning: bindless heap usage is above 80%%.");
+                    }
                     ImGui::EndTabItem();
                 }
                 if (ImGui::BeginTabItem("Frame Textures")) {
@@ -5542,7 +5583,11 @@ void VestaEngine::draw_advanced_portfolio_panel()
     ImGui::TextDisabled("Compute culling and meshlet bounds are roadmap stubs.");
 
     ImGui::SeparatorText("Bindless");
+    const auto bindlessStats = device.GetBindlessStats();
     ImGui::Text("Textures %zu  Resident %u", scene.GetTextures().size(), _renderer.GetResidentTextureCount());
+    ImGui::Text("Sampled image descriptors %u / %u", bindlessStats.sampledImagesUsed, bindlessStats.sampledImagesCapacity);
+    ImGui::Text("Storage image descriptors %u / %u", bindlessStats.storageImagesUsed, bindlessStats.storageImagesCapacity);
+    ImGui::Text("Storage buffer descriptors %u / %u", bindlessStats.storageBuffersUsed, bindlessStats.storageBuffersCapacity);
     ImGui::Text("Device local memory %u MiB", device.GetDedicatedVideoMemoryMiB());
     ImGui::Text("Path backend %s", PathTraceBackendLabel(_renderer.GetActivePathTraceBackend()));
 

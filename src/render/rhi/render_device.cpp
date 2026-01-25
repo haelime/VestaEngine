@@ -233,6 +233,18 @@ uint32_t BindlessDescriptorManager::RegisterStorageBuffer(VkDevice device, VkBuf
     return slot;
 }
 
+BindlessDescriptorManager::Stats BindlessDescriptorManager::GetStats() const
+{
+    return Stats{
+        .sampledImagesUsed = _nextSampledImage,
+        .sampledImagesCapacity = kMaxSampledImages,
+        .storageImagesUsed = _nextStorageImage,
+        .storageImagesCapacity = kMaxStorageImages,
+        .storageBuffersUsed = _nextStorageBuffer,
+        .storageBuffersCapacity = kMaxStorageBuffers,
+    };
+}
+
 bool RenderDevice::Initialize(SDL_Window* window, const RenderDeviceDesc& desc)
 {
     _window = window;

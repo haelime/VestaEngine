@@ -32,6 +32,16 @@ public:
     [[nodiscard]] VkDescriptorSetLayout GetLayout() const { return _layout; }
     [[nodiscard]] VkDescriptorSet GetSet() const { return _set; }
 
+    struct Stats {
+        uint32_t sampledImagesUsed{ 0 };
+        uint32_t sampledImagesCapacity{ kMaxSampledImages };
+        uint32_t storageImagesUsed{ 0 };
+        uint32_t storageImagesCapacity{ kMaxStorageImages };
+        uint32_t storageBuffersUsed{ 0 };
+        uint32_t storageBuffersCapacity{ kMaxStorageBuffers };
+    };
+    [[nodiscard]] Stats GetStats() const;
+
 private:
     VkDescriptorPool _pool{ VK_NULL_HANDLE };
     VkDescriptorSetLayout _layout{ VK_NULL_HANDLE };
@@ -204,6 +214,8 @@ public:
     [[nodiscard]] ImageHandle GetSwapchainImageHandle(uint32_t imageIndex) const;
     [[nodiscard]] const std::vector<ImageHandle>& GetSwapchainImageHandles() const { return _swapchainImageHandles; }
     [[nodiscard]] BindlessDescriptorManager& GetBindless() { return _bindless; }
+    [[nodiscard]] const BindlessDescriptorManager& GetBindless() const { return _bindless; }
+    [[nodiscard]] BindlessDescriptorManager::Stats GetBindlessStats() const { return _bindless.GetStats(); }
 
 private:
     void CreateInstanceAndDevice(const RenderDeviceDesc& desc);
