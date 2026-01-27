@@ -1103,6 +1103,62 @@ std::filesystem::path MakeTimestampedCapturePath(std::string_view prefix, std::s
     stream << prefix << '_' << std::put_time(&localTime, "%Y%m%d_%H%M%S") << extension;
     return std::filesystem::path("out/captures") / stream.str();
 }
+
+bool WriteRenderGraphDot(
+    const std::filesystem::path& path, const std::vector<vesta::render::RenderGraphPassTiming>& timings)
+{
+    std::filesystem::path outputPath = path;
+    if (outputPath.is_relative()) {
+        outputPath = std::filesystem::current_path() / outputPath;
+    }
+    if (!outputPath.parent_path().empty()) {
+        std::filesystem::create_directories(outputPath.parent_path());
+    }
+
+    std::ofstream output(outputPath, std::ios::trunc);
+    if (!output.is_open()) {
+        return false;
+    }
+
+    output << "digraph VestaRenderGraph {\n"
+           << "  rankdir=LR;\n"
+           << "  node [shape=box, style=rounded];\n";
+
+    for (size_t passIndex = 0; passIndex < timings.size(); ++passIndex) {
+        const auto& timing = timings[passIndex];
+        output << "  pass" << passIndex << " [label=\"" << JsonEscape(timing.name) << "\\nCPU "
+               << timing.cpuMs << " ms\\nGPU ";
+        if (timing.gpuTimingValid) {
+            output << timing.gpuMs;
+        } else {
+            output << "n/a";
+        }
+        output << " ms\"];\n";
+    }
+
+    for (size_t readerIndex = 0; readerIndex < timings.size(); ++readerIndex) {
+        const auto& reader = timings[readerIndex];
+        for (const auto& input : reader.inputs) {
+            std::optional<size_t> writerIndex;
+            for (size_t candidateIndex = 0; candidateIndex < readerIndex; ++candidateIndex) {
+                const auto& candidate = timings[candidateIndex];
+                const bool writesResource = std::any_of(candidate.outputs.begin(), candidate.outputs.end(), [&](const auto& output) {
+                    return output.name == input.name;
+                });
+                if (writesResource) {
+                    writerIndex = candidateIndex;
+                }
+            }
+            if (writerIndex.has_value()) {
+                output << "  pass" << *writerIndex << " -> pass" << readerIndex << " [label=\""
+                       << JsonEscape(input.name) << "\"];\n";
+            }
+        }
+    }
+
+    output << "}\n";
+    return true;
+}
 }
 
 void VestaEngine::init(const EngineLaunchOptions& options)
@@ -3026,6 +3082,15 @@ void VestaEngine::build_debug_ui()
                 settings.displayMode = static_cast<vesta::render::RendererDisplayMode>(displayMode);
                 _renderer.ResetAccumulation();
             }
+            ImGui::SameLine();
+            if (ImGui::Button("Export DOT")) {
+                const std::filesystem::path path = MakeTimestampedCapturePath("render_graph", ".dot");
+                log_startup_event(WriteRenderGraphDot(path, graphTimings) ? "Render graph DOT exported: " + path.string()
+                                                                           : "Render graph DOT export failed");
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Writes the current pass/resource dependency graph as a GraphViz DOT file.");
+            }
 
             const std::vector<vesta::render::RenderPassDebugInfo> passInfo = _renderer.GetRenderPassDebugInfo();
             if (ImGui::BeginTable("PassRegistry", 8, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
@@ -3096,6 +3161,56 @@ void VestaEngine::build_debug_ui()
                     ImGui::TextUnformatted(pass.id.c_str());
                 }
                 ImGui::EndTable();
+            }
+
+            if (ImGui::CollapsingHeader("Resource Dependency Edges", ImGuiTreeNodeFlags_DefaultOpen)) {
+                if (ImGui::BeginTable("RenderGraphEdges", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
+                        ImVec2(0.0f, 160.0f))) {
+                    ImGui::TableSetupColumn("Writer");
+                    ImGui::TableSetupColumn("Resource");
+                    ImGui::TableSetupColumn("Reader");
+                    ImGui::TableSetupColumn("Usage", ImGuiTableColumnFlags_WidthFixed, 86.0f);
+                    ImGui::TableSetupColumn("Sync", ImGuiTableColumnFlags_WidthFixed, 74.0f);
+                    ImGui::TableHeadersRow();
+                    uint32_t edgeCount = 0;
+                    for (size_t readerIndex = 0; readerIndex < graphTimings.size(); ++readerIndex) {
+                        const auto& reader = graphTimings[readerIndex];
+                        for (const auto& input : reader.inputs) {
+                            std::optional<size_t> writerIndex;
+                            for (size_t candidateIndex = 0; candidateIndex < readerIndex; ++candidateIndex) {
+                                const auto& candidate = graphTimings[candidateIndex];
+                                const bool writesResource = std::any_of(candidate.outputs.begin(), candidate.outputs.end(), [&](const auto& output) {
+                                    return output.name == input.name;
+                                });
+                                if (writesResource) {
+                                    writerIndex = candidateIndex;
+                                }
+                            }
+                            ImGui::TableNextRow();
+                            ImGui::TableSetColumnIndex(0);
+                            if (writerIndex.has_value()) {
+                                ImGui::TextUnformatted(graphTimings[*writerIndex].name.c_str());
+                            } else {
+                                ImGui::TextDisabled(input.imported ? "Imported" : "External");
+                            }
+                            ImGui::TableSetColumnIndex(1);
+                            ImGui::TextUnformatted(input.name.c_str());
+                            ImGui::TableSetColumnIndex(2);
+                            ImGui::TextUnformatted(reader.name.c_str());
+                            ImGui::TableSetColumnIndex(3);
+                            ImGui::TextUnformatted(ResourceUsageLabel(input.usage));
+                            ImGui::TableSetColumnIndex(4);
+                            ImGui::TextUnformatted(writerIndex.has_value() ? "barrier" : "read");
+                            ++edgeCount;
+                        }
+                    }
+                    if (edgeCount == 0u) {
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        ImGui::TextDisabled("No resource edges recorded yet.");
+                    }
+                    ImGui::EndTable();
+                }
             }
 
             ImGui::SeparatorText("Current Frame Resources");
