@@ -1848,6 +1848,45 @@ const IRenderPass* Renderer::FindPass(std::string_view id) const
     return entry != nullptr ? entry->pass.get() : nullptr;
 }
 
+MeshletClusterStats Renderer::GetMeshletClusterStats() const
+{
+    constexpr uint32_t kTrianglesPerMeshlet = 64;
+
+    MeshletClusterStats stats{};
+    stats.trianglesPerMeshlet = kTrianglesPerMeshlet;
+    stats.totalClusters = static_cast<uint32_t>(_scene.GetSurfaces().size());
+    stats.boundsAvailable = static_cast<uint32_t>(_scene.GetSurfaceBounds().size());
+    stats.visibilitySetValid = HasValidVisibilitySet();
+    stats.coneCullingEnabled = false;
+    stats.gpuDrivenBackend = false;
+
+    const auto surfaceMeshletCount = [&](uint32_t surfaceIndex) -> uint32_t {
+        if (surfaceIndex >= _scene.GetSurfaces().size()) {
+            return 0u;
+        }
+        const uint32_t triangleCount = _scene.GetSurfaces()[surfaceIndex].indexCount / 3u;
+        return std::max(1u, (triangleCount + kTrianglesPerMeshlet - 1u) / kTrianglesPerMeshlet);
+    };
+
+    for (uint32_t surfaceIndex = 0; surfaceIndex < static_cast<uint32_t>(_scene.GetSurfaces().size()); ++surfaceIndex) {
+        stats.totalMeshlets += surfaceMeshletCount(surfaceIndex);
+    }
+
+    if (stats.visibilitySetValid) {
+        stats.visibleClusters = static_cast<uint32_t>(_visibleSurfaceIndices.size());
+        for (uint32_t surfaceIndex : _visibleSurfaceIndices) {
+            stats.visibleMeshlets += surfaceMeshletCount(surfaceIndex);
+        }
+    } else {
+        stats.visibleClusters = stats.totalClusters;
+        stats.visibleMeshlets = stats.totalMeshlets;
+    }
+
+    stats.culledClusters = stats.totalClusters >= stats.visibleClusters ? stats.totalClusters - stats.visibleClusters : 0u;
+    stats.culledMeshlets = stats.totalMeshlets >= stats.visibleMeshlets ? stats.totalMeshlets - stats.visibleMeshlets : 0u;
+    return stats;
+}
+
 std::vector<RenderPassDebugInfo> Renderer::GetRenderPassDebugInfo() const
 {
     const auto estimateVisibleSurfaceCount = [&]() -> uint32_t {

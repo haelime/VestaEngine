@@ -1784,6 +1784,7 @@ void VestaEngine::finish_benchmark()
                << "pt_primary_rays,pt_shadow_rays,pt_diffuse_rays,pt_specular_rays,pt_total_rays,"
                << "requested_backend,active_backend,scene_upload_mode,"
                << "gaussian,path_tracing,texture_streaming,indirect_draw,frustum_culling,distance_culling,async_compute,async_timeline,transfer_queue,"
+               << "meshlet_culling,cluster_count,visible_clusters,culled_clusters,meshlet_count,visible_meshlets,culled_meshlets,cluster_bounds,meshlet_triangles,"
                << "gaussian_trained,gaussian_count,gaussian_sh_degree,gaussian_view_dependent_color,gaussian_antialiasing,"
                << "gaussian_fast_culling,gaussian_opacity,gaussian_mix,gaussian_interactive_preview,"
                << "pt_scale,environment_intensity,environment_rotation_deg,environment_preset,external_hdri,external_hdri_path,external_hdri_resolution,external_hdri_hdr,ibl_diffuse,ibl_specular,exposure_ev,"
@@ -1818,6 +1819,7 @@ void VestaEngine::finish_benchmark()
     const auto& device = _renderer.GetRenderDevice();
     const auto extent = device.GetSwapchainExtent();
     const auto bindlessStats = device.GetBindlessStats();
+    const auto meshletStats = _renderer.GetMeshletClusterStats();
     const auto averagePassGpuMs = [&](size_t passIndex) {
         const uint32_t sampleCount = _benchmarkState.passGpuSampleCounts[passIndex];
         return sampleCount > 0u ? _benchmarkState.passGpuMsSums[passIndex] / static_cast<float>(sampleCount) : 0.0f;
@@ -1894,6 +1896,15 @@ void VestaEngine::finish_benchmark()
            << (settings.enableAsyncCompute ? "true" : "false") << ','
            << (settings.showAsyncComputeTimeline ? "true" : "false") << ','
            << (device.HasTransferQueue() ? "true" : "false") << ','
+           << (settings.enableMeshletCulling ? "true" : "false") << ','
+           << meshletStats.totalClusters << ','
+           << meshletStats.visibleClusters << ','
+           << meshletStats.culledClusters << ','
+           << meshletStats.totalMeshlets << ','
+           << meshletStats.visibleMeshlets << ','
+           << meshletStats.culledMeshlets << ','
+           << meshletStats.boundsAvailable << ','
+           << meshletStats.trianglesPerMeshlet << ','
            << (scene.HasTrainedGaussians() ? "true" : "false") << ','
            << scene.GetGaussianCount() << ','
            << scene.GetGaussianShDegree() << ','
@@ -1999,6 +2010,7 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
     const std::vector<vesta::render::RenderPassDebugInfo> passDebugInfo = _renderer.GetRenderPassDebugInfo();
     const auto& device = _renderer.GetRenderDevice();
     const auto bindlessStats = device.GetBindlessStats();
+    const auto meshletStats = _renderer.GetMeshletClusterStats();
     const uint64_t sceneBufferBytes = BufferSizeBytes(device, scene.GetVertexBuffer())
         + BufferSizeBytes(device, scene.GetIndexBuffer())
         + BufferSizeBytes(device, scene.GetMaterialBuffer())
@@ -2059,6 +2071,20 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "  \"async_compute\": " << (settings.enableAsyncCompute ? "true" : "false") << ",\n"
            << "  \"async_compute_timeline\": " << (settings.showAsyncComputeTimeline ? "true" : "false") << ",\n"
            << "  \"transfer_queue_available\": " << (device.HasTransferQueue() ? "true" : "false") << ",\n"
+           << "  \"meshlet_culling\": " << (settings.enableMeshletCulling ? "true" : "false") << ",\n"
+           << "  \"meshlet_cluster_stats\": {\n"
+           << "    \"cluster_count\": " << meshletStats.totalClusters << ",\n"
+           << "    \"visible_clusters\": " << meshletStats.visibleClusters << ",\n"
+           << "    \"culled_clusters\": " << meshletStats.culledClusters << ",\n"
+           << "    \"meshlet_count\": " << meshletStats.totalMeshlets << ",\n"
+           << "    \"visible_meshlets\": " << meshletStats.visibleMeshlets << ",\n"
+           << "    \"culled_meshlets\": " << meshletStats.culledMeshlets << ",\n"
+           << "    \"cluster_bounds\": " << meshletStats.boundsAvailable << ",\n"
+           << "    \"triangles_per_meshlet\": " << meshletStats.trianglesPerMeshlet << ",\n"
+           << "    \"visibility_set_valid\": " << (meshletStats.visibilitySetValid ? "true" : "false") << ",\n"
+           << "    \"cone_culling\": " << (meshletStats.coneCullingEnabled ? "true" : "false") << ",\n"
+           << "    \"gpu_driven_backend\": " << (meshletStats.gpuDrivenBackend ? "true" : "false") << "\n"
+           << "  },\n"
            << "  \"point_light\": " << (settings.enablePointLight ? "true" : "false") << ",\n"
            << "  \"spot_light\": " << (settings.enableSpotLight ? "true" : "false") << ",\n"
            << "  \"area_light\": " << (settings.enableAreaLight ? "true" : "false") << ",\n"
@@ -3127,6 +3153,8 @@ void VestaEngine::build_debug_ui()
                     static_cast<unsigned long long>(totalSpecularRays));
             }
             ImGui::Text("Visible Surfaces %u / %zu", _renderer.GetVisibleSurfaceCount(), scene.GetSurfaces().size());
+            const auto meshletStats = _renderer.GetMeshletClusterStats();
+            ImGui::Text("Meshlets %u visible / %u total", meshletStats.visibleMeshlets, meshletStats.totalMeshlets);
             const uint32_t totalGaussians = scene.GetGaussianCount();
             const uint32_t projectedGaussians = _renderer.GetOfficialGaussianProjectedCount();
             const uint32_t culledGaussians = projectedGaussians <= totalGaussians ? totalGaussians - projectedGaussians : 0u;
@@ -5586,7 +5614,41 @@ void VestaEngine::draw_advanced_portfolio_panel()
     ImGui::EndDisabled();
     ImGui::Text("Visible Surfaces %u / %zu", _renderer.GetVisibleSurfaceCount(), scene.GetSurfaces().size());
     ImGui::Text("Indirect command buffer %s", settings.useIndirectDraw ? "enabled" : "not active");
-    ImGui::TextDisabled("Compute culling and meshlet bounds are roadmap stubs.");
+    const auto meshletStats = _renderer.GetMeshletClusterStats();
+    ImGui::Text("Cluster bounds %u / %u", meshletStats.boundsAvailable, meshletStats.totalClusters);
+    ImGui::Text("Meshlets %u visible / %u total  (%u culled)",
+        meshletStats.visibleMeshlets,
+        meshletStats.totalMeshlets,
+        meshletStats.culledMeshlets);
+    ImGui::Text("Clusters %u visible / %u total  (%u culled)",
+        meshletStats.visibleClusters,
+        meshletStats.totalClusters,
+        meshletStats.culledClusters);
+    ImGui::Text("Meshlet proxy %u triangles / meshlet", meshletStats.trianglesPerMeshlet);
+    ImGui::TextDisabled(meshletStats.visibilitySetValid ? "CPU visibility set is current; GPU meshlet dispatch remains staged."
+                                                        : "No current visibility set; stats use full scene as visible.");
+    if (ImGui::BeginTable("MeshletClusterStats", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+        ImGui::TableSetupColumn("Metric");
+        ImGui::TableSetupColumn("Total", ImGuiTableColumnFlags_WidthFixed, 72.0f);
+        ImGui::TableSetupColumn("Visible", ImGuiTableColumnFlags_WidthFixed, 72.0f);
+        ImGui::TableSetupColumn("Culled", ImGuiTableColumnFlags_WidthFixed, 72.0f);
+        ImGui::TableHeadersRow();
+        auto clusterRow = [](const char* metric, uint32_t total, uint32_t visible, uint32_t culled) {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted(metric);
+            ImGui::TableSetColumnIndex(1);
+            ImGui::Text("%u", total);
+            ImGui::TableSetColumnIndex(2);
+            ImGui::Text("%u", visible);
+            ImGui::TableSetColumnIndex(3);
+            ImGui::Text("%u", culled);
+        };
+        clusterRow("Clusters", meshletStats.totalClusters, meshletStats.visibleClusters, meshletStats.culledClusters);
+        clusterRow("Meshlets", meshletStats.totalMeshlets, meshletStats.visibleMeshlets, meshletStats.culledMeshlets);
+        ImGui::EndTable();
+    }
+    ImGui::TextDisabled("Compute culling, cone culling, and indirect meshlet draws are roadmap stubs.");
 
     ImGui::SeparatorText("Bindless");
     const auto bindlessStats = device.GetBindlessStats();

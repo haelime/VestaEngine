@@ -200,6 +200,20 @@ struct SceneUploadOptions {
     bool useDeviceLocalTextures{ true };
 };
 
+struct MeshletClusterStats {
+    uint32_t trianglesPerMeshlet{ 64 };
+    uint32_t totalClusters{ 0 };
+    uint32_t visibleClusters{ 0 };
+    uint32_t culledClusters{ 0 };
+    uint32_t totalMeshlets{ 0 };
+    uint32_t visibleMeshlets{ 0 };
+    uint32_t culledMeshlets{ 0 };
+    uint32_t boundsAvailable{ 0 };
+    bool visibilitySetValid{ false };
+    bool coneCullingEnabled{ false };
+    bool gpuDrivenBackend{ false };
+};
+
 // RendererSettings collects the knobs that can safely change at runtime.
 // When one of these changes in a way that affects history, accumulation resets.
 struct RendererSettings {
@@ -526,6 +540,7 @@ public:
     [[nodiscard]] const std::vector<RenderGraphPassTiming>& GetLastRenderGraphTimings() const { return _lastRenderGraphTimings; }
     [[nodiscard]] uint32_t GetVisibleSurfaceCount() const { return static_cast<uint32_t>(_visibleSurfaceIndices.size()); }
     [[nodiscard]] const std::vector<uint32_t>& GetVisibleSurfaceIndices() const { return _visibleSurfaceIndices; }
+    [[nodiscard]] MeshletClusterStats GetMeshletClusterStats() const;
     [[nodiscard]] std::vector<RenderPassDebugInfo> GetRenderPassDebugInfo() const;
     [[nodiscard]] const std::string& GetLastShaderReloadMessage() const { return _lastShaderReloadMessage; }
     [[nodiscard]] bool HasValidVisibilitySet() const { return _visibleSceneToken != nullptr && _visibleSceneToken == _scene.GetPreparedScene(); }
