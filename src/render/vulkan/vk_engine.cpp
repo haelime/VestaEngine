@@ -1783,7 +1783,7 @@ void VestaEngine::finish_benchmark()
                << "pt_denoiser,pt_denoiser_strength,pt_denoiser_temporal,pt_denoiser_iterations,"
                << "pt_primary_rays,pt_shadow_rays,pt_diffuse_rays,pt_specular_rays,pt_total_rays,"
                << "requested_backend,active_backend,scene_upload_mode,"
-               << "gaussian,path_tracing,texture_streaming,indirect_draw,frustum_culling,distance_culling,"
+               << "gaussian,path_tracing,texture_streaming,indirect_draw,frustum_culling,distance_culling,async_compute,async_timeline,transfer_queue,"
                << "gaussian_trained,gaussian_count,gaussian_sh_degree,gaussian_view_dependent_color,gaussian_antialiasing,"
                << "gaussian_fast_culling,gaussian_opacity,gaussian_mix,gaussian_interactive_preview,"
                << "pt_scale,environment_intensity,environment_rotation_deg,environment_preset,external_hdri,external_hdri_path,external_hdri_resolution,external_hdri_hdr,ibl_diffuse,ibl_specular,exposure_ev,"
@@ -1891,6 +1891,9 @@ void VestaEngine::finish_benchmark()
            << (settings.useIndirectDraw ? "true" : "false") << ','
            << (settings.enableFrustumCulling ? "true" : "false") << ','
            << (settings.enableDistanceCulling ? "true" : "false") << ','
+           << (settings.enableAsyncCompute ? "true" : "false") << ','
+           << (settings.showAsyncComputeTimeline ? "true" : "false") << ','
+           << (device.HasTransferQueue() ? "true" : "false") << ','
            << (scene.HasTrainedGaussians() ? "true" : "false") << ','
            << scene.GetGaussianCount() << ','
            << scene.GetGaussianShDegree() << ','
@@ -2053,6 +2056,9 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "  \"contact_shadows\": " << (settings.enableContactShadows ? "true" : "false") << ",\n"
            << "  \"contact_shadow_length\": " << settings.contactShadowLength << ",\n"
            << "  \"contact_shadow_intensity\": " << settings.contactShadowIntensity << ",\n"
+           << "  \"async_compute\": " << (settings.enableAsyncCompute ? "true" : "false") << ",\n"
+           << "  \"async_compute_timeline\": " << (settings.showAsyncComputeTimeline ? "true" : "false") << ",\n"
+           << "  \"transfer_queue_available\": " << (device.HasTransferQueue() ? "true" : "false") << ",\n"
            << "  \"point_light\": " << (settings.enablePointLight ? "true" : "false") << ",\n"
            << "  \"spot_light\": " << (settings.enableSpotLight ? "true" : "false") << ",\n"
            << "  \"area_light\": " << (settings.enableAreaLight ? "true" : "false") << ",\n"
@@ -5596,7 +5602,37 @@ void VestaEngine::draw_advanced_portfolio_panel()
     ImGui::Checkbox("Async Compute", &settings.enableAsyncCompute);
     ImGui::Checkbox("Queue Timeline", &settings.showAsyncComputeTimeline);
     ImGui::EndDisabled();
-    ImGui::TextDisabled("Async compute requires separate queue ownership and render graph scheduling work.");
+    ImGui::Text("Graphics Queue Family %u", device.GetGraphicsQueueFamily());
+    ImGui::Text("Transfer Queue %s", device.HasTransferQueue() ? "available" : "shared with graphics");
+    if (device.HasTransferQueue()) {
+        ImGui::SameLine();
+        ImGui::Text("(family %u)", device.GetTransferQueueFamily());
+    }
+    if (ImGui::BeginTable("AsyncTimelineStub", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+        ImGui::TableSetupColumn("Pass");
+        ImGui::TableSetupColumn("Queue", ImGuiTableColumnFlags_WidthFixed, 78.0f);
+        ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 86.0f);
+        ImGui::TableSetupColumn("Sync / Blocker");
+        ImGui::TableHeadersRow();
+        auto timelineRow = [](const char* pass, const char* queue, const char* state, const char* blocker) {
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted(pass);
+            ImGui::TableSetColumnIndex(1);
+            ImGui::TextUnformatted(queue);
+            ImGui::TableSetColumnIndex(2);
+            ImGui::TextUnformatted(state);
+            ImGui::TableSetColumnIndex(3);
+            ImGui::TextWrapped("%s", blocker);
+        };
+        timelineRow("Texture Upload", device.HasTransferQueue() ? "Transfer" : "Graphics", "Implemented", "Upload batch flushes before graphics consumption.");
+        timelineRow("SSAO / SSGI", "Compute", "Staged", "Needs render graph async queue scheduling and history hazards.");
+        timelineRow("Path Denoise", "Compute", "Staged", "Needs queue ownership barriers for path output and denoised target.");
+        timelineRow("Gaussian Sort", "Compute", "Staged", "Needs overlap window between preprocessing and raster/composite.");
+        timelineRow("Composite", "Graphics", "Serial", "Consumes all color/debug outputs before present.");
+        ImGui::EndTable();
+    }
+    ImGui::TextDisabled("Async compute is intentionally read-only until the render graph owns cross-queue scheduling.");
 }
 
 bool VestaEngine::should_forward_event_to_renderer(const SDL_Event& event) const
