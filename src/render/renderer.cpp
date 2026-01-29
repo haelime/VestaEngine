@@ -1848,6 +1848,19 @@ const IRenderPass* Renderer::FindPass(std::string_view id) const
     return entry != nullptr ? entry->pass.get() : nullptr;
 }
 
+GpuDrivenStats Renderer::GetGpuDrivenStats() const
+{
+    GpuDrivenStats stats{};
+    stats.totalSurfaces = static_cast<uint32_t>(_scene.GetSurfaces().size());
+    stats.visibilitySetValid = HasValidVisibilitySet();
+    stats.visibleSurfaces = stats.visibilitySetValid ? static_cast<uint32_t>(_visibleSurfaceIndices.size()) : stats.totalSurfaces;
+    stats.culledSurfaces = stats.totalSurfaces >= stats.visibleSurfaces ? stats.totalSurfaces - stats.visibleSurfaces : 0u;
+    stats.indirectDrawEnabled = _settings.useIndirectDraw;
+    stats.indirectDrawEstimate = _settings.useIndirectDraw && stats.visibleSurfaces > 0u ? 1u : stats.visibleSurfaces;
+    stats.gpuDrivenBackend = false;
+    return stats;
+}
+
 MeshletClusterStats Renderer::GetMeshletClusterStats() const
 {
     constexpr uint32_t kTrianglesPerMeshlet = 64;

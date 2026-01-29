@@ -214,6 +214,16 @@ struct MeshletClusterStats {
     bool gpuDrivenBackend{ false };
 };
 
+struct GpuDrivenStats {
+    uint32_t totalSurfaces{ 0 };
+    uint32_t visibleSurfaces{ 0 };
+    uint32_t culledSurfaces{ 0 };
+    uint32_t indirectDrawEstimate{ 0 };
+    bool visibilitySetValid{ false };
+    bool indirectDrawEnabled{ false };
+    bool gpuDrivenBackend{ false };
+};
+
 // RendererSettings collects the knobs that can safely change at runtime.
 // When one of these changes in a way that affects history, accumulation resets.
 struct RendererSettings {
@@ -540,6 +550,7 @@ public:
     [[nodiscard]] const std::vector<RenderGraphPassTiming>& GetLastRenderGraphTimings() const { return _lastRenderGraphTimings; }
     [[nodiscard]] uint32_t GetVisibleSurfaceCount() const { return static_cast<uint32_t>(_visibleSurfaceIndices.size()); }
     [[nodiscard]] const std::vector<uint32_t>& GetVisibleSurfaceIndices() const { return _visibleSurfaceIndices; }
+    [[nodiscard]] GpuDrivenStats GetGpuDrivenStats() const;
     [[nodiscard]] MeshletClusterStats GetMeshletClusterStats() const;
     [[nodiscard]] std::vector<RenderPassDebugInfo> GetRenderPassDebugInfo() const;
     [[nodiscard]] const std::string& GetLastShaderReloadMessage() const { return _lastShaderReloadMessage; }

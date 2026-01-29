@@ -1840,6 +1840,7 @@ void VestaEngine::finish_benchmark()
                << "pt_primary_rays,pt_shadow_rays,pt_diffuse_rays,pt_specular_rays,pt_total_rays,"
                << "requested_backend,active_backend,scene_upload_mode,"
                << "gaussian,path_tracing,texture_streaming,indirect_draw,frustum_culling,distance_culling,async_compute,async_timeline,transfer_queue,"
+               << "gpu_driven,gpu_driven_backend,visibility_set_valid,visible_surfaces,culled_surfaces,indirect_draw_estimate,"
                << "meshlet_culling,cluster_count,visible_clusters,culled_clusters,meshlet_count,visible_meshlets,culled_meshlets,cluster_bounds,meshlet_triangles,"
                << "gaussian_trained,gaussian_count,gaussian_sh_degree,gaussian_view_dependent_color,gaussian_antialiasing,"
                << "gaussian_fast_culling,gaussian_opacity,gaussian_mix,gaussian_interactive_preview,"
@@ -1875,6 +1876,7 @@ void VestaEngine::finish_benchmark()
     const auto& device = _renderer.GetRenderDevice();
     const auto extent = device.GetSwapchainExtent();
     const auto bindlessStats = device.GetBindlessStats();
+    const auto gpuDrivenStats = _renderer.GetGpuDrivenStats();
     const auto meshletStats = _renderer.GetMeshletClusterStats();
     const auto averagePassGpuMs = [&](size_t passIndex) {
         const uint32_t sampleCount = _benchmarkState.passGpuSampleCounts[passIndex];
@@ -1952,6 +1954,12 @@ void VestaEngine::finish_benchmark()
            << (settings.enableAsyncCompute ? "true" : "false") << ','
            << (settings.showAsyncComputeTimeline ? "true" : "false") << ','
            << (device.HasTransferQueue() ? "true" : "false") << ','
+           << (settings.enableGpuDrivenRendering ? "true" : "false") << ','
+           << (gpuDrivenStats.gpuDrivenBackend ? "true" : "false") << ','
+           << (gpuDrivenStats.visibilitySetValid ? "true" : "false") << ','
+           << gpuDrivenStats.visibleSurfaces << ','
+           << gpuDrivenStats.culledSurfaces << ','
+           << gpuDrivenStats.indirectDrawEstimate << ','
            << (settings.enableMeshletCulling ? "true" : "false") << ','
            << meshletStats.totalClusters << ','
            << meshletStats.visibleClusters << ','
@@ -2066,6 +2074,7 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
     const std::vector<vesta::render::RenderPassDebugInfo> passDebugInfo = _renderer.GetRenderPassDebugInfo();
     const auto& device = _renderer.GetRenderDevice();
     const auto bindlessStats = device.GetBindlessStats();
+    const auto gpuDrivenStats = _renderer.GetGpuDrivenStats();
     const auto meshletStats = _renderer.GetMeshletClusterStats();
     const uint64_t sceneBufferBytes = BufferSizeBytes(device, scene.GetVertexBuffer())
         + BufferSizeBytes(device, scene.GetIndexBuffer())
@@ -2127,6 +2136,16 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "  \"async_compute\": " << (settings.enableAsyncCompute ? "true" : "false") << ",\n"
            << "  \"async_compute_timeline\": " << (settings.showAsyncComputeTimeline ? "true" : "false") << ",\n"
            << "  \"transfer_queue_available\": " << (device.HasTransferQueue() ? "true" : "false") << ",\n"
+           << "  \"gpu_driven\": " << (settings.enableGpuDrivenRendering ? "true" : "false") << ",\n"
+           << "  \"gpu_driven_stats\": {\n"
+           << "    \"total_surfaces\": " << gpuDrivenStats.totalSurfaces << ",\n"
+           << "    \"visible_surfaces\": " << gpuDrivenStats.visibleSurfaces << ",\n"
+           << "    \"culled_surfaces\": " << gpuDrivenStats.culledSurfaces << ",\n"
+           << "    \"indirect_draw_estimate\": " << gpuDrivenStats.indirectDrawEstimate << ",\n"
+           << "    \"visibility_set_valid\": " << (gpuDrivenStats.visibilitySetValid ? "true" : "false") << ",\n"
+           << "    \"indirect_draw_enabled\": " << (gpuDrivenStats.indirectDrawEnabled ? "true" : "false") << ",\n"
+           << "    \"gpu_driven_backend\": " << (gpuDrivenStats.gpuDrivenBackend ? "true" : "false") << "\n"
+           << "  },\n"
            << "  \"meshlet_culling\": " << (settings.enableMeshletCulling ? "true" : "false") << ",\n"
            << "  \"meshlet_cluster_stats\": {\n"
            << "    \"cluster_count\": " << meshletStats.totalClusters << ",\n"
@@ -5727,8 +5746,16 @@ void VestaEngine::draw_advanced_portfolio_panel()
     ImGui::Checkbox("GPU-driven Culling", &settings.enableGpuDrivenRendering);
     ImGui::Checkbox("Meshlet / Cluster Culling", &settings.enableMeshletCulling);
     ImGui::EndDisabled();
-    ImGui::Text("Visible Surfaces %u / %zu", _renderer.GetVisibleSurfaceCount(), scene.GetSurfaces().size());
-    ImGui::Text("Indirect command buffer %s", settings.useIndirectDraw ? "enabled" : "not active");
+    const auto gpuDrivenStats = _renderer.GetGpuDrivenStats();
+    ImGui::Text("Visible Surfaces %u / %u  (%u culled)",
+        gpuDrivenStats.visibleSurfaces,
+        gpuDrivenStats.totalSurfaces,
+        gpuDrivenStats.culledSurfaces);
+    ImGui::Text("Indirect draw estimate %u  Mode %s",
+        gpuDrivenStats.indirectDrawEstimate,
+        gpuDrivenStats.indirectDrawEnabled ? "single indirect command" : "direct per-surface draw");
+    ImGui::TextDisabled(gpuDrivenStats.visibilitySetValid ? "Visibility set is current; GPU-driven backend remains staged."
+                                                          : "Visibility set is pending or disabled; stats assume full scene visible.");
     const auto meshletStats = _renderer.GetMeshletClusterStats();
     ImGui::Text("Cluster bounds %u / %u", meshletStats.boundsAvailable, meshletStats.totalClusters);
     ImGui::Text("Meshlets %u visible / %u total  (%u culled)",
