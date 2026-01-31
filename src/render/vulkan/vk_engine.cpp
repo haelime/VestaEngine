@@ -1831,7 +1831,7 @@ void VestaEngine::finish_benchmark()
         output << "timestamp,scene,scene_kind,gpu,resolution,vsync,present_mode,fps_limit_enabled,fps_limit,display_mode,"
                << "debug_view,path_trace_debug_view,gaussian_debug_view,compare_mode,compare_split,compare_difference_scale,"
                << "ssao,ssao_radius,ssao_intensity,"
-               << "taa,taa_feedback,"
+               << "taa,taa_feedback,temporal_upscaler,temporal_upscaler_backend,temporal_upscaler_input,temporal_upscaler_output,temporal_upscaler_scale,temporal_upscaler_history,temporal_upscaler_reactive_mask,"
                << "ssr,ssr_max_distance,ssr_thickness,ssr_intensity,"
                << "ssgi,ssgi_radius,ssgi_intensity,ssgi_samples,"
                << "shadow_map,shadow_map_size,shadow_bias,shadow_normal_bias,shadow_strength,shadow_pcss,shadow_filter_radius,contact_shadows,contact_shadow_length,contact_shadow_intensity,"
@@ -1878,6 +1878,7 @@ void VestaEngine::finish_benchmark()
     const auto bindlessStats = device.GetBindlessStats();
     const auto gpuDrivenStats = _renderer.GetGpuDrivenStats();
     const auto meshletStats = _renderer.GetMeshletClusterStats();
+    const auto temporalUpscalerStats = _renderer.GetTemporalUpscalerStats();
     const auto averagePassGpuMs = [&](size_t passIndex) {
         const uint32_t sampleCount = _benchmarkState.passGpuSampleCounts[passIndex];
         return sampleCount > 0u ? _benchmarkState.passGpuMsSums[passIndex] / static_cast<float>(sampleCount) : 0.0f;
@@ -1911,6 +1912,13 @@ void VestaEngine::finish_benchmark()
            << settings.ssaoIntensity << ','
            << (settings.enableTaa ? "true" : "false") << ','
            << settings.taaFeedback << ','
+           << (settings.enableTemporalUpscaler ? "true" : "false") << ','
+           << (temporalUpscalerStats.backendAvailable ? "TAAU" : "Staged") << ','
+           << CsvEscape(fmt::format("{}x{}", temporalUpscalerStats.inputWidth, temporalUpscalerStats.inputHeight)) << ','
+           << CsvEscape(fmt::format("{}x{}", temporalUpscalerStats.outputWidth, temporalUpscalerStats.outputHeight)) << ','
+           << temporalUpscalerStats.scale << ','
+           << (temporalUpscalerStats.taaHistoryAvailable ? "true" : "false") << ','
+           << (temporalUpscalerStats.reactiveMaskAvailable ? "true" : "false") << ','
            << (settings.enableSsr ? "true" : "false") << ','
            << settings.ssrMaxDistance << ','
            << settings.ssrThickness << ','
@@ -2076,6 +2084,7 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
     const auto bindlessStats = device.GetBindlessStats();
     const auto gpuDrivenStats = _renderer.GetGpuDrivenStats();
     const auto meshletStats = _renderer.GetMeshletClusterStats();
+    const auto temporalUpscalerStats = _renderer.GetTemporalUpscalerStats();
     const uint64_t sceneBufferBytes = BufferSizeBytes(device, scene.GetVertexBuffer())
         + BufferSizeBytes(device, scene.GetIndexBuffer())
         + BufferSizeBytes(device, scene.GetMaterialBuffer())
@@ -2115,6 +2124,19 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "  \"ssao_intensity\": " << settings.ssaoIntensity << ",\n"
            << "  \"taa\": " << (settings.enableTaa ? "true" : "false") << ",\n"
            << "  \"taa_feedback\": " << settings.taaFeedback << ",\n"
+           << "  \"temporal_upscaler\": " << (settings.enableTemporalUpscaler ? "true" : "false") << ",\n"
+           << "  \"temporal_upscaler_stats\": {\n"
+           << "    \"backend_available\": " << (temporalUpscalerStats.backendAvailable ? "true" : "false") << ",\n"
+           << "    \"input_width\": " << temporalUpscalerStats.inputWidth << ",\n"
+           << "    \"input_height\": " << temporalUpscalerStats.inputHeight << ",\n"
+           << "    \"output_width\": " << temporalUpscalerStats.outputWidth << ",\n"
+           << "    \"output_height\": " << temporalUpscalerStats.outputHeight << ",\n"
+           << "    \"scale\": " << temporalUpscalerStats.scale << ",\n"
+           << "    \"taa_history_available\": " << (temporalUpscalerStats.taaHistoryAvailable ? "true" : "false") << ",\n"
+           << "    \"motion_vectors_available\": " << (temporalUpscalerStats.motionVectorsAvailable ? "true" : "false") << ",\n"
+           << "    \"depth_available\": " << (temporalUpscalerStats.depthAvailable ? "true" : "false") << ",\n"
+           << "    \"reactive_mask_available\": " << (temporalUpscalerStats.reactiveMaskAvailable ? "true" : "false") << "\n"
+           << "  },\n"
            << "  \"ssr\": " << (settings.enableSsr ? "true" : "false") << ",\n"
            << "  \"ssr_max_distance\": " << settings.ssrMaxDistance << ",\n"
            << "  \"ssr_thickness\": " << settings.ssrThickness << ",\n"
@@ -5323,6 +5345,28 @@ void VestaEngine::draw_rasterizer_debug_panel()
     if (ImGui::Button("Disocclusion")) { settings.debugView = vesta::render::RendererDebugView::TemporalDisocclusion; }
     ImGui::SameLine();
     if (ImGui::Button("Jitter")) { settings.debugView = vesta::render::RendererDebugView::TemporalJitter; }
+
+    ImGui::SeparatorText("Temporal Upscaler");
+    ImGui::BeginDisabled(true);
+    ImGui::Checkbox("Enable Temporal Upscaler", &settings.enableTemporalUpscaler);
+    ImGui::EndDisabled();
+    ImGui::Checkbox("Show Upscaler Debug", &settings.showTemporalUpscalerDebug);
+    if (ImGui::SliderFloat("Upscaler Input Scale", &settings.temporalUpscalerScale, 0.25f, 1.0f, "%.2fx")) {
+        settings.temporalUpscalerScale = std::clamp(settings.temporalUpscalerScale, 0.25f, 1.0f);
+        _renderer.ResetAccumulation();
+    }
+    const auto temporalUpscalerStats = _renderer.GetTemporalUpscalerStats();
+    ImGui::Text("Input %ux%u -> Output %ux%u",
+        temporalUpscalerStats.inputWidth,
+        temporalUpscalerStats.inputHeight,
+        temporalUpscalerStats.outputWidth,
+        temporalUpscalerStats.outputHeight);
+    ImGui::Text("History %s  Motion Vectors %s  Depth %s  Reactive Mask %s",
+        temporalUpscalerStats.taaHistoryAvailable ? "ready" : "disabled",
+        temporalUpscalerStats.motionVectorsAvailable ? "ready" : "missing",
+        temporalUpscalerStats.depthAvailable ? "ready" : "missing",
+        temporalUpscalerStats.reactiveMaskAvailable ? "ready" : "staged");
+    ImGui::TextDisabled("Backend is staged; current temporal path provides TAA history, motion vectors, depth and debug AOVs.");
 }
 
 void VestaEngine::draw_path_tracing_debug_panel()

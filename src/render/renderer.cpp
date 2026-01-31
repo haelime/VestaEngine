@@ -1900,6 +1900,25 @@ MeshletClusterStats Renderer::GetMeshletClusterStats() const
     return stats;
 }
 
+TemporalUpscalerStats Renderer::GetTemporalUpscalerStats() const
+{
+    const VkExtent2D outputExtent = _device.GetSwapchainExtent();
+    const float scale = std::clamp(_settings.temporalUpscalerScale, 0.25f, 1.0f);
+    TemporalUpscalerStats stats{};
+    stats.outputWidth = outputExtent.width;
+    stats.outputHeight = outputExtent.height;
+    stats.inputWidth = std::max(1u, static_cast<uint32_t>(std::ceil(static_cast<float>(outputExtent.width) * scale)));
+    stats.inputHeight = std::max(1u, static_cast<uint32_t>(std::ceil(static_cast<float>(outputExtent.height) * scale)));
+    stats.scale = scale;
+    stats.requested = _settings.enableTemporalUpscaler;
+    stats.backendAvailable = false;
+    stats.taaHistoryAvailable = _settings.enableTaa || IsTemporalDebugView(_settings.debugView);
+    stats.motionVectorsAvailable = true;
+    stats.depthAvailable = true;
+    stats.reactiveMaskAvailable = false;
+    return stats;
+}
+
 std::vector<RenderPassDebugInfo> Renderer::GetRenderPassDebugInfo() const
 {
     const auto estimateVisibleSurfaceCount = [&]() -> uint32_t {

@@ -224,6 +224,20 @@ struct GpuDrivenStats {
     bool gpuDrivenBackend{ false };
 };
 
+struct TemporalUpscalerStats {
+    uint32_t inputWidth{ 0 };
+    uint32_t inputHeight{ 0 };
+    uint32_t outputWidth{ 0 };
+    uint32_t outputHeight{ 0 };
+    float scale{ 1.0f };
+    bool requested{ false };
+    bool backendAvailable{ false };
+    bool taaHistoryAvailable{ false };
+    bool motionVectorsAvailable{ true };
+    bool depthAvailable{ true };
+    bool reactiveMaskAvailable{ false };
+};
+
 // RendererSettings collects the knobs that can safely change at runtime.
 // When one of these changes in a way that affects history, accumulation resets.
 struct RendererSettings {
@@ -325,6 +339,9 @@ struct RendererSettings {
     bool enableAsyncCompute{ false };
     bool enableMeshletCulling{ false };
     bool showAsyncComputeTimeline{ false };
+    bool enableTemporalUpscaler{ false };
+    bool showTemporalUpscalerDebug{ false };
+    float temporalUpscalerScale{ 0.67f };
     bool enablePathTraceDenoiser{ true };
     float pathTraceDenoiserStrength{ 0.65f };
     float pathTraceDenoiserTemporalBlend{ 0.88f };
@@ -552,6 +569,7 @@ public:
     [[nodiscard]] const std::vector<uint32_t>& GetVisibleSurfaceIndices() const { return _visibleSurfaceIndices; }
     [[nodiscard]] GpuDrivenStats GetGpuDrivenStats() const;
     [[nodiscard]] MeshletClusterStats GetMeshletClusterStats() const;
+    [[nodiscard]] TemporalUpscalerStats GetTemporalUpscalerStats() const;
     [[nodiscard]] std::vector<RenderPassDebugInfo> GetRenderPassDebugInfo() const;
     [[nodiscard]] const std::string& GetLastShaderReloadMessage() const { return _lastShaderReloadMessage; }
     [[nodiscard]] bool HasValidVisibilitySet() const { return _visibleSceneToken != nullptr && _visibleSceneToken == _scene.GetPreparedScene(); }
