@@ -61,6 +61,23 @@ constexpr std::array<std::string_view, 10> kBenchmarkPassNames{
     "CompositePass",
 };
 
+struct BenchmarkScenePreset {
+    const char* label;
+    const char* path;
+    const char* purpose;
+};
+
+constexpr std::array<BenchmarkScenePreset, 8> kBenchmarkScenePresets{
+    BenchmarkScenePreset{ "Sponza Atrium", "assets/benchmark_scenes/sponza/sponza.obj", "Large raster/PBR scene" },
+    BenchmarkScenePreset{ "Amazon Bistro Exterior", "assets/benchmark_scenes/bistro_exterior/exterior.obj", "Large outdoor stress scene" },
+    BenchmarkScenePreset{ "Amazon Bistro Interior", "assets/benchmark_scenes/bistro_interior/interior.obj", "Interior lighting stress scene" },
+    BenchmarkScenePreset{ "San Miguel Low Poly", "assets/benchmark_scenes/san_miguel/san-miguel-low-poly.obj", "Large textured GI scene" },
+    BenchmarkScenePreset{ "Cornell Box", "assets/benchmark_scenes/cornell_box/cornell-box.obj", "Reference path-tracing scene" },
+    BenchmarkScenePreset{ "Stanford Bunny", "assets/benchmark_scenes/stanford_bunny/bunny/reconstruction/bun_zipper.ply", "Classic mesh validation model" },
+    BenchmarkScenePreset{ "Stanford Dragon", "assets/benchmark_scenes/stanford_dragon/dragon_recon/dragon_vrip_res2.ply", "High-detail mesh validation model" },
+    BenchmarkScenePreset{ "Stanford Buddha", "assets/benchmark_scenes/stanford_buddha/happy_recon/happy_vrip_res2.ply", "High-detail mesh validation model" },
+};
+
 #if defined(NDEBUG)
 constexpr bool bUseValidationLayers = false;
 #else
@@ -2687,20 +2704,12 @@ void VestaEngine::build_main_menu_bar()
                 load_scene_path("assets/demo/garden_input.ply");
             }
             if (ImGui::BeginMenu("Benchmark Scenes", !sceneLoadInProgress)) {
-                const auto sceneItem = [&](const char* label, const char* path) {
-                    const bool exists = std::filesystem::exists(path);
-                    if (ImGui::MenuItem(label, nullptr, false, exists)) {
-                        load_scene_path(path);
+                for (const BenchmarkScenePreset& preset : kBenchmarkScenePresets) {
+                    const bool exists = std::filesystem::exists(preset.path);
+                    if (ImGui::MenuItem(preset.label, nullptr, false, exists)) {
+                        load_scene_path(preset.path);
                     }
-                };
-                sceneItem("Sponza Atrium", "assets/benchmark_scenes/sponza/sponza.obj");
-                sceneItem("Amazon Bistro Exterior", "assets/benchmark_scenes/bistro_exterior/exterior.obj");
-                sceneItem("Amazon Bistro Interior", "assets/benchmark_scenes/bistro_interior/interior.obj");
-                sceneItem("San Miguel Low Poly", "assets/benchmark_scenes/san_miguel/san-miguel-low-poly.obj");
-                sceneItem("Cornell Box", "assets/benchmark_scenes/cornell_box/cornell-box.obj");
-                sceneItem("Stanford Bunny", "assets/benchmark_scenes/stanford_bunny/bunny/reconstruction/bun_zipper.ply");
-                sceneItem("Stanford Dragon", "assets/benchmark_scenes/stanford_dragon/dragon_recon/dragon_vrip_res2.ply");
-                sceneItem("Stanford Buddha", "assets/benchmark_scenes/stanford_buddha/happy_recon/happy_vrip_res2.ply");
+                }
                 ImGui::EndMenu();
             }
             if (ImGui::MenuItem(
@@ -5183,8 +5192,9 @@ void VestaEngine::build_render_mode_control_panel()
 void VestaEngine::draw_killer_demo_panel()
 {
     auto& settings = _renderer.GetSettings();
+    const bool sceneLoadInProgress = _renderer.IsSceneLoadInProgress();
 
-    if (ImGui::Button("Demo 1: Raster / Path Split")) {
+    const auto armRasterPathSplitDemo = [&]() {
         settings.displayMode = vesta::render::RendererDisplayMode::Composite;
         settings.compareMode = vesta::render::CompareMode::RasterPathSplit;
         settings.compareSplitPosition = 0.5f;
@@ -5200,6 +5210,66 @@ void VestaEngine::draw_killer_demo_panel()
         _showDebugVisualizationPanel = true;
         _renderer.ResetAccumulation();
         log_startup_event("Killer demo 1 armed: raster/path split comparison");
+    };
+
+    if (ImGui::CollapsingHeader("Benchmark Scene Presets", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGui::BeginTable("BenchmarkScenePresetTable", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+            ImGui::TableSetupColumn("Scene");
+            ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 72.0f);
+            ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 96.0f);
+            ImGui::TableSetupColumn("Use");
+            ImGui::TableHeadersRow();
+            for (const BenchmarkScenePreset& preset : kBenchmarkScenePresets) {
+                const bool exists = std::filesystem::exists(preset.path);
+                ImGui::TableNextRow();
+                ImGui::TableSetColumnIndex(0);
+                ImGui::TextUnformatted(preset.label);
+                ImGui::TableSetColumnIndex(1);
+                ImGui::TextColored(exists ? ImVec4(0.45f, 0.85f, 0.45f, 1.0f) : ImVec4(0.95f, 0.45f, 0.35f, 1.0f),
+                    "%s",
+                    exists ? "Ready" : "Missing");
+                ImGui::TableSetColumnIndex(2);
+                ImGui::BeginDisabled(!exists || sceneLoadInProgress);
+                if (ImGui::Button((std::string("Load##") + preset.label).c_str())) {
+                    load_scene_path(preset.path);
+                }
+                ImGui::EndDisabled();
+                ImGui::TableSetColumnIndex(3);
+                ImGui::TextDisabled("%s", preset.purpose);
+            }
+            ImGui::EndTable();
+        }
+
+        ImGui::BeginDisabled(!std::filesystem::exists("assets/benchmark_scenes/cornell_box/cornell-box.obj") || sceneLoadInProgress);
+        if (ImGui::Button("Load Cornell + Raster / Path Split")) {
+            load_scene_path("assets/benchmark_scenes/cornell_box/cornell-box.obj");
+            armRasterPathSplitDemo();
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!std::filesystem::exists("assets/benchmark_scenes/sponza/sponza.obj") || sceneLoadInProgress);
+        if (ImGui::Button("Load Sponza + Raster PBR")) {
+            load_scene_path("assets/benchmark_scenes/sponza/sponza.obj");
+            settings.displayMode = vesta::render::RendererDisplayMode::DeferredLighting;
+            settings.compareMode = vesta::render::CompareMode::Off;
+            settings.enableRaster = true;
+            settings.enablePathTracing = false;
+            settings.enableGaussian = false;
+            settings.enableSsao = true;
+            settings.enableBloom = true;
+            settings.debugView = vesta::render::RendererDebugView::FinalColor;
+            _showFrameOverview = true;
+            _showRenderGraphPanel = true;
+            _showGpuProfilerPanel = true;
+            _showDebugVisualizationPanel = true;
+            _renderer.ResetAccumulation();
+            log_startup_event("Benchmark scene preset armed: Sponza raster PBR");
+        }
+        ImGui::EndDisabled();
+    }
+
+    if (ImGui::Button("Demo 1: Raster / Path Split")) {
+        armRasterPathSplitDemo();
     }
     ImGui::TextDisabled("Shows direct/indirect lighting and shadow quality differences through split-screen compare.");
 
