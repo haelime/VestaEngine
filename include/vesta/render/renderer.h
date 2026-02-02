@@ -238,6 +238,24 @@ struct TemporalUpscalerStats {
     bool reactiveMaskAvailable{ false };
 };
 
+struct RestirStats {
+    uint32_t activeLightCount{ 0 };
+    uint32_t emissiveTriangleCount{ 0 };
+    uint32_t localLightCount{ 0 };
+    uint32_t candidateLightCount{ 0 };
+    uint32_t reservoirCount{ 0 };
+    uint64_t reservoirPixels{ 0 };
+    uint64_t estimatedReservoirBytes{ 0 };
+    bool requestedDi{ false };
+    bool requestedGi{ false };
+    bool requestedPt{ false };
+    bool backendAvailable{ false };
+    bool reservoirBuffersAvailable{ false };
+    bool temporalReuse{ true };
+    bool spatialReuse{ true };
+    bool historyAvailable{ false };
+};
+
 // RendererSettings collects the knobs that can safely change at runtime.
 // When one of these changes in a way that affects history, accumulation resets.
 struct RendererSettings {
@@ -335,6 +353,11 @@ struct RendererSettings {
     bool enableRestirPt{ false };
     uint32_t restirCandidateLights{ 8 };
     uint32_t restirReservoirCount{ 1 };
+    uint32_t restirSpatialSamples{ 4 };
+    bool restirTemporalReuse{ true };
+    bool restirSpatialReuse{ true };
+    bool restirShowReservoirs{ false };
+    bool restirShowSelectedLight{ false };
     bool enableGpuDrivenRendering{ false };
     bool enableAsyncCompute{ false };
     bool enableMeshletCulling{ false };
@@ -570,6 +593,7 @@ public:
     [[nodiscard]] GpuDrivenStats GetGpuDrivenStats() const;
     [[nodiscard]] MeshletClusterStats GetMeshletClusterStats() const;
     [[nodiscard]] TemporalUpscalerStats GetTemporalUpscalerStats() const;
+    [[nodiscard]] RestirStats GetRestirStats() const;
     [[nodiscard]] std::vector<RenderPassDebugInfo> GetRenderPassDebugInfo() const;
     [[nodiscard]] const std::string& GetLastShaderReloadMessage() const { return _lastShaderReloadMessage; }
     [[nodiscard]] bool HasValidVisibilitySet() const { return _visibleSceneToken != nullptr && _visibleSceneToken == _scene.GetPreparedScene(); }

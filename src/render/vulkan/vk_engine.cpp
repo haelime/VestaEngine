@@ -1849,6 +1849,7 @@ void VestaEngine::finish_benchmark()
                << "debug_view,path_trace_debug_view,gaussian_debug_view,compare_mode,compare_split,compare_difference_scale,"
                << "ssao,ssao_radius,ssao_intensity,"
                << "taa,taa_feedback,temporal_upscaler,temporal_upscaler_backend,temporal_upscaler_input,temporal_upscaler_output,temporal_upscaler_scale,temporal_upscaler_history,temporal_upscaler_reactive_mask,"
+               << "restir_di,restir_gi,restir_pt,restir_backend,restir_lights,restir_emissive_lights,restir_candidates,restir_reservoirs,restir_reservoir_mb,restir_temporal_reuse,restir_spatial_reuse,restir_history,"
                << "ssr,ssr_max_distance,ssr_thickness,ssr_intensity,"
                << "ssgi,ssgi_radius,ssgi_intensity,ssgi_samples,"
                << "shadow_map,shadow_map_size,shadow_bias,shadow_normal_bias,shadow_strength,shadow_pcss,shadow_filter_radius,contact_shadows,contact_shadow_length,contact_shadow_intensity,"
@@ -1896,6 +1897,7 @@ void VestaEngine::finish_benchmark()
     const auto gpuDrivenStats = _renderer.GetGpuDrivenStats();
     const auto meshletStats = _renderer.GetMeshletClusterStats();
     const auto temporalUpscalerStats = _renderer.GetTemporalUpscalerStats();
+    const auto restirStats = _renderer.GetRestirStats();
     const auto averagePassGpuMs = [&](size_t passIndex) {
         const uint32_t sampleCount = _benchmarkState.passGpuSampleCounts[passIndex];
         return sampleCount > 0u ? _benchmarkState.passGpuMsSums[passIndex] / static_cast<float>(sampleCount) : 0.0f;
@@ -1936,6 +1938,18 @@ void VestaEngine::finish_benchmark()
            << temporalUpscalerStats.scale << ','
            << (temporalUpscalerStats.taaHistoryAvailable ? "true" : "false") << ','
            << (temporalUpscalerStats.reactiveMaskAvailable ? "true" : "false") << ','
+           << (restirStats.requestedDi ? "true" : "false") << ','
+           << (restirStats.requestedGi ? "true" : "false") << ','
+           << (restirStats.requestedPt ? "true" : "false") << ','
+           << (restirStats.backendAvailable ? "ReservoirPass" : "Staged") << ','
+           << restirStats.activeLightCount << ','
+           << restirStats.emissiveTriangleCount << ','
+           << restirStats.candidateLightCount << ','
+           << restirStats.reservoirCount << ','
+           << MiB(restirStats.estimatedReservoirBytes) << ','
+           << (restirStats.temporalReuse ? "true" : "false") << ','
+           << (restirStats.spatialReuse ? "true" : "false") << ','
+           << (restirStats.historyAvailable ? "true" : "false") << ','
            << (settings.enableSsr ? "true" : "false") << ','
            << settings.ssrMaxDistance << ','
            << settings.ssrThickness << ','
@@ -2102,6 +2116,7 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
     const auto gpuDrivenStats = _renderer.GetGpuDrivenStats();
     const auto meshletStats = _renderer.GetMeshletClusterStats();
     const auto temporalUpscalerStats = _renderer.GetTemporalUpscalerStats();
+    const auto restirStats = _renderer.GetRestirStats();
     const uint64_t sceneBufferBytes = BufferSizeBytes(device, scene.GetVertexBuffer())
         + BufferSizeBytes(device, scene.GetIndexBuffer())
         + BufferSizeBytes(device, scene.GetMaterialBuffer())
@@ -2153,6 +2168,21 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "    \"motion_vectors_available\": " << (temporalUpscalerStats.motionVectorsAvailable ? "true" : "false") << ",\n"
            << "    \"depth_available\": " << (temporalUpscalerStats.depthAvailable ? "true" : "false") << ",\n"
            << "    \"reactive_mask_available\": " << (temporalUpscalerStats.reactiveMaskAvailable ? "true" : "false") << "\n"
+           << "  },\n"
+           << "  \"restir_stats\": {\n"
+           << "    \"di_requested\": " << (restirStats.requestedDi ? "true" : "false") << ",\n"
+           << "    \"gi_requested\": " << (restirStats.requestedGi ? "true" : "false") << ",\n"
+           << "    \"pt_requested\": " << (restirStats.requestedPt ? "true" : "false") << ",\n"
+           << "    \"backend_available\": " << (restirStats.backendAvailable ? "true" : "false") << ",\n"
+           << "    \"active_light_count\": " << restirStats.activeLightCount << ",\n"
+           << "    \"emissive_triangle_count\": " << restirStats.emissiveTriangleCount << ",\n"
+           << "    \"candidate_light_count\": " << restirStats.candidateLightCount << ",\n"
+           << "    \"reservoir_count\": " << restirStats.reservoirCount << ",\n"
+           << "    \"reservoir_pixels\": " << restirStats.reservoirPixels << ",\n"
+           << "    \"estimated_reservoir_bytes\": " << restirStats.estimatedReservoirBytes << ",\n"
+           << "    \"temporal_reuse\": " << (restirStats.temporalReuse ? "true" : "false") << ",\n"
+           << "    \"spatial_reuse\": " << (restirStats.spatialReuse ? "true" : "false") << ",\n"
+           << "    \"history_available\": " << (restirStats.historyAvailable ? "true" : "false") << "\n"
            << "  },\n"
            << "  \"ssr\": " << (settings.enableSsr ? "true" : "false") << ",\n"
            << "  \"ssr_max_distance\": " << settings.ssrMaxDistance << ",\n"
@@ -5847,12 +5877,37 @@ void VestaEngine::draw_advanced_portfolio_panel()
     ImGui::Checkbox("ReSTIR DI", &settings.enableRestirDi);
     ImGui::Checkbox("ReSTIR GI", &settings.enableRestirGi);
     ImGui::Checkbox("ReSTIR PT", &settings.enableRestirPt);
+    ImGui::EndDisabled();
     int candidateLights = static_cast<int>(settings.restirCandidateLights);
     int reservoirs = static_cast<int>(settings.restirReservoirCount);
-    ImGui::SliderInt("Candidate Lights", &candidateLights, 1, 64);
-    ImGui::SliderInt("Reservoirs / Pixel", &reservoirs, 1, 8);
-    ImGui::EndDisabled();
-    ImGui::TextDisabled("Requires light reservoir buffers and temporal/spatial reuse passes.");
+    int spatialSamples = static_cast<int>(settings.restirSpatialSamples);
+    if (ImGui::SliderInt("Candidate Lights", &candidateLights, 1, 64)) {
+        settings.restirCandidateLights = static_cast<uint32_t>(std::clamp(candidateLights, 1, 64));
+    }
+    if (ImGui::SliderInt("Reservoirs / Pixel", &reservoirs, 1, 8)) {
+        settings.restirReservoirCount = static_cast<uint32_t>(std::clamp(reservoirs, 1, 8));
+    }
+    if (ImGui::SliderInt("Spatial Reuse Samples", &spatialSamples, 0, 16)) {
+        settings.restirSpatialSamples = static_cast<uint32_t>(std::clamp(spatialSamples, 0, 16));
+    }
+    ImGui::Checkbox("Temporal Reuse", &settings.restirTemporalReuse);
+    ImGui::Checkbox("Spatial Reuse", &settings.restirSpatialReuse);
+    ImGui::Checkbox("Show Reservoir Debug", &settings.restirShowReservoirs);
+    ImGui::Checkbox("Show Selected Light", &settings.restirShowSelectedLight);
+    const auto restirStats = _renderer.GetRestirStats();
+    ImGui::Text("Lights %u active (%u emissive tris, %u analytic/local)",
+        restirStats.activeLightCount,
+        restirStats.emissiveTriangleCount,
+        restirStats.localLightCount);
+    ImGui::Text("Reservoirs %u / pixel  Candidates %u  Estimated %.2f MiB",
+        restirStats.reservoirCount,
+        restirStats.candidateLightCount,
+        MiB(restirStats.estimatedReservoirBytes));
+    ImGui::Text("History %s  Temporal %s  Spatial %s",
+        restirStats.historyAvailable ? "ready" : "disabled",
+        restirStats.temporalReuse ? "on" : "off",
+        restirStats.spatialReuse ? "on" : "off");
+    ImGui::TextDisabled("Backend is staged; requires reservoir buffers, candidate sampling, temporal/spatial reuse, and lighting resolve passes.");
 
     ImGui::SeparatorText("GPU-driven Rendering");
     ImGui::Checkbox("Indirect Draw", &settings.useIndirectDraw);

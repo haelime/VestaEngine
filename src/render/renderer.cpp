@@ -1919,6 +1919,32 @@ TemporalUpscalerStats Renderer::GetTemporalUpscalerStats() const
     return stats;
 }
 
+RestirStats Renderer::GetRestirStats() const
+{
+    constexpr uint64_t kEstimatedReservoirBytes = 32u;
+    const VkExtent2D extent = _device.GetSwapchainExtent();
+    RestirStats stats{};
+    stats.requestedDi = _settings.enableRestirDi;
+    stats.requestedGi = _settings.enableRestirGi;
+    stats.requestedPt = _settings.enableRestirPt;
+    stats.backendAvailable = false;
+    stats.reservoirBuffersAvailable = false;
+    stats.temporalReuse = _settings.restirTemporalReuse;
+    stats.spatialReuse = _settings.restirSpatialReuse;
+    stats.historyAvailable = _settings.enableTaa || IsTemporalDebugView(_settings.debugView);
+    stats.emissiveTriangleCount = static_cast<uint32_t>(std::min<size_t>(_scene.GetEmissiveTriangles().size(), std::numeric_limits<uint32_t>::max()));
+    stats.localLightCount = 1u
+        + (_settings.enablePointLight ? 1u : 0u)
+        + (_settings.enableSpotLight ? 1u : 0u)
+        + (_settings.enableAreaLight ? 1u : 0u);
+    stats.activeLightCount = std::max(1u, stats.localLightCount + stats.emissiveTriangleCount);
+    stats.candidateLightCount = std::clamp(_settings.restirCandidateLights, 1u, std::max(1u, stats.activeLightCount));
+    stats.reservoirCount = std::clamp(_settings.restirReservoirCount, 1u, 8u);
+    stats.reservoirPixels = static_cast<uint64_t>(extent.width) * static_cast<uint64_t>(extent.height) * stats.reservoirCount;
+    stats.estimatedReservoirBytes = stats.reservoirPixels * kEstimatedReservoirBytes;
+    return stats;
+}
+
 std::vector<RenderPassDebugInfo> Renderer::GetRenderPassDebugInfo() const
 {
     const auto estimateVisibleSurfaceCount = [&]() -> uint32_t {
