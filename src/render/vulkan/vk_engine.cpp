@@ -1852,6 +1852,7 @@ void VestaEngine::finish_benchmark()
                << "restir_di,restir_gi,restir_pt,restir_backend,restir_lights,restir_emissive_lights,restir_candidates,restir_reservoirs,restir_reservoir_mb,restir_temporal_reuse,restir_spatial_reuse,restir_history,"
                << "ssr,ssr_max_distance,ssr_thickness,ssr_intensity,"
                << "ssgi,ssgi_radius,ssgi_intensity,ssgi_samples,"
+               << "ddgi,ddgi_backend,ddgi_probes,ddgi_rays_per_update,ddgi_memory_mb,ddgi_probe_spacing,ddgi_hysteresis,ddgi_overlay,"
                << "shadow_map,shadow_map_size,shadow_bias,shadow_normal_bias,shadow_strength,shadow_pcss,shadow_filter_radius,contact_shadows,contact_shadow_length,contact_shadow_intensity,"
                << "pt_nee,pt_rr,pt_rr_depth,pt_firefly_clamp,"
                << "pt_denoiser,pt_denoiser_strength,pt_denoiser_temporal,pt_denoiser_iterations,"
@@ -1898,6 +1899,7 @@ void VestaEngine::finish_benchmark()
     const auto meshletStats = _renderer.GetMeshletClusterStats();
     const auto temporalUpscalerStats = _renderer.GetTemporalUpscalerStats();
     const auto restirStats = _renderer.GetRestirStats();
+    const auto ddgiStats = _renderer.GetDdgiStats();
     const auto averagePassGpuMs = [&](size_t passIndex) {
         const uint32_t sampleCount = _benchmarkState.passGpuSampleCounts[passIndex];
         return sampleCount > 0u ? _benchmarkState.passGpuMsSums[passIndex] / static_cast<float>(sampleCount) : 0.0f;
@@ -1958,6 +1960,14 @@ void VestaEngine::finish_benchmark()
            << settings.ssgiRadius << ','
            << settings.ssgiIntensity << ','
            << settings.ssgiSampleCount << ','
+           << (ddgiStats.requested ? "true" : "false") << ','
+           << (ddgiStats.backendAvailable ? "ProbeUpdatePass" : "Staged") << ','
+           << CsvEscape(fmt::format("{}x{}x{}", ddgiStats.probeCountX, ddgiStats.probeCountY, ddgiStats.probeCountZ)) << ','
+           << ddgiStats.raysPerUpdate << ','
+           << MiB(ddgiStats.estimatedIrradianceBytes + ddgiStats.estimatedVisibilityBytes) << ','
+           << ddgiStats.probeSpacing << ','
+           << ddgiStats.hysteresis << ','
+           << (ddgiStats.overlayEnabled ? "true" : "false") << ','
            << (settings.enableShadowMap ? "true" : "false") << ','
            << settings.shadowMapSize << ','
            << settings.shadowBias << ','
@@ -2117,6 +2127,7 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
     const auto meshletStats = _renderer.GetMeshletClusterStats();
     const auto temporalUpscalerStats = _renderer.GetTemporalUpscalerStats();
     const auto restirStats = _renderer.GetRestirStats();
+    const auto ddgiStats = _renderer.GetDdgiStats();
     const uint64_t sceneBufferBytes = BufferSizeBytes(device, scene.GetVertexBuffer())
         + BufferSizeBytes(device, scene.GetIndexBuffer())
         + BufferSizeBytes(device, scene.GetMaterialBuffer())
@@ -2192,6 +2203,21 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "  \"ssgi_radius\": " << settings.ssgiRadius << ",\n"
            << "  \"ssgi_intensity\": " << settings.ssgiIntensity << ",\n"
            << "  \"ssgi_samples\": " << settings.ssgiSampleCount << ",\n"
+           << "  \"ddgi_stats\": {\n"
+           << "    \"requested\": " << (ddgiStats.requested ? "true" : "false") << ",\n"
+           << "    \"backend_available\": " << (ddgiStats.backendAvailable ? "true" : "false") << ",\n"
+           << "    \"probe_count_x\": " << ddgiStats.probeCountX << ",\n"
+           << "    \"probe_count_y\": " << ddgiStats.probeCountY << ",\n"
+           << "    \"probe_count_z\": " << ddgiStats.probeCountZ << ",\n"
+           << "    \"total_probe_count\": " << ddgiStats.totalProbeCount << ",\n"
+           << "    \"rays_per_probe\": " << ddgiStats.raysPerProbe << ",\n"
+           << "    \"rays_per_update\": " << ddgiStats.raysPerUpdate << ",\n"
+           << "    \"estimated_irradiance_bytes\": " << ddgiStats.estimatedIrradianceBytes << ",\n"
+           << "    \"estimated_visibility_bytes\": " << ddgiStats.estimatedVisibilityBytes << ",\n"
+           << "    \"probe_spacing\": " << ddgiStats.probeSpacing << ",\n"
+           << "    \"hysteresis\": " << ddgiStats.hysteresis << ",\n"
+           << "    \"overlay_enabled\": " << (ddgiStats.overlayEnabled ? "true" : "false") << "\n"
+           << "  },\n"
            << "  \"shadow_map\": " << (settings.enableShadowMap ? "true" : "false") << ",\n"
            << "  \"shadow_map_size\": " << settings.shadowMapSize << ",\n"
            << "  \"shadow_bias\": " << settings.shadowBias << ",\n"
@@ -5796,16 +5822,44 @@ void VestaEngine::draw_global_illumination_panel()
     ImGui::SeparatorText("DDGI Probe Grid");
     ImGui::BeginDisabled(true);
     ImGui::Checkbox("DDGI", &settings.enableDdgi);
+    ImGui::EndDisabled();
     int probesX = static_cast<int>(settings.ddgiProbeCountX);
     int probesY = static_cast<int>(settings.ddgiProbeCountY);
     int probesZ = static_cast<int>(settings.ddgiProbeCountZ);
-    ImGui::SliderInt("Probe Count X", &probesX, 1, 32);
-    ImGui::SliderInt("Probe Count Y", &probesY, 1, 16);
-    ImGui::SliderInt("Probe Count Z", &probesZ, 1, 32);
-    ImGui::SliderFloat("Probe Spacing", &settings.ddgiProbeSpacing, 0.25f, 10.0f, "%.2f");
-    ImGui::SliderFloat("Hysteresis", &settings.ddgiHysteresis, 0.0f, 1.0f, "%.2f");
-    ImGui::EndDisabled();
-    ImGui::TextDisabled("DDGI is queued: requires probe storage, ray update pass, and irradiance composite.");
+    int raysPerProbe = static_cast<int>(settings.ddgiRaysPerProbe);
+    if (ImGui::SliderInt("Probe Count X", &probesX, 1, 32)) {
+        settings.ddgiProbeCountX = static_cast<uint32_t>(std::clamp(probesX, 1, 32));
+        resetHistory = true;
+    }
+    if (ImGui::SliderInt("Probe Count Y", &probesY, 1, 16)) {
+        settings.ddgiProbeCountY = static_cast<uint32_t>(std::clamp(probesY, 1, 16));
+        resetHistory = true;
+    }
+    if (ImGui::SliderInt("Probe Count Z", &probesZ, 1, 32)) {
+        settings.ddgiProbeCountZ = static_cast<uint32_t>(std::clamp(probesZ, 1, 32));
+        resetHistory = true;
+    }
+    if (ImGui::SliderInt("Rays / Probe", &raysPerProbe, 16, 1024)) {
+        settings.ddgiRaysPerProbe = static_cast<uint32_t>(std::clamp(raysPerProbe, 16, 1024));
+        resetHistory = true;
+    }
+    resetHistory |= ImGui::SliderFloat("Probe Spacing", &settings.ddgiProbeSpacing, 0.25f, 10.0f, "%.2f");
+    resetHistory |= ImGui::SliderFloat("Hysteresis", &settings.ddgiHysteresis, 0.0f, 1.0f, "%.2f");
+    const auto ddgiStats = _renderer.GetDdgiStats();
+    ImGui::Text("Probes %u (%ux%ux%u)  Rays/update %llu",
+        ddgiStats.totalProbeCount,
+        ddgiStats.probeCountX,
+        ddgiStats.probeCountY,
+        ddgiStats.probeCountZ,
+        static_cast<unsigned long long>(ddgiStats.raysPerUpdate));
+    ImGui::Text("Estimated irradiance %.2f MiB  visibility %.2f MiB",
+        MiB(ddgiStats.estimatedIrradianceBytes),
+        MiB(ddgiStats.estimatedVisibilityBytes));
+    ImGui::Text("Spacing %.2f  Hysteresis %.2f  Overlay %s",
+        ddgiStats.probeSpacing,
+        ddgiStats.hysteresis,
+        ddgiStats.overlayEnabled ? "on" : "off");
+    ImGui::TextDisabled("DDGI backend is staged; requires probe atlas storage, ray update pass, visibility moments, and irradiance composite.");
 
     ImGui::SeparatorText("Advanced GI");
     ImGui::BeginDisabled(true);

@@ -256,6 +256,23 @@ struct RestirStats {
     bool historyAvailable{ false };
 };
 
+struct DdgiStats {
+    uint32_t probeCountX{ 0 };
+    uint32_t probeCountY{ 0 };
+    uint32_t probeCountZ{ 0 };
+    uint32_t totalProbeCount{ 0 };
+    uint32_t raysPerProbe{ 0 };
+    uint64_t raysPerUpdate{ 0 };
+    uint64_t estimatedIrradianceBytes{ 0 };
+    uint64_t estimatedVisibilityBytes{ 0 };
+    float probeSpacing{ 0.0f };
+    float hysteresis{ 0.0f };
+    bool requested{ false };
+    bool backendAvailable{ false };
+    bool probeStorageAvailable{ false };
+    bool overlayEnabled{ false };
+};
+
 // RendererSettings collects the knobs that can safely change at runtime.
 // When one of these changes in a way that affects history, accumulation resets.
 struct RendererSettings {
@@ -594,6 +611,7 @@ public:
     [[nodiscard]] MeshletClusterStats GetMeshletClusterStats() const;
     [[nodiscard]] TemporalUpscalerStats GetTemporalUpscalerStats() const;
     [[nodiscard]] RestirStats GetRestirStats() const;
+    [[nodiscard]] DdgiStats GetDdgiStats() const;
     [[nodiscard]] std::vector<RenderPassDebugInfo> GetRenderPassDebugInfo() const;
     [[nodiscard]] const std::string& GetLastShaderReloadMessage() const { return _lastShaderReloadMessage; }
     [[nodiscard]] bool HasValidVisibilitySet() const { return _visibleSceneToken != nullptr && _visibleSceneToken == _scene.GetPreparedScene(); }

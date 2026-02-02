@@ -1945,6 +1945,31 @@ RestirStats Renderer::GetRestirStats() const
     return stats;
 }
 
+DdgiStats Renderer::GetDdgiStats() const
+{
+    constexpr uint64_t kIrradianceTexelsPerProbe = 6u * 6u;
+    constexpr uint64_t kVisibilityTexelsPerProbe = 14u * 14u;
+    constexpr uint64_t kRgba16fBytesPerTexel = 8u;
+    constexpr uint64_t kRg16fBytesPerTexel = 4u;
+
+    DdgiStats stats{};
+    stats.probeCountX = std::clamp(_settings.ddgiProbeCountX, 1u, 32u);
+    stats.probeCountY = std::clamp(_settings.ddgiProbeCountY, 1u, 16u);
+    stats.probeCountZ = std::clamp(_settings.ddgiProbeCountZ, 1u, 32u);
+    stats.totalProbeCount = stats.probeCountX * stats.probeCountY * stats.probeCountZ;
+    stats.raysPerProbe = std::clamp(_settings.ddgiRaysPerProbe, 16u, 1024u);
+    stats.raysPerUpdate = static_cast<uint64_t>(stats.totalProbeCount) * stats.raysPerProbe;
+    stats.estimatedIrradianceBytes = static_cast<uint64_t>(stats.totalProbeCount) * kIrradianceTexelsPerProbe * kRgba16fBytesPerTexel;
+    stats.estimatedVisibilityBytes = static_cast<uint64_t>(stats.totalProbeCount) * kVisibilityTexelsPerProbe * kRg16fBytesPerTexel;
+    stats.probeSpacing = std::clamp(_settings.ddgiProbeSpacing, 0.25f, 10.0f);
+    stats.hysteresis = std::clamp(_settings.ddgiHysteresis, 0.0f, 1.0f);
+    stats.requested = _settings.enableDdgi;
+    stats.backendAvailable = false;
+    stats.probeStorageAvailable = false;
+    stats.overlayEnabled = _settings.showGiProbeOverlay;
+    return stats;
+}
+
 std::vector<RenderPassDebugInfo> Renderer::GetRenderPassDebugInfo() const
 {
     const auto estimateVisibleSurfaceCount = [&]() -> uint32_t {
