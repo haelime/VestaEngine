@@ -45,7 +45,7 @@ void PrintUsage()
         << "  --env-preset <studio|sunset|night|forest>\n"
         << "  --ibl-diffuse <0-2>           Diffuse environment lighting strength.\n"
         << "  --ibl-specular <0-2>          Specular environment reflection strength.\n"
-        << "  --hdri <path>                 Probe an external HDRI/image for IBL pipeline metadata.\n"
+        << "  --hdri <path>                 Load an external HDRI/image for environment sampling.\n"
         << "  --benchmark <csv-path>        Run a timed benchmark and exit.\n"
         << "  --screenshot <png-path>       Save a PNG capture during benchmark.\n"
         << "  --benchmark-seconds <value>   Benchmark capture duration.\n"

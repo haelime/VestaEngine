@@ -88,6 +88,13 @@ const uint kInvalidResourceIndex = 0xFFFFFFFFu;
 const uint PT_FLAG_NEE = 1u;
 const uint PT_FLAG_RUSSIAN_ROULETTE = 2u;
 
+vec3 sampleEnvironmentMap(uint imageIndex, vec3 direction)
+{
+    float u = atan(direction.z, direction.x) / (2.0 * PI) + 0.5;
+    float v = acos(clamp(direction.y, -1.0, 1.0)) / PI;
+    return texture(sampledImages[nonuniformEXT(int(imageIndex))], vec2(u, v)).rgb * pc.environmentParams.x;
+}
+
 uint accumulationImageIndex(uint debugView)
 {
     uint packed = 0u;
@@ -123,6 +130,9 @@ vec3 sampleSky(vec3 direction)
     float c = cos(pc.environmentParams.y);
     float s = sin(pc.environmentParams.y);
     direction = normalize(vec3(c * direction.x + s * direction.z, direction.y, -s * direction.x + c * direction.z));
+    if (pc.reserved0 != kInvalidResourceIndex) {
+        return sampleEnvironmentMap(pc.reserved0, direction);
+    }
     float skyT = 0.5 * (direction.y + 1.0);
     uint preset = uint(clamp(pc.environmentParams.z + 0.5, 0.0, 3.0));
     vec3 horizon = vec3(0.08, 0.11, 0.16);

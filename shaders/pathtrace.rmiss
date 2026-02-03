@@ -1,5 +1,6 @@
 #version 460
 #extension GL_EXT_ray_tracing : require
+#extension GL_EXT_nonuniform_qualifier : enable
 
 // Miss shader returns procedural sky and marks the payload as a miss.
 
@@ -11,6 +12,8 @@ struct PathPayload {
 };
 
 layout(location = 0) rayPayloadInEXT PathPayload payload;
+
+layout(set = 0, binding = 0) uniform sampler2D sampledImages[];
 
 layout(push_constant) uniform PathTracePushConstants {
     mat4 inverseViewProjection;
@@ -34,11 +37,24 @@ layout(push_constant) uniform PathTracePushConstants {
     uvec4 guideImageIndices;
 } pc;
 
+const float PI = 3.14159265359;
+const uint kInvalidResourceIndex = 0xFFFFFFFFu;
+
+vec3 sampleEnvironmentMap(uint imageIndex, vec3 direction)
+{
+    float u = atan(direction.z, direction.x) / (2.0 * PI) + 0.5;
+    float v = acos(clamp(direction.y, -1.0, 1.0)) / PI;
+    return texture(sampledImages[nonuniformEXT(int(imageIndex))], vec2(u, v)).rgb * pc.environmentParams.x;
+}
+
 vec3 sampleSky(vec3 direction)
 {
     float c = cos(pc.environmentParams.y);
     float s = sin(pc.environmentParams.y);
     direction = normalize(vec3(c * direction.x + s * direction.z, direction.y, -s * direction.x + c * direction.z));
+    if (pc.reserved0 != kInvalidResourceIndex) {
+        return sampleEnvironmentMap(pc.reserved0, direction);
+    }
     float skyT = 0.5 * (direction.y + 1.0);
     uint preset = uint(clamp(pc.environmentParams.z + 0.5, 0.0, 3.0));
     vec3 horizon = vec3(0.08, 0.11, 0.16);

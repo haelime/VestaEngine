@@ -286,6 +286,7 @@ struct IblStats {
     uint64_t estimatedBrdfLutBytes{ 0 };
     bool requested{ true };
     bool externalSourceAvailable{ false };
+    bool environmentMapUploaded{ false };
     bool sourceIsHdr{ false };
     bool proceduralSource{ true };
     bool diffuseBackendAvailable{ true };
@@ -691,6 +692,7 @@ public:
     [[nodiscard]] RendererDisplayMode GetRecommendedDisplayModeForScene() const;
     [[nodiscard]] const EditorSelection& GetSelection() const { return _selection; }
     [[nodiscard]] std::string GetSelectionLabel() const;
+    [[nodiscard]] uint32_t GetEnvironmentSampledImageIndex() const { return _environmentSampledImageIndex; }
 
     void ResetAccumulation() { _pathTraceFrameIndex = 0; }
     bool ReloadShaders();
@@ -700,6 +702,8 @@ public:
     bool LoadScene(const std::filesystem::path& path);
     bool LoadSceneAsync(const std::filesystem::path& path);
     bool ReloadSceneAsync();
+    bool LoadExternalEnvironmentMap(const std::filesystem::path& path);
+    void ClearExternalEnvironmentMap();
     bool EnsureRayTracingScene();
     void SetStartupSafeModeActive(bool active) { _startupSafeModeActive = active; }
     void SelectDirectionalLight();
@@ -871,6 +875,8 @@ private:
     bool _selectionEditedSinceDragStart{ false };
     bool _trackSelectedObjectOrbit{ false };
     std::filesystem::path _pendingScreenshotPath;
+    ImageHandle _externalEnvironmentImage{};
+    uint32_t _environmentSampledImageIndex{ kInvalidResourceIndex };
     glm::vec2 _lastDragMousePosition{ 0.0f };
     glm::vec3 _dragPlaneOrigin{ 0.0f };
     glm::vec3 _dragPlaneNormal{ 0.0f, 1.0f, 0.0f };

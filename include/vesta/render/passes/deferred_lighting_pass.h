@@ -21,6 +21,7 @@ public:
     void SetSpotLight(bool enabled, glm::vec4 positionAndIntensity, glm::vec4 directionAndAngle);
     void SetAreaLight(bool enabled, glm::vec4 positionAndIntensity, glm::vec4 normalAndSize);
     void SetEnvironment(glm::vec4 environmentParams);
+    void SetEnvironmentImage(uint32_t sampledImageIndex);
     void SetEnvironmentSpecularStrength(float strength);
     void SetAmbientOcclusion(bool enabled, float radius, float intensity);
     void SetScreenSpaceReflections(bool enabled, float maxDistance, float thickness, float intensity);
@@ -61,6 +62,7 @@ private:
     glm::vec4 _areaLightNormalAndSize{ 0.0f, -1.0f, 0.0f, 2.0f };
     glm::vec4 _areaLightColor{ 0.86f, 0.92f, 1.0f, 0.0f };
     glm::vec4 _environmentParams{ 1.0f, 0.0f, 0.0f, 0.0f };
+    uint32_t _environmentImageIndex{ kInvalidResourceIndex };
     float _environmentSpecularStrength{ 0.45f };
     glm::vec4 _ssaoParams{ 1.0f, 0.75f, 1.35f, 0.0f };
     glm::vec4 _ssrParams{ 1.0f, 18.0f, 0.18f, 0.65f };

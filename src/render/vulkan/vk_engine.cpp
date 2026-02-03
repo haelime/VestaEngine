@@ -2050,7 +2050,7 @@ void VestaEngine::finish_benchmark()
            << CsvEscape(settings.externalHdriAvailable ? fmt::format("{}x{}", settings.externalHdriWidth, settings.externalHdriHeight) : "") << ','
            << (settings.externalHdriIsHdr ? "true" : "false") << ','
            << (iblStats.externalSourceAvailable ? "External" : "Procedural") << ','
-           << ((iblStats.diffuseBackendAvailable && iblStats.specularBackendAvailable && iblStats.brdfLutAvailable) ? "Complete" : "Staged") << ','
+           << CsvEscape(iblStats.environmentMapUploaded ? "EquirectSampling" : "Staged") << ','
            << CsvEscape(fmt::format("{}^2", iblStats.diffuseCubemapResolution)) << ','
            << CsvEscape(fmt::format("{}^2/{} mips", iblStats.specularCubemapResolution, iblStats.specularMipCount)) << ','
            << CsvEscape(fmt::format("{}^2", iblStats.brdfLutResolution)) << ','
@@ -2321,6 +2321,7 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "  \"ibl_stats\": {\n"
            << "    \"requested\": " << (iblStats.requested ? "true" : "false") << ",\n"
            << "    \"source\": \"" << (iblStats.externalSourceAvailable ? "External" : "Procedural") << "\",\n"
+           << "    \"environment_map_uploaded\": " << (iblStats.environmentMapUploaded ? "true" : "false") << ",\n"
            << "    \"source_width\": " << iblStats.sourceWidth << ",\n"
            << "    \"source_height\": " << iblStats.sourceHeight << ",\n"
            << "    \"source_channels\": " << iblStats.sourceChannels << ",\n"
@@ -4449,7 +4450,7 @@ void VestaEngine::build_debug_ui()
                         _renderer.ResetAccumulation();
                     }
                     ImGui::Text("Source Procedural IBL: %s", EnvironmentPresetLabel(settings.environmentPreset));
-                    ImGui::Text("External HDRI: %s", settings.externalHdriAvailable ? "Probed" : "Not active");
+                    ImGui::Text("External HDRI: %s", settings.externalHdriAvailable ? "Uploaded" : "Not active");
                     if (settings.externalHdriAvailable) {
                         ImGui::Text("%ux%u  %uch  %s",
                             settings.externalHdriWidth,
@@ -4472,10 +4473,12 @@ void VestaEngine::build_debug_ui()
                         MiB(iblStats.estimatedSpecularBytes),
                         MiB(iblStats.estimatedBrdfLutBytes));
                     ImGui::Text("Diffuse %s  Prefilter %s  BRDF LUT %s",
-                        iblStats.diffuseBackendAvailable ? "procedural live" : "staged",
+                        iblStats.environmentMapUploaded ? "equirect sample" : (iblStats.diffuseBackendAvailable ? "procedural live" : "staged"),
                         iblStats.specularBackendAvailable ? "live" : "staged",
                         iblStats.brdfLutAvailable ? "live" : "staged");
-                    ImGui::TextDisabled("External HDRI metadata is ready; irradiance/prefilter/BRDF LUT generation remains staged.");
+                    ImGui::TextDisabled(iblStats.environmentMapUploaded
+                        ? "External HDRI is sampled directly; irradiance/prefilter/BRDF LUT generation remains staged."
+                        : "External HDRI metadata is ready; irradiance/prefilter/BRDF LUT generation remains staged.");
                     ImGui::EndTabItem();
                 }
                 if (ImGui::BeginTabItem("Animation")) {
@@ -6305,6 +6308,7 @@ void VestaEngine::apply_external_hdri_path(const std::filesystem::path& path)
     settings.externalHdriWidth = 0;
     settings.externalHdriHeight = 0;
     settings.externalHdriChannels = 0;
+    _renderer.ClearExternalEnvironmentMap();
 
     if (path.empty()) {
         settings.externalHdriStatus = "Procedural IBL";
@@ -6332,12 +6336,18 @@ void VestaEngine::apply_external_hdri_path(const std::filesystem::path& path)
         return;
     }
 
+    if (!_renderer.LoadExternalEnvironmentMap(normalizedPath)) {
+        settings.externalHdriStatus = "External HDRI upload failed: " + normalizedPath.string();
+        log_startup_event(settings.externalHdriStatus);
+        return;
+    }
+
     settings.externalHdriAvailable = true;
     settings.externalHdriIsHdr = stbi_is_hdr(normalizedPath.string().c_str()) != 0;
     settings.externalHdriWidth = static_cast<uint32_t>(width);
     settings.externalHdriHeight = static_cast<uint32_t>(height);
     settings.externalHdriChannels = static_cast<uint32_t>(std::max(channels, 0));
-    settings.externalHdriStatus = fmt::format("External environment probed: {}x{} {}ch {}",
+    settings.externalHdriStatus = fmt::format("External environment uploaded: {}x{} {}ch {}",
         width,
         height,
         channels,

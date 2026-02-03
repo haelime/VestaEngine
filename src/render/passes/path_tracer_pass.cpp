@@ -141,6 +141,11 @@ void PathTracerPass::SetEnvironment(glm::vec4 environmentParams)
     _environmentParams = environmentParams;
 }
 
+void PathTracerPass::SetEnvironmentImage(uint32_t sampledImageIndex)
+{
+    _environmentImageIndex = sampledImageIndex;
+}
+
 void PathTracerPass::SetLens(glm::vec4 cameraRightAperture, glm::vec4 cameraUpFocalDistance)
 {
     _cameraRightAperture = cameraRightAperture;
@@ -448,6 +453,7 @@ void PathTracerPass::Execute(const RenderGraphContext& context)
             .russianRouletteDepth = _russianRouletteDepth,
             .fireflyClamp = _fireflyClamp,
             .pathTraceFlags = (_nextEventEstimation ? 1u : 0u) | (_russianRoulette ? 2u : 0u),
+            .reserved0 = _environmentImageIndex,
             .accumulationImageIndices0 = glm::uvec4(
                 PackStorageImagePair(accumulationIndex(0), accumulationIndex(1)),
                 PackStorageImagePair(accumulationIndex(2), accumulationIndex(3)),
@@ -552,6 +558,7 @@ void PathTracerPass::Execute(const RenderGraphContext& context)
         .triangleCount = static_cast<uint32_t>(_scene->GetTriangles().size()),
         .frameIndex = _frameIndex,
         .debugView = static_cast<uint32_t>(_debugView),
+        .reserved0 = _environmentImageIndex,
     };
 
     VkCommandBuffer commandBuffer = context.GetCommandBuffer();

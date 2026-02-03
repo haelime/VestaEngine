@@ -18,6 +18,7 @@
 #include <fmt/format.h>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <stb_image.h>
 
 #include <vesta/core/debug.h>
 #include <vesta/render/passes/composite_pass.h>
@@ -644,6 +645,7 @@ void ConfigureDeferredLightingPass(Renderer& renderer, IRenderPass& pass, const 
         glm::radians(settings.environmentRotationDegrees),
         static_cast<float>(settings.environmentPreset),
         settings.environmentDiffuseStrength));
+    lightingPass.SetEnvironmentImage(renderer.GetEnvironmentSampledImageIndex());
     lightingPass.SetEnvironmentSpecularStrength(settings.environmentSpecularStrength);
     lightingPass.SetAmbientOcclusion(settings.enableSsao, settings.ssaoRadius, settings.ssaoIntensity);
     lightingPass.SetScreenSpaceReflections(
@@ -730,6 +732,7 @@ void ConfigurePathTracerPass(Renderer& renderer, IRenderPass& pass, const Render
         glm::radians(settings.environmentRotationDegrees),
         static_cast<float>(settings.environmentPreset),
         settings.environmentDiffuseStrength));
+    pathTracerPass.SetEnvironmentImage(renderer.GetEnvironmentSampledImageIndex());
     const glm::vec3 cameraRight = glm::normalize(glm::cross(renderer.GetCamera().GetForward(), renderer.GetCamera().GetUp()));
     pathTracerPass.SetLens(glm::vec4(cameraRight, settings.cameraApertureRadius),
         glm::vec4(renderer.GetCamera().GetUp(), settings.cameraFocalDistance));
@@ -915,6 +918,7 @@ void Renderer::Shutdown()
     _pendingSceneUpload.scene.DestroyGpu(_device);
     _pendingSceneUpload = {};
     _scene.DestroyGpu(_device);
+    ClearExternalEnvironmentMap();
     for (RetiredSceneEntry& retiredScene : _retiredScenes) {
         retiredScene.scene.DestroyGpu(_device);
     }
@@ -1770,6 +1774,50 @@ bool Renderer::ReloadSceneAsync()
     return LoadSceneAsync(currentPath);
 }
 
+bool Renderer::LoadExternalEnvironmentMap(const std::filesystem::path& path)
+{
+    ClearExternalEnvironmentMap();
+
+    int width = 0;
+    int height = 0;
+    int channels = 0;
+    float* pixels = stbi_loadf(path.string().c_str(), &width, &height, &channels, STBI_rgb_alpha);
+    if (pixels == nullptr || width <= 0 || height <= 0) {
+        if (pixels != nullptr) {
+            stbi_image_free(pixels);
+        }
+        return false;
+    }
+
+    const size_t texelCount = static_cast<size_t>(width) * static_cast<size_t>(height);
+    const size_t byteCount = texelCount * 4u * sizeof(float);
+    _externalEnvironmentImage = _device.CreateImage(ImageDesc{
+        .extent = VkExtent3D{ static_cast<uint32_t>(width), static_cast<uint32_t>(height), 1u },
+        .format = VK_FORMAT_R32G32B32A32_SFLOAT,
+        .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        .aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT,
+        .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+        .registerBindlessSampled = true,
+        .debugName = "ExternalEnvironmentEquirect",
+    });
+    _device.UploadImageData(_externalEnvironmentImage,
+        std::span<const std::byte>(reinterpret_cast<const std::byte*>(pixels), byteCount));
+    _environmentSampledImageIndex = _device.GetImageResource(_externalEnvironmentImage).bindless.sampledImage;
+    stbi_image_free(pixels);
+    ResetAccumulation();
+    return _environmentSampledImageIndex != kInvalidResourceIndex;
+}
+
+void Renderer::ClearExternalEnvironmentMap()
+{
+    if (_externalEnvironmentImage) {
+        _device.DestroyImage(_externalEnvironmentImage);
+        _externalEnvironmentImage = {};
+    }
+    _environmentSampledImageIndex = kInvalidResourceIndex;
+    ResetAccumulation();
+}
+
 bool Renderer::RegisterPass(RenderPassRegistrationDesc desc)
 {
     if (desc.id.empty() || !desc.pass || FindPassEntry(desc.id) != nullptr) {
@@ -1980,6 +2028,7 @@ IblStats Renderer::GetIblStats() const
     stats.requested = _settings.environmentIntensity > 0.0f
         && (_settings.environmentDiffuseStrength > 0.0f || _settings.environmentSpecularStrength > 0.0f);
     stats.externalSourceAvailable = _settings.externalHdriAvailable;
+    stats.environmentMapUploaded = _environmentSampledImageIndex != kInvalidResourceIndex;
     stats.proceduralSource = !_settings.externalHdriAvailable;
     stats.sourceIsHdr = _settings.externalHdriIsHdr;
     stats.sourceWidth = _settings.externalHdriWidth;
