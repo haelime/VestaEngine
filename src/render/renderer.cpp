@@ -2003,6 +2003,38 @@ IblStats Renderer::GetIblStats() const
     return stats;
 }
 
+RayEffectsStats Renderer::GetRayEffectsStats() const
+{
+    const VkExtent2D extent = _device.GetSwapchainExtent();
+    const uint32_t inputWidth = _settings.rtHalfResolution ? std::max(1u, (extent.width + 1u) / 2u) : extent.width;
+    const uint32_t inputHeight = _settings.rtHalfResolution ? std::max(1u, (extent.height + 1u) / 2u) : extent.height;
+    const uint64_t pixels = static_cast<uint64_t>(inputWidth) * static_cast<uint64_t>(inputHeight);
+
+    RayEffectsStats stats{};
+    stats.inputWidth = inputWidth;
+    stats.inputHeight = inputHeight;
+    stats.shadowSamples = std::clamp(_settings.rtShadowSamples, 1u, 8u);
+    stats.aoSamples = std::clamp(_settings.rtAoSamples, 1u, 8u);
+    stats.reflectionSamples = std::clamp(_settings.rtReflectionSamples, 1u, 8u);
+    stats.giSamples = std::clamp(_settings.rtGiSamples, 1u, 8u);
+    stats.shadowsRequested = _settings.enableRtShadows;
+    stats.aoRequested = _settings.enableRtAmbientOcclusion;
+    stats.reflectionsRequested = _settings.enableRtReflections;
+    stats.giRequested = _settings.enableRtGlobalIllumination;
+    stats.rayQueryAvailable = _device.GetRayTracingSupport().rayQueryFeatures.rayQuery == VK_TRUE;
+    stats.rtPipelineAvailable = _device.GetRayTracingSupport().rayTracingPipelineFeatures.rayTracingPipeline == VK_TRUE;
+    stats.tlasAvailable = _scene.HasRayTracingScene();
+    stats.backendAvailable = false;
+    stats.halfResolution = _settings.rtHalfResolution;
+    stats.denoiserRequested = _settings.rtDenoiser;
+    stats.temporalAccumulation = _settings.rtTemporalAccumulation;
+    stats.estimatedShadowRays = stats.shadowsRequested ? pixels * stats.shadowSamples : 0u;
+    stats.estimatedAoRays = stats.aoRequested ? pixels * stats.aoSamples : 0u;
+    stats.estimatedReflectionRays = stats.reflectionsRequested ? pixels * stats.reflectionSamples : 0u;
+    stats.estimatedGiRays = stats.giRequested ? pixels * stats.giSamples : 0u;
+    return stats;
+}
+
 std::vector<RenderPassDebugInfo> Renderer::GetRenderPassDebugInfo() const
 {
     const auto estimateVisibleSurfaceCount = [&]() -> uint32_t {

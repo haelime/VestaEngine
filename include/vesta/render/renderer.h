@@ -293,6 +293,30 @@ struct IblStats {
     bool brdfLutAvailable{ false };
 };
 
+struct RayEffectsStats {
+    uint32_t inputWidth{ 0 };
+    uint32_t inputHeight{ 0 };
+    uint32_t shadowSamples{ 0 };
+    uint32_t aoSamples{ 0 };
+    uint32_t reflectionSamples{ 0 };
+    uint32_t giSamples{ 0 };
+    uint64_t estimatedShadowRays{ 0 };
+    uint64_t estimatedAoRays{ 0 };
+    uint64_t estimatedReflectionRays{ 0 };
+    uint64_t estimatedGiRays{ 0 };
+    bool shadowsRequested{ false };
+    bool aoRequested{ false };
+    bool reflectionsRequested{ false };
+    bool giRequested{ false };
+    bool rayQueryAvailable{ false };
+    bool rtPipelineAvailable{ false };
+    bool tlasAvailable{ false };
+    bool backendAvailable{ false };
+    bool halfResolution{ true };
+    bool denoiserRequested{ true };
+    bool temporalAccumulation{ true };
+};
+
 // RendererSettings collects the knobs that can safely change at runtime.
 // When one of these changes in a way that affects history, accumulation resets.
 struct RendererSettings {
@@ -633,6 +657,7 @@ public:
     [[nodiscard]] RestirStats GetRestirStats() const;
     [[nodiscard]] DdgiStats GetDdgiStats() const;
     [[nodiscard]] IblStats GetIblStats() const;
+    [[nodiscard]] RayEffectsStats GetRayEffectsStats() const;
     [[nodiscard]] std::vector<RenderPassDebugInfo> GetRenderPassDebugInfo() const;
     [[nodiscard]] const std::string& GetLastShaderReloadMessage() const { return _lastShaderReloadMessage; }
     [[nodiscard]] bool HasValidVisibilitySet() const { return _visibleSceneToken != nullptr && _visibleSceneToken == _scene.GetPreparedScene(); }

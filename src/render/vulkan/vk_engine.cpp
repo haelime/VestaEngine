@@ -1850,6 +1850,7 @@ void VestaEngine::finish_benchmark()
                << "ssao,ssao_radius,ssao_intensity,"
                << "taa,taa_feedback,temporal_upscaler,temporal_upscaler_backend,temporal_upscaler_input,temporal_upscaler_output,temporal_upscaler_scale,temporal_upscaler_history,temporal_upscaler_reactive_mask,"
                << "restir_di,restir_gi,restir_pt,restir_backend,restir_lights,restir_emissive_lights,restir_candidates,restir_reservoirs,restir_reservoir_mb,restir_temporal_reuse,restir_spatial_reuse,restir_history,"
+               << "rt_hybrid_backend,rt_hybrid_ray_query,rt_hybrid_tlas,rt_hybrid_resolution,rt_shadow_rays,rt_ao_rays,rt_reflection_rays,rt_gi_rays,rt_denoiser,rt_temporal,"
                << "ssr,ssr_max_distance,ssr_thickness,ssr_intensity,"
                << "ssgi,ssgi_radius,ssgi_intensity,ssgi_samples,"
                << "ddgi,ddgi_backend,ddgi_probes,ddgi_rays_per_update,ddgi_memory_mb,ddgi_probe_spacing,ddgi_hysteresis,ddgi_overlay,"
@@ -1902,6 +1903,7 @@ void VestaEngine::finish_benchmark()
     const auto restirStats = _renderer.GetRestirStats();
     const auto ddgiStats = _renderer.GetDdgiStats();
     const auto iblStats = _renderer.GetIblStats();
+    const auto rayEffectsStats = _renderer.GetRayEffectsStats();
     const auto averagePassGpuMs = [&](size_t passIndex) {
         const uint32_t sampleCount = _benchmarkState.passGpuSampleCounts[passIndex];
         return sampleCount > 0u ? _benchmarkState.passGpuMsSums[passIndex] / static_cast<float>(sampleCount) : 0.0f;
@@ -1954,6 +1956,16 @@ void VestaEngine::finish_benchmark()
            << (restirStats.temporalReuse ? "true" : "false") << ','
            << (restirStats.spatialReuse ? "true" : "false") << ','
            << (restirStats.historyAvailable ? "true" : "false") << ','
+           << (rayEffectsStats.backendAvailable ? "RayQueryPass" : "Staged") << ','
+           << (rayEffectsStats.rayQueryAvailable ? "true" : "false") << ','
+           << (rayEffectsStats.tlasAvailable ? "true" : "false") << ','
+           << CsvEscape(fmt::format("{}x{}", rayEffectsStats.inputWidth, rayEffectsStats.inputHeight)) << ','
+           << rayEffectsStats.estimatedShadowRays << ','
+           << rayEffectsStats.estimatedAoRays << ','
+           << rayEffectsStats.estimatedReflectionRays << ','
+           << rayEffectsStats.estimatedGiRays << ','
+           << (rayEffectsStats.denoiserRequested ? "true" : "false") << ','
+           << (rayEffectsStats.temporalAccumulation ? "true" : "false") << ','
            << (settings.enableSsr ? "true" : "false") << ','
            << settings.ssrMaxDistance << ','
            << settings.ssrThickness << ','
@@ -2137,6 +2149,7 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
     const auto restirStats = _renderer.GetRestirStats();
     const auto ddgiStats = _renderer.GetDdgiStats();
     const auto iblStats = _renderer.GetIblStats();
+    const auto rayEffectsStats = _renderer.GetRayEffectsStats();
     const uint64_t sceneBufferBytes = BufferSizeBytes(device, scene.GetVertexBuffer())
         + BufferSizeBytes(device, scene.GetIndexBuffer())
         + BufferSizeBytes(device, scene.GetMaterialBuffer())
@@ -2276,6 +2289,21 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "  \"path_trace_denoiser_temporal\": " << settings.pathTraceDenoiserTemporalBlend << ",\n"
            << "  \"path_trace_denoiser_iterations\": " << settings.pathTraceDenoiserIterations << ",\n"
            << "  \"path_trace_backend\": \"" << PathTraceBackendLabel(_renderer.GetActivePathTraceBackend()) << "\",\n"
+           << "  \"ray_effects_stats\": {\n"
+           << "    \"backend_available\": " << (rayEffectsStats.backendAvailable ? "true" : "false") << ",\n"
+           << "    \"ray_query_available\": " << (rayEffectsStats.rayQueryAvailable ? "true" : "false") << ",\n"
+           << "    \"rt_pipeline_available\": " << (rayEffectsStats.rtPipelineAvailable ? "true" : "false") << ",\n"
+           << "    \"tlas_available\": " << (rayEffectsStats.tlasAvailable ? "true" : "false") << ",\n"
+           << "    \"input_width\": " << rayEffectsStats.inputWidth << ",\n"
+           << "    \"input_height\": " << rayEffectsStats.inputHeight << ",\n"
+           << "    \"shadow_rays\": " << rayEffectsStats.estimatedShadowRays << ",\n"
+           << "    \"ao_rays\": " << rayEffectsStats.estimatedAoRays << ",\n"
+           << "    \"reflection_rays\": " << rayEffectsStats.estimatedReflectionRays << ",\n"
+           << "    \"gi_rays\": " << rayEffectsStats.estimatedGiRays << ",\n"
+           << "    \"half_resolution\": " << (rayEffectsStats.halfResolution ? "true" : "false") << ",\n"
+           << "    \"denoiser_requested\": " << (rayEffectsStats.denoiserRequested ? "true" : "false") << ",\n"
+           << "    \"temporal_accumulation\": " << (rayEffectsStats.temporalAccumulation ? "true" : "false") << "\n"
+           << "  },\n"
            << "  \"frame_index\": " << _frameNumber << ",\n"
            << "  \"path_trace_frame_index\": " << _renderer.GetPathTraceFrameIndex() << ",\n"
            << "  \"environment_intensity\": " << settings.environmentIntensity << ",\n"
@@ -5794,6 +5822,24 @@ void VestaEngine::draw_ray_tracing_debug_panel()
     if (!hybridEffectsSupported) {
         ImGui::TextDisabled("Hybrid ray effects require ray query support and a resident TLAS.");
     }
+
+    const auto rayEffectsStats = _renderer.GetRayEffectsStats();
+    ImGui::SeparatorText("Hybrid Ray Effects Readiness");
+    ImGui::Text("Input %ux%u  TLAS %s  RayQuery %s  Backend %s",
+        rayEffectsStats.inputWidth,
+        rayEffectsStats.inputHeight,
+        rayEffectsStats.tlasAvailable ? "ready" : "missing",
+        rayEffectsStats.rayQueryAvailable ? "ready" : "missing",
+        rayEffectsStats.backendAvailable ? "live" : "staged");
+    ImGui::Text("Estimated rays: Shadow %llu  AO %llu  Reflection %llu  GI %llu",
+        static_cast<unsigned long long>(rayEffectsStats.estimatedShadowRays),
+        static_cast<unsigned long long>(rayEffectsStats.estimatedAoRays),
+        static_cast<unsigned long long>(rayEffectsStats.estimatedReflectionRays),
+        static_cast<unsigned long long>(rayEffectsStats.estimatedGiRays));
+    ImGui::Text("Denoiser %s  Temporal %s  Resolution %s",
+        rayEffectsStats.denoiserRequested ? "on" : "off",
+        rayEffectsStats.temporalAccumulation ? "on" : "off",
+        rayEffectsStats.halfResolution ? "half" : "full");
 
     ImGui::BeginDisabled(!hybridEffectsSupported);
     bool resetHistory = false;
