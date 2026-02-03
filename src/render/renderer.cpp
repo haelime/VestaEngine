@@ -1970,6 +1970,39 @@ DdgiStats Renderer::GetDdgiStats() const
     return stats;
 }
 
+IblStats Renderer::GetIblStats() const
+{
+    constexpr uint64_t kCubeFaces = 6u;
+    constexpr uint64_t kRgba16fBytesPerTexel = 8u;
+    constexpr uint64_t kRg16fBytesPerTexel = 4u;
+
+    IblStats stats{};
+    stats.requested = _settings.environmentIntensity > 0.0f
+        && (_settings.environmentDiffuseStrength > 0.0f || _settings.environmentSpecularStrength > 0.0f);
+    stats.externalSourceAvailable = _settings.externalHdriAvailable;
+    stats.proceduralSource = !_settings.externalHdriAvailable;
+    stats.sourceIsHdr = _settings.externalHdriIsHdr;
+    stats.sourceWidth = _settings.externalHdriWidth;
+    stats.sourceHeight = _settings.externalHdriHeight;
+    stats.sourceChannels = _settings.externalHdriChannels;
+
+    const uint64_t diffusePixels = kCubeFaces * stats.diffuseCubemapResolution * stats.diffuseCubemapResolution;
+    stats.estimatedDiffuseBytes = diffusePixels * kRgba16fBytesPerTexel;
+
+    uint64_t specularPixels = 0;
+    for (uint32_t mip = 0; mip < stats.specularMipCount; ++mip) {
+        const uint32_t mipResolution = std::max(1u, stats.specularCubemapResolution >> mip);
+        specularPixels += kCubeFaces * mipResolution * mipResolution;
+    }
+    stats.estimatedSpecularBytes = specularPixels * kRgba16fBytesPerTexel;
+    stats.estimatedBrdfLutBytes = static_cast<uint64_t>(stats.brdfLutResolution) * stats.brdfLutResolution * kRg16fBytesPerTexel;
+
+    stats.diffuseBackendAvailable = true;
+    stats.specularBackendAvailable = false;
+    stats.brdfLutAvailable = false;
+    return stats;
+}
+
 std::vector<RenderPassDebugInfo> Renderer::GetRenderPassDebugInfo() const
 {
     const auto estimateVisibleSurfaceCount = [&]() -> uint32_t {

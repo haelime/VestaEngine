@@ -273,6 +273,26 @@ struct DdgiStats {
     bool overlayEnabled{ false };
 };
 
+struct IblStats {
+    uint32_t sourceWidth{ 0 };
+    uint32_t sourceHeight{ 0 };
+    uint32_t sourceChannels{ 0 };
+    uint32_t diffuseCubemapResolution{ 32 };
+    uint32_t specularCubemapResolution{ 128 };
+    uint32_t specularMipCount{ 8 };
+    uint32_t brdfLutResolution{ 256 };
+    uint64_t estimatedDiffuseBytes{ 0 };
+    uint64_t estimatedSpecularBytes{ 0 };
+    uint64_t estimatedBrdfLutBytes{ 0 };
+    bool requested{ true };
+    bool externalSourceAvailable{ false };
+    bool sourceIsHdr{ false };
+    bool proceduralSource{ true };
+    bool diffuseBackendAvailable{ true };
+    bool specularBackendAvailable{ false };
+    bool brdfLutAvailable{ false };
+};
+
 // RendererSettings collects the knobs that can safely change at runtime.
 // When one of these changes in a way that affects history, accumulation resets.
 struct RendererSettings {
@@ -612,6 +632,7 @@ public:
     [[nodiscard]] TemporalUpscalerStats GetTemporalUpscalerStats() const;
     [[nodiscard]] RestirStats GetRestirStats() const;
     [[nodiscard]] DdgiStats GetDdgiStats() const;
+    [[nodiscard]] IblStats GetIblStats() const;
     [[nodiscard]] std::vector<RenderPassDebugInfo> GetRenderPassDebugInfo() const;
     [[nodiscard]] const std::string& GetLastShaderReloadMessage() const { return _lastShaderReloadMessage; }
     [[nodiscard]] bool HasValidVisibilitySet() const { return _visibleSceneToken != nullptr && _visibleSceneToken == _scene.GetPreparedScene(); }

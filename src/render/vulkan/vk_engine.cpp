@@ -1863,7 +1863,8 @@ void VestaEngine::finish_benchmark()
                << "meshlet_culling,cluster_count,visible_clusters,culled_clusters,meshlet_count,visible_meshlets,culled_meshlets,cluster_bounds,meshlet_triangles,"
                << "gaussian_trained,gaussian_count,gaussian_sh_degree,gaussian_view_dependent_color,gaussian_antialiasing,"
                << "gaussian_fast_culling,gaussian_opacity,gaussian_mix,gaussian_interactive_preview,"
-               << "pt_scale,environment_intensity,environment_rotation_deg,environment_preset,external_hdri,external_hdri_path,external_hdri_resolution,external_hdri_hdr,ibl_diffuse,ibl_specular,exposure_ev,"
+               << "pt_scale,environment_intensity,environment_rotation_deg,environment_preset,external_hdri,external_hdri_path,external_hdri_resolution,external_hdri_hdr,"
+               << "ibl_source,ibl_backend,ibl_diffuse_cubemap,ibl_specular_cubemap,ibl_brdf_lut,ibl_estimated_mb,ibl_diffuse,ibl_specular,exposure_ev,"
                << "bloom,bloom_threshold,bloom_intensity,fxaa,motion_blur,motion_blur_strength,vignette,vignette_strength,saturation,contrast,"
                << "aperture_radius,focal_distance,"
                << "avg_frame_ms,p95_frame_ms,min_frame_ms,max_frame_ms,avg_fps,frame_count,"
@@ -1900,6 +1901,7 @@ void VestaEngine::finish_benchmark()
     const auto temporalUpscalerStats = _renderer.GetTemporalUpscalerStats();
     const auto restirStats = _renderer.GetRestirStats();
     const auto ddgiStats = _renderer.GetDdgiStats();
+    const auto iblStats = _renderer.GetIblStats();
     const auto averagePassGpuMs = [&](size_t passIndex) {
         const uint32_t sampleCount = _benchmarkState.passGpuSampleCounts[passIndex];
         return sampleCount > 0u ? _benchmarkState.passGpuMsSums[passIndex] / static_cast<float>(sampleCount) : 0.0f;
@@ -2035,6 +2037,12 @@ void VestaEngine::finish_benchmark()
            << CsvEscape(settings.externalHdriPath.string()) << ','
            << CsvEscape(settings.externalHdriAvailable ? fmt::format("{}x{}", settings.externalHdriWidth, settings.externalHdriHeight) : "") << ','
            << (settings.externalHdriIsHdr ? "true" : "false") << ','
+           << (iblStats.externalSourceAvailable ? "External" : "Procedural") << ','
+           << ((iblStats.diffuseBackendAvailable && iblStats.specularBackendAvailable && iblStats.brdfLutAvailable) ? "Complete" : "Staged") << ','
+           << CsvEscape(fmt::format("{}^2", iblStats.diffuseCubemapResolution)) << ','
+           << CsvEscape(fmt::format("{}^2/{} mips", iblStats.specularCubemapResolution, iblStats.specularMipCount)) << ','
+           << CsvEscape(fmt::format("{}^2", iblStats.brdfLutResolution)) << ','
+           << MiB(iblStats.estimatedDiffuseBytes + iblStats.estimatedSpecularBytes + iblStats.estimatedBrdfLutBytes) << ','
            << settings.environmentDiffuseStrength << ','
            << settings.environmentSpecularStrength << ','
            << settings.cameraExposureEv << ','
@@ -2128,6 +2136,7 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
     const auto temporalUpscalerStats = _renderer.GetTemporalUpscalerStats();
     const auto restirStats = _renderer.GetRestirStats();
     const auto ddgiStats = _renderer.GetDdgiStats();
+    const auto iblStats = _renderer.GetIblStats();
     const uint64_t sceneBufferBytes = BufferSizeBytes(device, scene.GetVertexBuffer())
         + BufferSizeBytes(device, scene.GetIndexBuffer())
         + BufferSizeBytes(device, scene.GetMaterialBuffer())
@@ -2281,6 +2290,24 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "  \"external_hdri_status\": \"" << JsonEscape(settings.externalHdriStatus) << "\",\n"
            << "  \"ibl_diffuse_strength\": " << settings.environmentDiffuseStrength << ",\n"
            << "  \"ibl_specular_strength\": " << settings.environmentSpecularStrength << ",\n"
+           << "  \"ibl_stats\": {\n"
+           << "    \"requested\": " << (iblStats.requested ? "true" : "false") << ",\n"
+           << "    \"source\": \"" << (iblStats.externalSourceAvailable ? "External" : "Procedural") << "\",\n"
+           << "    \"source_width\": " << iblStats.sourceWidth << ",\n"
+           << "    \"source_height\": " << iblStats.sourceHeight << ",\n"
+           << "    \"source_channels\": " << iblStats.sourceChannels << ",\n"
+           << "    \"source_is_hdr\": " << (iblStats.sourceIsHdr ? "true" : "false") << ",\n"
+           << "    \"diffuse_cubemap_resolution\": " << iblStats.diffuseCubemapResolution << ",\n"
+           << "    \"specular_cubemap_resolution\": " << iblStats.specularCubemapResolution << ",\n"
+           << "    \"specular_mip_count\": " << iblStats.specularMipCount << ",\n"
+           << "    \"brdf_lut_resolution\": " << iblStats.brdfLutResolution << ",\n"
+           << "    \"estimated_diffuse_bytes\": " << iblStats.estimatedDiffuseBytes << ",\n"
+           << "    \"estimated_specular_bytes\": " << iblStats.estimatedSpecularBytes << ",\n"
+           << "    \"estimated_brdf_lut_bytes\": " << iblStats.estimatedBrdfLutBytes << ",\n"
+           << "    \"diffuse_backend_available\": " << (iblStats.diffuseBackendAvailable ? "true" : "false") << ",\n"
+           << "    \"specular_backend_available\": " << (iblStats.specularBackendAvailable ? "true" : "false") << ",\n"
+           << "    \"brdf_lut_available\": " << (iblStats.brdfLutAvailable ? "true" : "false") << "\n"
+           << "  },\n"
            << "  \"exposure_ev\": " << settings.cameraExposureEv << ",\n"
            << "  \"bloom\": " << (settings.enableBloom ? "true" : "false") << ",\n"
            << "  \"bloom_threshold\": " << settings.bloomThreshold << ",\n"
@@ -4403,6 +4430,23 @@ void VestaEngine::build_debug_ui()
                             settings.externalHdriIsHdr ? "HDR" : "LDR");
                     }
                     ImGui::TextWrapped("%s", settings.externalHdriStatus.c_str());
+                    const auto iblStats = _renderer.GetIblStats();
+                    ImGui::SeparatorText("IBL Pipeline Readiness");
+                    ImGui::Text("Source %s  Diffuse %u^2  Specular %u^2/%u mips  BRDF LUT %u^2",
+                        iblStats.externalSourceAvailable ? "External HDRI" : "Procedural sky",
+                        iblStats.diffuseCubemapResolution,
+                        iblStats.specularCubemapResolution,
+                        iblStats.specularMipCount,
+                        iblStats.brdfLutResolution);
+                    ImGui::Text("Estimated GPU memory %.2f MiB  (diffuse %.2f / specular %.2f / LUT %.2f)",
+                        MiB(iblStats.estimatedDiffuseBytes + iblStats.estimatedSpecularBytes + iblStats.estimatedBrdfLutBytes),
+                        MiB(iblStats.estimatedDiffuseBytes),
+                        MiB(iblStats.estimatedSpecularBytes),
+                        MiB(iblStats.estimatedBrdfLutBytes));
+                    ImGui::Text("Diffuse %s  Prefilter %s  BRDF LUT %s",
+                        iblStats.diffuseBackendAvailable ? "procedural live" : "staged",
+                        iblStats.specularBackendAvailable ? "live" : "staged",
+                        iblStats.brdfLutAvailable ? "live" : "staged");
                     ImGui::TextDisabled("External HDRI metadata is ready; irradiance/prefilter/BRDF LUT generation remains staged.");
                     ImGui::EndTabItem();
                 }
