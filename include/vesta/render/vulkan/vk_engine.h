@@ -3,6 +3,10 @@
 
 #pragma once
 
+#include <filesystem>
+#include <optional>
+#include <vector>
+
 #include <vesta/render/renderer.h>
 #include <vesta/render/vulkan/vk_types.h>
 
@@ -19,6 +23,7 @@ public:
     bool _imguiInitialized{ false };
     bool _showDebugUi{ true };
     VkDescriptorPool _imguiDescriptorPool{ VK_NULL_HANDLE };
+    std::vector<std::filesystem::path> _recentScenePaths;
 
     static VestaEngine& Get();
 
@@ -36,6 +41,10 @@ private:
     void init_imgui();
     void shutdown_imgui();
     void begin_imgui_frame(float deltaSeconds);
+    void build_main_menu_bar();
     void build_debug_ui();
     [[nodiscard]] bool should_forward_event_to_renderer(const union SDL_Event& event) const;
+    [[nodiscard]] std::optional<std::filesystem::path> open_scene_with_system_dialog() const;
+    void load_scene_path(const std::filesystem::path& path);
+    void remember_recent_scene(const std::filesystem::path& path);
 };
