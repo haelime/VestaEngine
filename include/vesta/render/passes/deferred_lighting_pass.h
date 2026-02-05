@@ -3,6 +3,7 @@
 #include <glm/glm.hpp>
 
 #include <vesta/render/graph/render_graph.h>
+#include <vesta/render/passes/shadow_map_pass.h>
 
 class Camera;
 
@@ -28,7 +29,9 @@ public:
     void SetScreenSpaceGlobalIllumination(bool enabled, float radius, float intensity, uint32_t sampleCount);
     void SetContactShadows(bool enabled, float length, float intensity);
     void SetShadowMap(GraphTextureHandle shadowMap,
-        glm::mat4 lightViewProjection,
+        const std::array<DirectionalShadowCascade, 4>& cascades,
+        uint32_t cascadeCount,
+        float splitLambda,
         float bias,
         float normalBias,
         float strength,
@@ -68,7 +71,9 @@ private:
     glm::vec4 _ssrParams{ 1.0f, 18.0f, 0.18f, 0.65f };
     glm::vec4 _ssgiParams{ 1.0f, 1.4f, 0.32f, 10.0f };
     glm::vec4 _contactShadowParams{ 1.0f, 1.2f, 0.35f, 0.0f };
-    glm::mat4 _lightViewProjection{ 1.0f };
+    std::array<DirectionalShadowCascade, 4> _shadowCascades{};
+    uint32_t _shadowCascadeCount{ 1 };
+    float _shadowCascadeLambda{ 0.65f };
     glm::vec4 _shadowParams{ 0.0015f, 0.015f, 0.82f, 0.0f };
     glm::vec4 _shadowFilterParams{ 1.0f, 0.0f, 0.0f, 0.0f };
     BufferHandle _lightingConstantsBuffer{};

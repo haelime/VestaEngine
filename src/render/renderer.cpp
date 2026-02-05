@@ -619,7 +619,9 @@ void ConfigureShadowMapPass(Renderer& renderer, IRenderPass& pass, const Rendere
     auto& shadowPass = static_cast<ShadowMapPass&>(pass);
     shadowPass.SetOutput(resources.shadowMap);
     shadowPass.SetScene(&renderer.GetScene());
+    shadowPass.SetCamera(&renderer.GetCamera());
     shadowPass.SetLight(renderer.GetSettings().lightDirectionAndIntensity);
+    shadowPass.SetCascadeSettings(renderer.GetSettings().shadowCascadeCount, renderer.GetSettings().shadowCascadeLambda);
 }
 
 void ConfigureOverdrawPass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
@@ -655,8 +657,15 @@ void ConfigureDeferredLightingPass(Renderer& renderer, IRenderPass& pass, const 
     lightingPass.SetContactShadows(
         settings.enableContactShadows, settings.contactShadowLength, settings.contactShadowIntensity);
     if (resources.shadowMap && renderer.GetScene().HasRasterGeometry()) {
+        const auto cascades = BuildDirectionalShadowCascades(renderer.GetScene().GetBounds(),
+            renderer.GetCamera(),
+            settings.lightDirectionAndIntensity,
+            settings.shadowCascadeCount,
+            settings.shadowCascadeLambda);
         lightingPass.SetShadowMap(resources.shadowMap,
-            BuildDirectionalShadowViewProjection(renderer.GetScene().GetBounds(), settings.lightDirectionAndIntensity),
+            cascades,
+            settings.shadowCascadeCount,
+            settings.shadowCascadeLambda,
             settings.shadowBias,
             settings.shadowNormalBias,
             settings.shadowStrength,
@@ -664,7 +673,9 @@ void ConfigureDeferredLightingPass(Renderer& renderer, IRenderPass& pass, const 
             settings.shadowFilterRadius);
     } else {
         lightingPass.SetShadowMap({},
-            glm::mat4(1.0f),
+            {},
+            0u,
+            settings.shadowCascadeLambda,
             settings.shadowBias,
             settings.shadowNormalBias,
             0.0f,

@@ -32,6 +32,7 @@ public:
     [[nodiscard]] glm::vec3 GetPosition() const { return _position; }
     [[nodiscard]] glm::vec3 GetRotationDegrees() const { return { _yawDegrees, _pitchDegrees, _rollDegrees }; }
     [[nodiscard]] float GetFovDegrees() const { return _fovDegrees; }
+    [[nodiscard]] float GetAspectRatio() const { return _aspectRatio; }
     [[nodiscard]] float GetNearPlane() const { return _nearPlane; }
     [[nodiscard]] float GetFarPlane() const { return _farPlane; }
     [[nodiscard]] glm::vec3 GetForward() const;

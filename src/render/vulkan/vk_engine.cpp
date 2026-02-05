@@ -1854,7 +1854,7 @@ void VestaEngine::finish_benchmark()
                << "ssr,ssr_max_distance,ssr_thickness,ssr_intensity,"
                << "ssgi,ssgi_radius,ssgi_intensity,ssgi_samples,"
                << "ddgi,ddgi_backend,ddgi_probes,ddgi_rays_per_update,ddgi_memory_mb,ddgi_probe_spacing,ddgi_hysteresis,ddgi_overlay,"
-               << "shadow_map,shadow_map_size,shadow_bias,shadow_normal_bias,shadow_strength,shadow_pcss,shadow_filter_radius,contact_shadows,contact_shadow_length,contact_shadow_intensity,"
+               << "shadow_map,shadow_map_size,shadow_cascades,shadow_cascade_lambda,shadow_bias,shadow_normal_bias,shadow_strength,shadow_pcss,shadow_filter_radius,contact_shadows,contact_shadow_length,contact_shadow_intensity,"
                << "pt_nee,pt_rr,pt_rr_depth,pt_firefly_clamp,"
                << "pt_denoiser,pt_denoiser_strength,pt_denoiser_temporal,pt_denoiser_iterations,"
                << "pt_primary_rays,pt_shadow_rays,pt_diffuse_rays,pt_specular_rays,pt_total_rays,"
@@ -1984,6 +1984,8 @@ void VestaEngine::finish_benchmark()
            << (ddgiStats.overlayEnabled ? "true" : "false") << ','
            << (settings.enableShadowMap ? "true" : "false") << ','
            << settings.shadowMapSize << ','
+           << settings.shadowCascadeCount << ','
+           << settings.shadowCascadeLambda << ','
            << settings.shadowBias << ','
            << settings.shadowNormalBias << ','
            << settings.shadowStrength << ','
@@ -2242,6 +2244,8 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "  },\n"
            << "  \"shadow_map\": " << (settings.enableShadowMap ? "true" : "false") << ",\n"
            << "  \"shadow_map_size\": " << settings.shadowMapSize << ",\n"
+           << "  \"shadow_cascade_count\": " << settings.shadowCascadeCount << ",\n"
+           << "  \"shadow_cascade_lambda\": " << settings.shadowCascadeLambda << ",\n"
            << "  \"shadow_bias\": " << settings.shadowBias << ",\n"
            << "  \"shadow_normal_bias\": " << settings.shadowNormalBias << ",\n"
            << "  \"shadow_strength\": " << settings.shadowStrength << ",\n"

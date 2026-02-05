@@ -37,6 +37,19 @@ static_assert(sizeof(DeferredLightingPushConstants) <= 256, "Deferred lighting p
 
 struct DeferredLightingConstants {
     glm::mat4 lightViewProjection{ 1.0f };
+    glm::mat4 cascadeViewProjections[4]{
+        glm::mat4(1.0f),
+        glm::mat4(1.0f),
+        glm::mat4(1.0f),
+        glm::mat4(1.0f),
+    };
+    glm::vec4 cascadeSplits{ 0.0f };
+    glm::vec4 cascadeAtlasScaleOffsets[4]{
+        glm::vec4(1.0f, 1.0f, 0.0f, 0.0f),
+        glm::vec4(1.0f, 1.0f, 0.0f, 0.0f),
+        glm::vec4(1.0f, 1.0f, 0.0f, 0.0f),
+        glm::vec4(1.0f, 1.0f, 0.0f, 0.0f),
+    };
     glm::vec4 shadowParams{ 0.0015f, 0.015f, 0.82f, 0.0f }; // bias, normal bias, strength, enabled
     glm::vec4 shadowFilterParams{ 1.0f, 0.0f, 0.0f, 0.0f }; // filter radius, PCSS enabled
     glm::vec4 contactShadowParams{ 1.0f, 1.2f, 0.35f, 0.0f }; // enabled, length, intensity
@@ -172,7 +185,9 @@ void DeferredLightingPass::SetContactShadows(bool enabled, float length, float i
 
 void DeferredLightingPass::SetShadowMap(
     GraphTextureHandle shadowMap,
-    glm::mat4 lightViewProjection,
+    const std::array<DirectionalShadowCascade, 4>& cascades,
+    uint32_t cascadeCount,
+    float splitLambda,
     float bias,
     float normalBias,
     float strength,
@@ -180,7 +195,9 @@ void DeferredLightingPass::SetShadowMap(
     float filterRadius)
 {
     _shadowMap = shadowMap;
-    _lightViewProjection = lightViewProjection;
+    _shadowCascades = cascades;
+    _shadowCascadeCount = std::clamp(cascadeCount, 1u, 4u);
+    _shadowCascadeLambda = std::clamp(splitLambda, 0.0f, 1.0f);
     _shadowParams = glm::vec4(std::clamp(bias, 0.0f, 0.02f),
         std::clamp(normalBias, 0.0f, 0.2f),
         std::clamp(strength, 0.0f, 1.0f),
@@ -257,12 +274,33 @@ void DeferredLightingPass::Execute(const RenderGraphContext& context)
 
     const AllocatedBuffer& lightingConstantsBuffer = context.GetDevice().GetBufferResource(_lightingConstantsBuffer);
     if (lightingConstantsBuffer.allocationInfo.pMappedData != nullptr) {
+        glm::mat4 cascadeMatrices[4]{};
+        glm::vec4 cascadeSplits(0.0f);
+        glm::vec4 cascadeAtlasScaleOffsets[4]{};
+        for (uint32_t cascadeIndex = 0; cascadeIndex < 4u; ++cascadeIndex) {
+            cascadeMatrices[cascadeIndex] = _shadowCascades[cascadeIndex].viewProjection;
+            cascadeSplits[cascadeIndex] = _shadowCascades[cascadeIndex].splitDepth;
+            cascadeAtlasScaleOffsets[cascadeIndex] = _shadowCascades[cascadeIndex].atlasScaleOffset;
+        }
         const DeferredLightingConstants constants{
-            .lightViewProjection = _lightViewProjection,
+            .lightViewProjection = _shadowCascades[0].viewProjection,
+            .cascadeViewProjections = {
+                cascadeMatrices[0],
+                cascadeMatrices[1],
+                cascadeMatrices[2],
+                cascadeMatrices[3],
+            },
+            .cascadeSplits = cascadeSplits,
+            .cascadeAtlasScaleOffsets = {
+                cascadeAtlasScaleOffsets[0],
+                cascadeAtlasScaleOffsets[1],
+                cascadeAtlasScaleOffsets[2],
+                cascadeAtlasScaleOffsets[3],
+            },
             .shadowParams = glm::vec4(_shadowParams.x, _shadowParams.y, _shadowParams.z, shadowMapIndex != kInvalidResourceIndex ? _shadowParams.w : 0.0f),
             .shadowFilterParams = _shadowFilterParams,
             .contactShadowParams = _contactShadowParams,
-            .shadowIndices = glm::uvec4(shadowMapIndex, _environmentImageIndex, 0u, 0u),
+            .shadowIndices = glm::uvec4(shadowMapIndex, _environmentImageIndex, _shadowCascadeCount, 0u),
             .directionalColor = _directionalLightColor,
             .pointPositionAndIntensity = _pointLightPositionAndIntensity,
             .pointColor = _pointLightColor,
