@@ -17,6 +17,7 @@
 #include <SDL_vulkan.h>
 #include <fmt/format.h>
 #include <glm/glm.hpp>
+#include <glm/gtc/constants.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <stb_image.h>
 
@@ -66,6 +67,62 @@ uint32_t GaussianInteractivePreviewFrameBudget(const vesta::scene::Scene& scene)
         return 12u;
     }
     return 8u;
+}
+
+float RadicalInverseVdc(uint32_t bits)
+{
+    bits = (bits << 16u) | (bits >> 16u);
+    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xAAAAAAAAu) >> 1u);
+    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xCCCCCCCCu) >> 2u);
+    bits = ((bits & 0x0F0F0F0Fu) << 4u) | ((bits & 0xF0F0F0F0u) >> 4u);
+    bits = ((bits & 0x00FF00FFu) << 8u) | ((bits & 0xFF00FF00u) >> 8u);
+    return static_cast<float>(bits) * 2.3283064365386963e-10f;
+}
+
+glm::vec2 Hammersley(uint32_t index, uint32_t count)
+{
+    return glm::vec2(static_cast<float>(index) / static_cast<float>(count), RadicalInverseVdc(index));
+}
+
+glm::vec3 ImportanceSampleGgx(glm::vec2 sample, float roughness)
+{
+    const float a = roughness * roughness;
+    const float phi = 2.0f * glm::pi<float>() * sample.x;
+    const float cosTheta = std::sqrt((1.0f - sample.y) / std::max(1.0f + (a * a - 1.0f) * sample.y, 1.0e-5f));
+    const float sinTheta = std::sqrt(std::max(1.0f - cosTheta * cosTheta, 0.0f));
+    return glm::normalize(glm::vec3(std::cos(phi) * sinTheta, std::sin(phi) * sinTheta, cosTheta));
+}
+
+float GeometrySchlickGgx(float nDotV, float roughness)
+{
+    const float r = roughness + 1.0f;
+    const float k = (r * r) / 8.0f;
+    return nDotV / std::max(nDotV * (1.0f - k) + k, 1.0e-5f);
+}
+
+glm::vec2 IntegrateBrdf(float nDotV, float roughness)
+{
+    const glm::vec3 view(std::sqrt(std::max(1.0f - nDotV * nDotV, 0.0f)), 0.0f, nDotV);
+    constexpr uint32_t kSampleCount = 128u;
+    float scale = 0.0f;
+    float bias = 0.0f;
+    for (uint32_t sampleIndex = 0; sampleIndex < kSampleCount; ++sampleIndex) {
+        const glm::vec3 halfVector = ImportanceSampleGgx(Hammersley(sampleIndex, kSampleCount), roughness);
+        const glm::vec3 light = glm::normalize(2.0f * glm::dot(view, halfVector) * halfVector - view);
+        const float nDotL = std::max(light.z, 0.0f);
+        const float nDotH = std::max(halfVector.z, 0.0f);
+        const float vDotH = std::max(glm::dot(view, halfVector), 0.0f);
+        if (nDotL <= 0.0f) {
+            continue;
+        }
+
+        const float g = GeometrySchlickGgx(nDotL, roughness) * GeometrySchlickGgx(nDotV, roughness);
+        const float gVis = (g * vDotH) / std::max(nDotH * nDotV, 1.0e-5f);
+        const float fc = std::pow(1.0f - vDotH, 5.0f);
+        scale += (1.0f - fc) * gVis;
+        bias += fc * gVis;
+    }
+    return glm::vec2(scale, bias) / static_cast<float>(kSampleCount);
 }
 
 bool NeedsGeometryPass(const RendererSettings& settings)
@@ -648,6 +705,7 @@ void ConfigureDeferredLightingPass(Renderer& renderer, IRenderPass& pass, const 
         static_cast<float>(settings.environmentPreset),
         settings.environmentDiffuseStrength));
     lightingPass.SetEnvironmentImage(renderer.GetEnvironmentSampledImageIndex());
+    lightingPass.SetIblBrdfLutImage(renderer.GetIblBrdfLutSampledImageIndex());
     lightingPass.SetEnvironmentSpecularStrength(settings.environmentSpecularStrength);
     lightingPass.SetAmbientOcclusion(settings.enableSsao, settings.ssaoRadius, settings.ssaoIntensity);
     lightingPass.SetScreenSpaceReflections(
@@ -898,6 +956,7 @@ bool Renderer::Initialize(SDL_Window* window, VkExtent2D initialExtent, bool ena
     deviceDesc.enableValidation = enableValidation;
     deviceDesc.enableVSync = _settings.enableVSync;
     _device.Initialize(window, deviceDesc);
+    CreateIblBrdfLut();
     _jobs.Initialize();
     ApplyPreset(RendererPreset::Recommended);
 
@@ -929,7 +988,7 @@ void Renderer::Shutdown()
     _pendingSceneUpload.scene.DestroyGpu(_device);
     _pendingSceneUpload = {};
     _scene.DestroyGpu(_device);
-    ClearExternalEnvironmentMap();
+    DestroyIblResources();
     for (RetiredSceneEntry& retiredScene : _retiredScenes) {
         retiredScene.scene.DestroyGpu(_device);
     }
@@ -1785,6 +1844,46 @@ bool Renderer::ReloadSceneAsync()
     return LoadSceneAsync(currentPath);
 }
 
+void Renderer::CreateIblBrdfLut()
+{
+    if (_iblBrdfLutImage || _device.GetDevice() == VK_NULL_HANDLE) {
+        return;
+    }
+
+    constexpr uint32_t kLutSize = 256u;
+    std::vector<glm::vec2> lut(kLutSize * kLutSize);
+    for (uint32_t y = 0; y < kLutSize; ++y) {
+        const float roughness = (static_cast<float>(y) + 0.5f) / static_cast<float>(kLutSize);
+        for (uint32_t x = 0; x < kLutSize; ++x) {
+            const float nDotV = (static_cast<float>(x) + 0.5f) / static_cast<float>(kLutSize);
+            lut[static_cast<size_t>(y) * kLutSize + x] = IntegrateBrdf(nDotV, roughness);
+        }
+    }
+
+    _iblBrdfLutImage = _device.CreateImage(ImageDesc{
+        .extent = VkExtent3D{ kLutSize, kLutSize, 1u },
+        .format = VK_FORMAT_R32G32_SFLOAT,
+        .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        .aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT,
+        .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+        .registerBindlessSampled = true,
+        .debugName = "IBL_BRDF_LUT",
+    });
+    _device.UploadImageData(_iblBrdfLutImage,
+        std::span<const std::byte>(reinterpret_cast<const std::byte*>(lut.data()), lut.size() * sizeof(glm::vec2)));
+    _iblBrdfLutSampledImageIndex = _device.GetImageResource(_iblBrdfLutImage).bindless.sampledImage;
+}
+
+void Renderer::DestroyIblResources()
+{
+    ClearExternalEnvironmentMap();
+    if (_iblBrdfLutImage) {
+        _device.DestroyImage(_iblBrdfLutImage);
+        _iblBrdfLutImage = {};
+    }
+    _iblBrdfLutSampledImageIndex = kInvalidResourceIndex;
+}
+
 bool Renderer::LoadExternalEnvironmentMap(const std::filesystem::path& path)
 {
     ClearExternalEnvironmentMap();
@@ -2033,7 +2132,7 @@ IblStats Renderer::GetIblStats() const
 {
     constexpr uint64_t kCubeFaces = 6u;
     constexpr uint64_t kRgba16fBytesPerTexel = 8u;
-    constexpr uint64_t kRg16fBytesPerTexel = 4u;
+    constexpr uint64_t kRg32fBytesPerTexel = 8u;
 
     IblStats stats{};
     stats.requested = _settings.environmentIntensity > 0.0f
@@ -2055,11 +2154,11 @@ IblStats Renderer::GetIblStats() const
         specularPixels += kCubeFaces * mipResolution * mipResolution;
     }
     stats.estimatedSpecularBytes = specularPixels * kRgba16fBytesPerTexel;
-    stats.estimatedBrdfLutBytes = static_cast<uint64_t>(stats.brdfLutResolution) * stats.brdfLutResolution * kRg16fBytesPerTexel;
+    stats.estimatedBrdfLutBytes = static_cast<uint64_t>(stats.brdfLutResolution) * stats.brdfLutResolution * kRg32fBytesPerTexel;
 
     stats.diffuseBackendAvailable = true;
     stats.specularBackendAvailable = false;
-    stats.brdfLutAvailable = false;
+    stats.brdfLutAvailable = _iblBrdfLutSampledImageIndex != kInvalidResourceIndex;
     return stats;
 }
 

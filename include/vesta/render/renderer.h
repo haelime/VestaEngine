@@ -693,6 +693,7 @@ public:
     [[nodiscard]] const EditorSelection& GetSelection() const { return _selection; }
     [[nodiscard]] std::string GetSelectionLabel() const;
     [[nodiscard]] uint32_t GetEnvironmentSampledImageIndex() const { return _environmentSampledImageIndex; }
+    [[nodiscard]] uint32_t GetIblBrdfLutSampledImageIndex() const { return _iblBrdfLutSampledImageIndex; }
 
     void ResetAccumulation() { _pathTraceFrameIndex = 0; }
     bool ReloadShaders();
@@ -832,6 +833,8 @@ private:
     [[nodiscard]] RenderGraph BuildFrameGraph(uint32_t swapchainImageIndex);
     [[nodiscard]] RegisteredPassEntry* FindPassEntry(std::string_view id);
     [[nodiscard]] const RegisteredPassEntry* FindPassEntry(std::string_view id) const;
+    void CreateIblBrdfLut();
+    void DestroyIblResources();
 
     RenderDevice _device;
     vesta::core::JobSystem _jobs;
@@ -877,6 +880,8 @@ private:
     std::filesystem::path _pendingScreenshotPath;
     ImageHandle _externalEnvironmentImage{};
     uint32_t _environmentSampledImageIndex{ kInvalidResourceIndex };
+    ImageHandle _iblBrdfLutImage{};
+    uint32_t _iblBrdfLutSampledImageIndex{ kInvalidResourceIndex };
     glm::vec2 _lastDragMousePosition{ 0.0f };
     glm::vec3 _dragPlaneOrigin{ 0.0f };
     glm::vec3 _dragPlaneNormal{ 0.0f, 1.0f, 0.0f };

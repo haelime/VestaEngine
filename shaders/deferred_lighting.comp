@@ -135,11 +135,20 @@ vec3 sampleDiffuseIbl(vec3 normal)
     return sampleSky(bentNormal) * strength;
 }
 
-vec3 sampleSpecularIbl(vec3 reflectionDirection, float roughness)
+vec3 sampleSpecularIbl(vec3 reflectionDirection, vec3 normal, vec3 viewDirection, float roughness)
 {
     float strength = clamp(pc.ssaoParams.w, 0.0, 2.0);
     vec3 blurredDirection = normalize(mix(reflectionDirection, vec3(0.0, 1.0, 0.0), clamp(roughness * 0.75, 0.0, 0.85)));
-    return mix(sampleSky(reflectionDirection), sampleSky(blurredDirection), clamp(roughness, 0.0, 1.0)) * strength;
+    vec3 specular = mix(sampleSky(reflectionDirection), sampleSky(blurredDirection), clamp(roughness, 0.0, 1.0)) * strength;
+    if (pc.lightingConstantsBufferIndex != INVALID_BUFFER_INDEX) {
+        DeferredLightingConstants constants = lightingConstantsBuffers[nonuniformEXT(int(pc.lightingConstantsBufferIndex))].values;
+        if (constants.shadowIndices.w != INVALID_IMAGE_INDEX) {
+            float nDotV = clamp(dot(normal, viewDirection), 0.0, 1.0);
+            vec2 brdf = texture(sampledImages[nonuniformEXT(int(constants.shadowIndices.w))], vec2(nDotV, roughness)).rg;
+            specular *= brdf.x + brdf.y;
+        }
+    }
+    return specular;
 }
 
 vec3 evaluatePbrLight(vec3 baseColor, float metallic, float roughness, vec3 N, vec3 V, vec3 L, vec3 radiance)
@@ -563,7 +572,7 @@ void main() {
 
     vec3 indirectBounce = computeScreenSpaceGi(pixel, size, worldPosition, N, baseColor) * ao * (1.0 - metallic);
     vec3 ambientDiffuse = sampleDiffuseIbl(N) * baseColor * (1.0 - metallic) * ao + indirectBounce;
-    vec3 reflectionColor = computeScreenSpaceReflection(pixel, size, worldPosition, N, V, sampleSpecularIbl(R, roughness), roughness, metallic);
+    vec3 reflectionColor = computeScreenSpaceReflection(pixel, size, worldPosition, N, V, sampleSpecularIbl(R, N, V, roughness), roughness, metallic);
     vec3 ambientSpecular = reflectionColor * FresnelSchlick(max(dot(N, V), 0.0), F0) * mix(0.08, 0.45, metallic) * (1.0 - roughness * 0.65);
     vec3 lit = ambientDiffuse + ambientSpecular + direct + emissive;
 

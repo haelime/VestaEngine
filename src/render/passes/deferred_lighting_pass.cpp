@@ -149,6 +149,11 @@ void DeferredLightingPass::SetEnvironmentImage(uint32_t sampledImageIndex)
     _environmentImageIndex = sampledImageIndex;
 }
 
+void DeferredLightingPass::SetIblBrdfLutImage(uint32_t sampledImageIndex)
+{
+    _iblBrdfLutImageIndex = sampledImageIndex;
+}
+
 void DeferredLightingPass::SetEnvironmentSpecularStrength(float strength)
 {
     _environmentSpecularStrength = std::clamp(strength, 0.0f, 2.0f);
@@ -300,7 +305,7 @@ void DeferredLightingPass::Execute(const RenderGraphContext& context)
             .shadowParams = glm::vec4(_shadowParams.x, _shadowParams.y, _shadowParams.z, shadowMapIndex != kInvalidResourceIndex ? _shadowParams.w : 0.0f),
             .shadowFilterParams = _shadowFilterParams,
             .contactShadowParams = _contactShadowParams,
-            .shadowIndices = glm::uvec4(shadowMapIndex, _environmentImageIndex, _shadowCascadeCount, 0u),
+            .shadowIndices = glm::uvec4(shadowMapIndex, _environmentImageIndex, _shadowCascadeCount, _iblBrdfLutImageIndex),
             .directionalColor = _directionalLightColor,
             .pointPositionAndIntensity = _pointLightPositionAndIntensity,
             .pointColor = _pointLightColor,

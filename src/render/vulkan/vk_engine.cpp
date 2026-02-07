@@ -2052,7 +2052,7 @@ void VestaEngine::finish_benchmark()
            << CsvEscape(settings.externalHdriAvailable ? fmt::format("{}x{}", settings.externalHdriWidth, settings.externalHdriHeight) : "") << ','
            << (settings.externalHdriIsHdr ? "true" : "false") << ','
            << (iblStats.externalSourceAvailable ? "External" : "Procedural") << ','
-           << CsvEscape(iblStats.environmentMapUploaded ? "EquirectSampling" : "Staged") << ','
+           << CsvEscape(iblStats.environmentMapUploaded ? "EquirectSampling+BRDFLUT" : (iblStats.brdfLutAvailable ? "Procedural+BRDFLUT" : "Staged")) << ','
            << CsvEscape(fmt::format("{}^2", iblStats.diffuseCubemapResolution)) << ','
            << CsvEscape(fmt::format("{}^2/{} mips", iblStats.specularCubemapResolution, iblStats.specularMipCount)) << ','
            << CsvEscape(fmt::format("{}^2", iblStats.brdfLutResolution)) << ','
