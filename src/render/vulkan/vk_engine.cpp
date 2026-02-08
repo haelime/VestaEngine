@@ -2557,6 +2557,8 @@ void VestaEngine::clear_texture_preview_descriptors()
         _texturePreviewDescriptors.clear();
         _frameTexturePreviewDescriptors.clear();
         _frameTexturePreviewImages.clear();
+        _engineTexturePreviewDescriptors.clear();
+        _engineTexturePreviewImages.clear();
         _texturePreviewSceneVersion = 0;
         return;
     }
@@ -2572,9 +2574,16 @@ void VestaEngine::clear_texture_preview_descriptors()
             ImGui_ImplVulkan_RemoveTexture(descriptor);
         }
     }
+    for (VkDescriptorSet descriptor : _engineTexturePreviewDescriptors) {
+        if (descriptor != VK_NULL_HANDLE) {
+            ImGui_ImplVulkan_RemoveTexture(descriptor);
+        }
+    }
     _texturePreviewDescriptors.clear();
     _frameTexturePreviewDescriptors.clear();
     _frameTexturePreviewImages.clear();
+    _engineTexturePreviewDescriptors.clear();
+    _engineTexturePreviewImages.clear();
     _texturePreviewSceneVersion = 0;
 }
 
@@ -4633,6 +4642,75 @@ void VestaEngine::build_debug_ui()
                 _frameTexturePreviewImages.assign(frameTextures.size(), {});
                 _selectedFrameTexturePreviewIndex = 0;
             }
+            const auto iblStats = _renderer.GetIblStats();
+            const uint64_t externalEnvironmentBytes =
+                iblStats.environmentMapUploaded && iblStats.sourceWidth > 0u && iblStats.sourceHeight > 0u
+                ? static_cast<uint64_t>(iblStats.sourceWidth) * iblStats.sourceHeight * 4u * sizeof(float)
+                : 0u;
+            const uint64_t liveIblTextureBytes =
+                externalEnvironmentBytes + (iblStats.brdfLutAvailable ? iblStats.estimatedBrdfLutBytes : 0u);
+            struct EngineTextureRow {
+                std::string name;
+                vesta::render::ImageHandle image;
+                std::string resolution;
+                std::string format;
+                std::string usage;
+                uint64_t memoryBytes{ 0 };
+                uint32_t bindlessIndex{ vesta::render::kInvalidResourceIndex };
+                std::string state;
+                bool previewable{ false };
+            };
+            std::vector<EngineTextureRow> engineTextures;
+            engineTextures.push_back(EngineTextureRow{
+                .name = "External Environment Equirect",
+                .image = _renderer.GetExternalEnvironmentImage(),
+                .resolution = iblStats.environmentMapUploaded
+                    ? fmt::format("{}x{}", iblStats.sourceWidth, iblStats.sourceHeight)
+                    : "inactive",
+                .format = "RGBA32F",
+                .usage = "sampled environment",
+                .memoryBytes = externalEnvironmentBytes,
+                .bindlessIndex = _renderer.GetEnvironmentSampledImageIndex(),
+                .state = iblStats.environmentMapUploaded ? "live" : "procedural fallback",
+                .previewable = static_cast<bool>(_renderer.GetExternalEnvironmentImage()),
+            });
+            engineTextures.push_back(EngineTextureRow{
+                .name = "IBL BRDF LUT",
+                .image = _renderer.GetIblBrdfLutImage(),
+                .resolution = fmt::format("{}x{}", iblStats.brdfLutResolution, iblStats.brdfLutResolution),
+                .format = "RG32F",
+                .usage = "sampled specular IBL",
+                .memoryBytes = iblStats.estimatedBrdfLutBytes,
+                .bindlessIndex = _renderer.GetIblBrdfLutSampledImageIndex(),
+                .state = iblStats.brdfLutAvailable ? "live" : "staged",
+                .previewable = static_cast<bool>(_renderer.GetIblBrdfLutImage()),
+            });
+            engineTextures.push_back(EngineTextureRow{
+                .name = "Diffuse Irradiance Cubemap",
+                .resolution = fmt::format("{}x{}x6", iblStats.diffuseCubemapResolution, iblStats.diffuseCubemapResolution),
+                .format = "RGBA16F",
+                .usage = "future irradiance convolution",
+                .memoryBytes = iblStats.estimatedDiffuseBytes,
+                .state = iblStats.diffuseBackendAvailable ? "staged" : "backend required",
+            });
+            engineTextures.push_back(EngineTextureRow{
+                .name = "Specular Prefilter Cubemap",
+                .resolution = fmt::format("{}x{}x6 mips {}", iblStats.specularCubemapResolution, iblStats.specularCubemapResolution, iblStats.specularMipCount),
+                .format = "RGBA16F",
+                .usage = "future prefiltered IBL",
+                .memoryBytes = iblStats.estimatedSpecularBytes,
+                .state = iblStats.specularBackendAvailable ? "live" : "staged",
+            });
+            if (_engineTexturePreviewDescriptors.size() != engineTextures.size()) {
+                for (VkDescriptorSet descriptor : _engineTexturePreviewDescriptors) {
+                    if (descriptor != VK_NULL_HANDLE) {
+                        ImGui_ImplVulkan_RemoveTexture(descriptor);
+                    }
+                }
+                _engineTexturePreviewDescriptors.assign(engineTextures.size(), VK_NULL_HANDLE);
+                _engineTexturePreviewImages.assign(engineTextures.size(), {});
+                _selectedEngineTexturePreviewIndex = 0;
+            }
 
             if (ImGui::BeginTabBar("ResourceTabs")) {
                 if (ImGui::BeginTabItem("Summary")) {
@@ -4650,11 +4728,15 @@ void VestaEngine::build_debug_ui()
                         row("Scene Buffers", MiB(sceneBufferBytes));
                         row("Textures Resident", MiB(residentTextureBytes));
                         row("Textures CPU/Source", MiB(textureBytes));
+                        row("Engine IBL Runtime", MiB(liveIblTextureBytes));
                         row("Acceleration Structures", MiB(accelerationBytes));
-                        row("Total GPU Tracked", MiB(sceneBufferBytes + residentTextureBytes + accelerationBytes));
+                        row("Total GPU Tracked", MiB(sceneBufferBytes + residentTextureBytes + accelerationBytes + liveIblTextureBytes));
                         ImGui::EndTable();
                     }
                     ImGui::Text("Textures %u / %zu resident", scene.GetResidentTextureCount(), scene.GetTextures().size());
+                    ImGui::Text("IBL runtime %.2f MiB  staged %.2f MiB",
+                        MiB(liveIblTextureBytes),
+                        MiB(iblStats.estimatedDiffuseBytes + iblStats.estimatedSpecularBytes));
                     ImGui::Text("Dedicated VRAM %u MiB", device.GetDedicatedVideoMemoryMiB());
                     ImGui::Text("Upload Last %.2f MiB  Pending %.2f MiB",
                         MiB(static_cast<uint64_t>(device.GetUploadBatchStats().lastSubmittedBytes)),
@@ -4777,6 +4859,125 @@ void VestaEngine::build_debug_ui()
                         }
                         ImGui::EndGroup();
                     }
+                    ImGui::EndTabItem();
+                }
+                if (ImGui::BeginTabItem("Engine Textures")) {
+                    if (engineTextures.empty()) {
+                        ImGui::TextDisabled("No engine-owned textures are registered.");
+                    } else {
+                        _selectedEngineTexturePreviewIndex =
+                            std::min(_selectedEngineTexturePreviewIndex, engineTextures.size() - 1u);
+                    }
+                    if (ImGui::BeginTable("EngineTextureTable",
+                            8,
+                            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
+                            ImVec2(0.0f, 176.0f))) {
+                        ImGui::TableSetupColumn("Name");
+                        ImGui::TableSetupColumn("Preview", ImGuiTableColumnFlags_WidthFixed, 64.0f);
+                        ImGui::TableSetupColumn("Resolution", ImGuiTableColumnFlags_WidthFixed, 110.0f);
+                        ImGui::TableSetupColumn("Format", ImGuiTableColumnFlags_WidthFixed, 76.0f);
+                        ImGui::TableSetupColumn("Usage");
+                        ImGui::TableSetupColumn("Memory", ImGuiTableColumnFlags_WidthFixed, 78.0f);
+                        ImGui::TableSetupColumn("Bindless", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+                        ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 112.0f);
+                        ImGui::TableHeadersRow();
+                        for (size_t textureIndex = 0; textureIndex < engineTextures.size(); ++textureIndex) {
+                            const EngineTextureRow& row = engineTextures[textureIndex];
+                            ImGui::PushID(static_cast<int>(textureIndex));
+                            ImGui::TableNextRow();
+                            ImGui::TableSetColumnIndex(0);
+                            if (ImGui::Selectable(row.name.c_str(),
+                                    _selectedEngineTexturePreviewIndex == textureIndex,
+                                    ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowItemOverlap)) {
+                                _selectedEngineTexturePreviewIndex = textureIndex;
+                            }
+                            ImGui::TableSetColumnIndex(1);
+                            if (textureIndex < _engineTexturePreviewImages.size()
+                                && _engineTexturePreviewImages[textureIndex] != row.image) {
+                                if (_engineTexturePreviewDescriptors[textureIndex] != VK_NULL_HANDLE) {
+                                    ImGui_ImplVulkan_RemoveTexture(_engineTexturePreviewDescriptors[textureIndex]);
+                                    _engineTexturePreviewDescriptors[textureIndex] = VK_NULL_HANDLE;
+                                }
+                                _engineTexturePreviewImages[textureIndex] = row.image;
+                            }
+                            if (row.previewable && _engineTexturePreviewDescriptors[textureIndex] == VK_NULL_HANDLE) {
+                                _engineTexturePreviewDescriptors[textureIndex] =
+                                    ImGui_ImplVulkan_AddTexture(device.GetDefaultSampler(),
+                                        device.GetImageView(row.image),
+                                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                                _engineTexturePreviewImages[textureIndex] = row.image;
+                            }
+                            if (row.previewable && _engineTexturePreviewDescriptors[textureIndex] != VK_NULL_HANDLE) {
+                                ImGui::Image(reinterpret_cast<ImTextureID>(_engineTexturePreviewDescriptors[textureIndex]),
+                                    ImVec2(48.0f, 48.0f));
+                            } else {
+                                ImGui::TextDisabled("-");
+                            }
+                            ImGui::TableSetColumnIndex(2);
+                            ImGui::TextUnformatted(row.resolution.c_str());
+                            ImGui::TableSetColumnIndex(3);
+                            ImGui::TextUnformatted(row.format.c_str());
+                            ImGui::TableSetColumnIndex(4);
+                            ImGui::TextUnformatted(row.usage.c_str());
+                            ImGui::TableSetColumnIndex(5);
+                            ImGui::Text("%.2f MiB", MiB(row.memoryBytes));
+                            ImGui::TableSetColumnIndex(6);
+                            if (row.bindlessIndex != vesta::render::kInvalidResourceIndex) {
+                                ImGui::Text("%u", row.bindlessIndex);
+                            } else {
+                                ImGui::TextUnformatted("-");
+                            }
+                            ImGui::TableSetColumnIndex(7);
+                            ImGui::TextUnformatted(row.state.c_str());
+                            ImGui::PopID();
+                        }
+                        ImGui::EndTable();
+                    }
+                    if (!engineTextures.empty()) {
+                        const EngineTextureRow& selected = engineTextures[_selectedEngineTexturePreviewIndex];
+                        ImGui::SeparatorText("Selected Engine Texture");
+                        if (selected.previewable
+                            && _engineTexturePreviewDescriptors[_selectedEngineTexturePreviewIndex] != VK_NULL_HANDLE) {
+                            ImGui::Image(reinterpret_cast<ImTextureID>(
+                                             _engineTexturePreviewDescriptors[_selectedEngineTexturePreviewIndex]),
+                                ImVec2(192.0f, 192.0f));
+                        } else {
+                            ImGui::BeginDisabled();
+                            ImGui::Button("No Preview", ImVec2(160.0f, 96.0f));
+                            ImGui::EndDisabled();
+                        }
+                        ImGui::SameLine();
+                        ImGui::BeginGroup();
+                        ImGui::Text("Name: %s", selected.name.c_str());
+                        ImGui::Text("Resolution: %s", selected.resolution.c_str());
+                        ImGui::Text("Format: %s", selected.format.c_str());
+                        ImGui::Text("Usage: %s", selected.usage.c_str());
+                        ImGui::Text("Memory: %.2f MiB", MiB(selected.memoryBytes));
+                        if (selected.bindlessIndex != vesta::render::kInvalidResourceIndex) {
+                            ImGui::Text("Bindless: %u", selected.bindlessIndex);
+                        } else {
+                            ImGui::TextDisabled("Bindless: unavailable");
+                        }
+                        ImGui::Text("State: %s", selected.state.c_str());
+                        if (selected.image) {
+                            ImGui::Text("Image Handle: %u", selected.image.index);
+                        } else {
+                            ImGui::TextDisabled("Image Handle: none");
+                        }
+                        ImGui::EndGroup();
+                    }
+                    ImGui::SeparatorText("IBL Status");
+                    ImGui::Text("Source: %s", iblStats.externalSourceAvailable ? "External HDRI/image" : "Procedural preset");
+                    if (iblStats.externalSourceAvailable) {
+                        ImGui::Text("%ux%u  channels %u  %s",
+                            iblStats.sourceWidth,
+                            iblStats.sourceHeight,
+                            iblStats.sourceChannels,
+                            iblStats.sourceIsHdr ? "HDR" : "LDR");
+                    }
+                    ImGui::Text("Diffuse irradiance: %s", iblStats.diffuseBackendAvailable ? "staged" : "backend required");
+                    ImGui::Text("Specular prefilter: %s", iblStats.specularBackendAvailable ? "live" : "staged");
+                    ImGui::Text("BRDF LUT: %s", iblStats.brdfLutAvailable ? "live" : "staged");
                     ImGui::EndTabItem();
                 }
                 if (ImGui::BeginTabItem("Textures")) {

@@ -694,6 +694,8 @@ public:
     [[nodiscard]] std::string GetSelectionLabel() const;
     [[nodiscard]] uint32_t GetEnvironmentSampledImageIndex() const { return _environmentSampledImageIndex; }
     [[nodiscard]] uint32_t GetIblBrdfLutSampledImageIndex() const { return _iblBrdfLutSampledImageIndex; }
+    [[nodiscard]] ImageHandle GetExternalEnvironmentImage() const { return _externalEnvironmentImage; }
+    [[nodiscard]] ImageHandle GetIblBrdfLutImage() const { return _iblBrdfLutImage; }
 
     void ResetAccumulation() { _pathTraceFrameIndex = 0; }
     bool ReloadShaders();
