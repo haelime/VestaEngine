@@ -12,6 +12,7 @@
 #include <sstream>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <SDL.h>
 #include <SDL_vulkan.h>
@@ -123,6 +124,59 @@ glm::vec2 IntegrateBrdf(float nDotV, float roughness)
         bias += fc * gVis;
     }
     return glm::vec2(scale, bias) / static_cast<float>(kSampleCount);
+}
+
+glm::vec3 DirectionFromEquirectUv(float u, float v)
+{
+    const float phi = (u - 0.5f) * 2.0f * glm::pi<float>();
+    const float theta = v * glm::pi<float>();
+    const float sinTheta = std::sin(theta);
+    return glm::normalize(glm::vec3(std::cos(phi) * sinTheta, std::cos(theta), std::sin(phi) * sinTheta));
+}
+
+glm::vec3 SampleEquirect(std::span<const float> rgbaPixels, uint32_t width, uint32_t height, glm::vec3 direction)
+{
+    if (rgbaPixels.empty() || width == 0u || height == 0u) {
+        return glm::vec3(0.0f);
+    }
+    direction = glm::normalize(direction);
+    float u = std::atan2(direction.z, direction.x) / (2.0f * glm::pi<float>()) + 0.5f;
+    const float v = std::acos(std::clamp(direction.y, -1.0f, 1.0f)) / glm::pi<float>();
+    u = u - std::floor(u);
+    const float x = u * static_cast<float>(width - 1u);
+    const float y = std::clamp(v, 0.0f, 1.0f) * static_cast<float>(height - 1u);
+    const uint32_t x0 = static_cast<uint32_t>(std::floor(x));
+    const uint32_t y0 = static_cast<uint32_t>(std::floor(y));
+    const uint32_t x1 = (x0 + 1u) % width;
+    const uint32_t y1 = std::min(y0 + 1u, height - 1u);
+    const float tx = x - static_cast<float>(x0);
+    const float ty = y - static_cast<float>(y0);
+    auto sample = [&](uint32_t sx, uint32_t sy) {
+        const size_t offset = (static_cast<size_t>(sy) * width + sx) * 4u;
+        return glm::vec3(rgbaPixels[offset + 0u], rgbaPixels[offset + 1u], rgbaPixels[offset + 2u]);
+    };
+    const glm::vec3 a = glm::mix(sample(x0, y0), sample(x1, y0), tx);
+    const glm::vec3 b = glm::mix(sample(x0, y1), sample(x1, y1), tx);
+    return glm::mix(a, b, ty);
+}
+
+glm::vec3 CosineSampleHemisphere(uint32_t index, uint32_t count)
+{
+    const glm::vec2 xi = Hammersley(index, count);
+    const float phi = 2.0f * glm::pi<float>() * xi.x;
+    const float r = std::sqrt(xi.y);
+    const float x = r * std::cos(phi);
+    const float z = r * std::sin(phi);
+    const float y = std::sqrt(std::max(0.0f, 1.0f - xi.y));
+    return glm::vec3(x, y, z);
+}
+
+glm::vec3 TangentToWorld(glm::vec3 tangentSample, glm::vec3 normal)
+{
+    const glm::vec3 up = std::abs(normal.y) < 0.999f ? glm::vec3(0.0f, 1.0f, 0.0f) : glm::vec3(1.0f, 0.0f, 0.0f);
+    const glm::vec3 tangent = glm::normalize(glm::cross(up, normal));
+    const glm::vec3 bitangent = glm::cross(normal, tangent);
+    return glm::normalize(tangent * tangentSample.x + normal * tangentSample.y + bitangent * tangentSample.z);
 }
 
 bool NeedsGeometryPass(const RendererSettings& settings)
@@ -705,6 +759,7 @@ void ConfigureDeferredLightingPass(Renderer& renderer, IRenderPass& pass, const 
         static_cast<float>(settings.environmentPreset),
         settings.environmentDiffuseStrength));
     lightingPass.SetEnvironmentImage(renderer.GetEnvironmentSampledImageIndex());
+    lightingPass.SetIblDiffuseIrradianceImage(renderer.GetIblDiffuseIrradianceSampledImageIndex());
     lightingPass.SetIblBrdfLutImage(renderer.GetIblBrdfLutSampledImageIndex());
     lightingPass.SetEnvironmentSpecularStrength(settings.environmentSpecularStrength);
     lightingPass.SetAmbientOcclusion(settings.enableSsao, settings.ssaoRadius, settings.ssaoIntensity);
@@ -1874,9 +1929,62 @@ void Renderer::CreateIblBrdfLut()
     _iblBrdfLutSampledImageIndex = _device.GetImageResource(_iblBrdfLutImage).bindless.sampledImage;
 }
 
+void Renderer::CreateDiffuseIrradianceEquirect(std::span<const float> rgbaPixels, uint32_t width, uint32_t height)
+{
+    if (_device.GetDevice() == VK_NULL_HANDLE || rgbaPixels.empty() || width == 0u || height == 0u) {
+        return;
+    }
+    if (_iblDiffuseIrradianceImage) {
+        _device.DestroyImage(_iblDiffuseIrradianceImage);
+        _iblDiffuseIrradianceImage = {};
+        _iblDiffuseIrradianceSampledImageIndex = kInvalidResourceIndex;
+    }
+
+    constexpr uint32_t kIrradianceWidth = 64u;
+    constexpr uint32_t kIrradianceHeight = 32u;
+    constexpr uint32_t kSampleCount = 96u;
+    std::vector<float> irradiance(static_cast<size_t>(kIrradianceWidth) * kIrradianceHeight * 4u, 1.0f);
+    for (uint32_t y = 0; y < kIrradianceHeight; ++y) {
+        const float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(kIrradianceHeight);
+        for (uint32_t x = 0; x < kIrradianceWidth; ++x) {
+            const float u = (static_cast<float>(x) + 0.5f) / static_cast<float>(kIrradianceWidth);
+            const glm::vec3 normal = DirectionFromEquirectUv(u, v);
+            glm::vec3 sum(0.0f);
+            for (uint32_t sampleIndex = 0; sampleIndex < kSampleCount; ++sampleIndex) {
+                const glm::vec3 sampleDirection = TangentToWorld(CosineSampleHemisphere(sampleIndex, kSampleCount), normal);
+                sum += SampleEquirect(rgbaPixels, width, height, sampleDirection);
+            }
+            const glm::vec3 value = sum / static_cast<float>(kSampleCount);
+            const size_t offset = (static_cast<size_t>(y) * kIrradianceWidth + x) * 4u;
+            irradiance[offset + 0u] = value.r;
+            irradiance[offset + 1u] = value.g;
+            irradiance[offset + 2u] = value.b;
+            irradiance[offset + 3u] = 1.0f;
+        }
+    }
+
+    _iblDiffuseIrradianceImage = _device.CreateImage(ImageDesc{
+        .extent = VkExtent3D{ kIrradianceWidth, kIrradianceHeight, 1u },
+        .format = VK_FORMAT_R32G32B32A32_SFLOAT,
+        .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        .aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT,
+        .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+        .registerBindlessSampled = true,
+        .debugName = "IblDiffuseIrradianceEquirect",
+    });
+    _device.UploadImageData(_iblDiffuseIrradianceImage,
+        std::span<const std::byte>(reinterpret_cast<const std::byte*>(irradiance.data()), irradiance.size() * sizeof(float)));
+    _iblDiffuseIrradianceSampledImageIndex = _device.GetImageResource(_iblDiffuseIrradianceImage).bindless.sampledImage;
+}
+
 void Renderer::DestroyIblResources()
 {
     ClearExternalEnvironmentMap();
+    if (_iblDiffuseIrradianceImage) {
+        _device.DestroyImage(_iblDiffuseIrradianceImage);
+        _iblDiffuseIrradianceImage = {};
+    }
+    _iblDiffuseIrradianceSampledImageIndex = kInvalidResourceIndex;
     if (_iblBrdfLutImage) {
         _device.DestroyImage(_iblBrdfLutImage);
         _iblBrdfLutImage = {};
@@ -1913,6 +2021,11 @@ bool Renderer::LoadExternalEnvironmentMap(const std::filesystem::path& path)
     _device.UploadImageData(_externalEnvironmentImage,
         std::span<const std::byte>(reinterpret_cast<const std::byte*>(pixels), byteCount));
     _environmentSampledImageIndex = _device.GetImageResource(_externalEnvironmentImage).bindless.sampledImage;
+    if (_environmentSampledImageIndex != kInvalidResourceIndex) {
+        CreateDiffuseIrradianceEquirect(std::span<const float>(pixels, texelCount * 4u),
+            static_cast<uint32_t>(width),
+            static_cast<uint32_t>(height));
+    }
     stbi_image_free(pixels);
     ResetAccumulation();
     return _environmentSampledImageIndex != kInvalidResourceIndex;
@@ -1925,6 +2038,11 @@ void Renderer::ClearExternalEnvironmentMap()
         _externalEnvironmentImage = {};
     }
     _environmentSampledImageIndex = kInvalidResourceIndex;
+    if (_iblDiffuseIrradianceImage) {
+        _device.DestroyImage(_iblDiffuseIrradianceImage);
+        _iblDiffuseIrradianceImage = {};
+    }
+    _iblDiffuseIrradianceSampledImageIndex = kInvalidResourceIndex;
     ResetAccumulation();
 }
 
@@ -2146,7 +2264,10 @@ IblStats Renderer::GetIblStats() const
     stats.sourceChannels = _settings.externalHdriChannels;
 
     const uint64_t diffusePixels = kCubeFaces * stats.diffuseCubemapResolution * stats.diffuseCubemapResolution;
-    stats.estimatedDiffuseBytes = diffusePixels * kRgba16fBytesPerTexel;
+    stats.estimatedDiffuseBytes = _iblDiffuseIrradianceImage
+        ? static_cast<uint64_t>(_device.GetImageExtent(_iblDiffuseIrradianceImage).width)
+            * _device.GetImageExtent(_iblDiffuseIrradianceImage).height * 4u * sizeof(float)
+        : diffusePixels * kRgba16fBytesPerTexel;
 
     uint64_t specularPixels = 0;
     for (uint32_t mip = 0; mip < stats.specularMipCount; ++mip) {
@@ -2158,6 +2279,7 @@ IblStats Renderer::GetIblStats() const
 
     stats.diffuseBackendAvailable = true;
     stats.specularBackendAvailable = false;
+    stats.diffuseIrradianceAvailable = _iblDiffuseIrradianceSampledImageIndex != kInvalidResourceIndex;
     stats.brdfLutAvailable = _iblBrdfLutSampledImageIndex != kInvalidResourceIndex;
     return stats;
 }

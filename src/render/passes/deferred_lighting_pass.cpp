@@ -54,6 +54,7 @@ struct DeferredLightingConstants {
     glm::vec4 shadowFilterParams{ 1.0f, 0.0f, 0.0f, 0.0f }; // filter radius, PCSS enabled
     glm::vec4 contactShadowParams{ 1.0f, 1.2f, 0.35f, 0.0f }; // enabled, length, intensity
     glm::uvec4 shadowIndices{ kInvalidResourceIndex, 0u, 0u, 0u };
+    glm::uvec4 iblIndices{ kInvalidResourceIndex, kInvalidResourceIndex, kInvalidResourceIndex, kInvalidResourceIndex };
     glm::vec4 directionalColor{ 1.0f, 1.0f, 1.0f, 0.0f };
     glm::vec4 pointPositionAndIntensity{ 0.0f, 2.0f, 0.0f, 0.0f };
     glm::vec4 pointColor{ 1.0f, 0.82f, 0.55f, 0.0f };
@@ -147,6 +148,11 @@ void DeferredLightingPass::SetEnvironment(glm::vec4 environmentParams)
 void DeferredLightingPass::SetEnvironmentImage(uint32_t sampledImageIndex)
 {
     _environmentImageIndex = sampledImageIndex;
+}
+
+void DeferredLightingPass::SetIblDiffuseIrradianceImage(uint32_t sampledImageIndex)
+{
+    _iblDiffuseIrradianceImageIndex = sampledImageIndex;
 }
 
 void DeferredLightingPass::SetIblBrdfLutImage(uint32_t sampledImageIndex)
@@ -306,6 +312,7 @@ void DeferredLightingPass::Execute(const RenderGraphContext& context)
             .shadowFilterParams = _shadowFilterParams,
             .contactShadowParams = _contactShadowParams,
             .shadowIndices = glm::uvec4(shadowMapIndex, _environmentImageIndex, _shadowCascadeCount, _iblBrdfLutImageIndex),
+            .iblIndices = glm::uvec4(_environmentImageIndex, _iblDiffuseIrradianceImageIndex, _iblBrdfLutImageIndex, kInvalidResourceIndex),
             .directionalColor = _directionalLightColor,
             .pointPositionAndIntensity = _pointLightPositionAndIntensity,
             .pointColor = _pointLightColor,

@@ -17,6 +17,7 @@ struct DeferredLightingConstants {
     vec4 shadowFilterParams;
     vec4 contactShadowParams;
     uvec4 shadowIndices;
+    uvec4 iblIndices;
     vec4 directionalColor;
     vec4 pointPositionAndIntensity;
     vec4 pointColor;
@@ -132,6 +133,12 @@ vec3 sampleDiffuseIbl(vec3 normal)
 {
     float strength = clamp(pc.environmentParams.w, 0.0, 2.0);
     vec3 bentNormal = normalize(mix(normal, vec3(0.0, 1.0, 0.0), 0.18));
+    if (pc.lightingConstantsBufferIndex != INVALID_BUFFER_INDEX) {
+        DeferredLightingConstants constants = lightingConstantsBuffers[nonuniformEXT(int(pc.lightingConstantsBufferIndex))].values;
+        if (constants.iblIndices.y != INVALID_IMAGE_INDEX) {
+            return sampleEnvironmentMap(constants.iblIndices.y, bentNormal) * strength;
+        }
+    }
     return sampleSky(bentNormal) * strength;
 }
 
@@ -142,9 +149,10 @@ vec3 sampleSpecularIbl(vec3 reflectionDirection, vec3 normal, vec3 viewDirection
     vec3 specular = mix(sampleSky(reflectionDirection), sampleSky(blurredDirection), clamp(roughness, 0.0, 1.0)) * strength;
     if (pc.lightingConstantsBufferIndex != INVALID_BUFFER_INDEX) {
         DeferredLightingConstants constants = lightingConstantsBuffers[nonuniformEXT(int(pc.lightingConstantsBufferIndex))].values;
-        if (constants.shadowIndices.w != INVALID_IMAGE_INDEX) {
+        uint brdfImageIndex = constants.iblIndices.z != INVALID_IMAGE_INDEX ? constants.iblIndices.z : constants.shadowIndices.w;
+        if (brdfImageIndex != INVALID_IMAGE_INDEX) {
             float nDotV = clamp(dot(normal, viewDirection), 0.0, 1.0);
-            vec2 brdf = texture(sampledImages[nonuniformEXT(int(constants.shadowIndices.w))], vec2(nDotV, roughness)).rg;
+            vec2 brdf = texture(sampledImages[nonuniformEXT(int(brdfImageIndex))], vec2(nDotV, roughness)).rg;
             specular *= brdf.x + brdf.y;
         }
     }

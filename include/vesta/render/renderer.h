@@ -291,6 +291,7 @@ struct IblStats {
     bool proceduralSource{ true };
     bool diffuseBackendAvailable{ true };
     bool specularBackendAvailable{ false };
+    bool diffuseIrradianceAvailable{ false };
     bool brdfLutAvailable{ false };
 };
 
@@ -694,8 +695,10 @@ public:
     [[nodiscard]] std::string GetSelectionLabel() const;
     [[nodiscard]] uint32_t GetEnvironmentSampledImageIndex() const { return _environmentSampledImageIndex; }
     [[nodiscard]] uint32_t GetIblBrdfLutSampledImageIndex() const { return _iblBrdfLutSampledImageIndex; }
+    [[nodiscard]] uint32_t GetIblDiffuseIrradianceSampledImageIndex() const { return _iblDiffuseIrradianceSampledImageIndex; }
     [[nodiscard]] ImageHandle GetExternalEnvironmentImage() const { return _externalEnvironmentImage; }
     [[nodiscard]] ImageHandle GetIblBrdfLutImage() const { return _iblBrdfLutImage; }
+    [[nodiscard]] ImageHandle GetIblDiffuseIrradianceImage() const { return _iblDiffuseIrradianceImage; }
 
     void ResetAccumulation() { _pathTraceFrameIndex = 0; }
     bool ReloadShaders();
@@ -836,6 +839,7 @@ private:
     [[nodiscard]] RegisteredPassEntry* FindPassEntry(std::string_view id);
     [[nodiscard]] const RegisteredPassEntry* FindPassEntry(std::string_view id) const;
     void CreateIblBrdfLut();
+    void CreateDiffuseIrradianceEquirect(std::span<const float> rgbaPixels, uint32_t width, uint32_t height);
     void DestroyIblResources();
 
     RenderDevice _device;
@@ -882,6 +886,8 @@ private:
     std::filesystem::path _pendingScreenshotPath;
     ImageHandle _externalEnvironmentImage{};
     uint32_t _environmentSampledImageIndex{ kInvalidResourceIndex };
+    ImageHandle _iblDiffuseIrradianceImage{};
+    uint32_t _iblDiffuseIrradianceSampledImageIndex{ kInvalidResourceIndex };
     ImageHandle _iblBrdfLutImage{};
     uint32_t _iblBrdfLutSampledImageIndex{ kInvalidResourceIndex };
     glm::vec2 _lastDragMousePosition{ 0.0f };

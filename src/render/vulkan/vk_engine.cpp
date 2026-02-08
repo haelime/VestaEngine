@@ -2052,7 +2052,10 @@ void VestaEngine::finish_benchmark()
            << CsvEscape(settings.externalHdriAvailable ? fmt::format("{}x{}", settings.externalHdriWidth, settings.externalHdriHeight) : "") << ','
            << (settings.externalHdriIsHdr ? "true" : "false") << ','
            << (iblStats.externalSourceAvailable ? "External" : "Procedural") << ','
-           << CsvEscape(iblStats.environmentMapUploaded ? "EquirectSampling+BRDFLUT" : (iblStats.brdfLutAvailable ? "Procedural+BRDFLUT" : "Staged")) << ','
+           << CsvEscape(iblStats.environmentMapUploaded
+                   ? (iblStats.diffuseIrradianceAvailable ? "EquirectSampling+DiffuseIrradiance+BRDFLUT" : "EquirectSampling+BRDFLUT")
+                   : (iblStats.brdfLutAvailable ? "Procedural+BRDFLUT" : "Staged"))
+           << ','
            << CsvEscape(fmt::format("{}^2", iblStats.diffuseCubemapResolution)) << ','
            << CsvEscape(fmt::format("{}^2/{} mips", iblStats.specularCubemapResolution, iblStats.specularMipCount)) << ','
            << CsvEscape(fmt::format("{}^2", iblStats.brdfLutResolution)) << ','
@@ -2339,6 +2342,7 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "    \"estimated_brdf_lut_bytes\": " << iblStats.estimatedBrdfLutBytes << ",\n"
            << "    \"diffuse_backend_available\": " << (iblStats.diffuseBackendAvailable ? "true" : "false") << ",\n"
            << "    \"specular_backend_available\": " << (iblStats.specularBackendAvailable ? "true" : "false") << ",\n"
+           << "    \"diffuse_irradiance_available\": " << (iblStats.diffuseIrradianceAvailable ? "true" : "false") << ",\n"
            << "    \"brdf_lut_available\": " << (iblStats.brdfLutAvailable ? "true" : "false") << "\n"
            << "  },\n"
            << "  \"exposure_ev\": " << settings.cameraExposureEv << ",\n"
@@ -4486,12 +4490,12 @@ void VestaEngine::build_debug_ui()
                         MiB(iblStats.estimatedSpecularBytes),
                         MiB(iblStats.estimatedBrdfLutBytes));
                     ImGui::Text("Diffuse %s  Prefilter %s  BRDF LUT %s",
-                        iblStats.environmentMapUploaded ? "equirect sample" : (iblStats.diffuseBackendAvailable ? "procedural live" : "staged"),
+                        iblStats.diffuseIrradianceAvailable ? "irradiance texture" : (iblStats.environmentMapUploaded ? "equirect sample" : (iblStats.diffuseBackendAvailable ? "procedural live" : "staged")),
                         iblStats.specularBackendAvailable ? "live" : "staged",
                         iblStats.brdfLutAvailable ? "live" : "staged");
                     ImGui::TextDisabled(iblStats.environmentMapUploaded
-                        ? "External HDRI is sampled directly; irradiance/prefilter/BRDF LUT generation remains staged."
-                        : "External HDRI metadata is ready; irradiance/prefilter/BRDF LUT generation remains staged.");
+                        ? "External HDRI is sampled directly and convolved into a diffuse irradiance equirect texture; specular prefilter remains staged."
+                        : "Procedural sky is live; external HDRI irradiance/prefilter generation is available after an HDRI is loaded.");
                     ImGui::EndTabItem();
                 }
                 if (ImGui::BeginTabItem("Animation")) {
@@ -4648,7 +4652,9 @@ void VestaEngine::build_debug_ui()
                 ? static_cast<uint64_t>(iblStats.sourceWidth) * iblStats.sourceHeight * 4u * sizeof(float)
                 : 0u;
             const uint64_t liveIblTextureBytes =
-                externalEnvironmentBytes + (iblStats.brdfLutAvailable ? iblStats.estimatedBrdfLutBytes : 0u);
+                externalEnvironmentBytes
+                + (iblStats.diffuseIrradianceAvailable ? iblStats.estimatedDiffuseBytes : 0u)
+                + (iblStats.brdfLutAvailable ? iblStats.estimatedBrdfLutBytes : 0u);
             struct EngineTextureRow {
                 std::string name;
                 vesta::render::ImageHandle image;
@@ -4686,12 +4692,15 @@ void VestaEngine::build_debug_ui()
                 .previewable = static_cast<bool>(_renderer.GetIblBrdfLutImage()),
             });
             engineTextures.push_back(EngineTextureRow{
-                .name = "Diffuse Irradiance Cubemap",
-                .resolution = fmt::format("{}x{}x6", iblStats.diffuseCubemapResolution, iblStats.diffuseCubemapResolution),
-                .format = "RGBA16F",
-                .usage = "future irradiance convolution",
+                .name = iblStats.diffuseIrradianceAvailable ? "Diffuse Irradiance Equirect" : "Diffuse Irradiance Cubemap",
+                .image = _renderer.GetIblDiffuseIrradianceImage(),
+                .resolution = iblStats.diffuseIrradianceAvailable ? "64x32 equirect" : fmt::format("{}x{}x6", iblStats.diffuseCubemapResolution, iblStats.diffuseCubemapResolution),
+                .format = iblStats.diffuseIrradianceAvailable ? "RGBA32F" : "RGBA16F",
+                .usage = iblStats.diffuseIrradianceAvailable ? "sampled diffuse IBL" : "future irradiance convolution",
                 .memoryBytes = iblStats.estimatedDiffuseBytes,
-                .state = iblStats.diffuseBackendAvailable ? "staged" : "backend required",
+                .bindlessIndex = _renderer.GetIblDiffuseIrradianceSampledImageIndex(),
+                .state = iblStats.diffuseIrradianceAvailable ? "live" : (iblStats.diffuseBackendAvailable ? "staged" : "backend required"),
+                .previewable = static_cast<bool>(_renderer.GetIblDiffuseIrradianceImage()),
             });
             engineTextures.push_back(EngineTextureRow{
                 .name = "Specular Prefilter Cubemap",
@@ -4975,7 +4984,7 @@ void VestaEngine::build_debug_ui()
                             iblStats.sourceChannels,
                             iblStats.sourceIsHdr ? "HDR" : "LDR");
                     }
-                    ImGui::Text("Diffuse irradiance: %s", iblStats.diffuseBackendAvailable ? "staged" : "backend required");
+                    ImGui::Text("Diffuse irradiance: %s", iblStats.diffuseIrradianceAvailable ? "live equirect" : (iblStats.diffuseBackendAvailable ? "staged" : "backend required"));
                     ImGui::Text("Specular prefilter: %s", iblStats.specularBackendAvailable ? "live" : "staged");
                     ImGui::Text("BRDF LUT: %s", iblStats.brdfLutAvailable ? "live" : "staged");
                     ImGui::EndTabItem();
