@@ -25,6 +25,7 @@ public:
     void SetEnvironmentImage(uint32_t sampledImageIndex);
     void SetIblDiffuseIrradianceImage(uint32_t sampledImageIndex);
     void SetIblBrdfLutImage(uint32_t sampledImageIndex);
+    void SetIblSpecularPrefilterImage(uint32_t sampledImageIndex);
     void SetEnvironmentSpecularStrength(float strength);
     void SetAmbientOcclusion(bool enabled, float radius, float intensity);
     void SetScreenSpaceReflections(bool enabled, float maxDistance, float thickness, float intensity);
@@ -70,6 +71,7 @@ private:
     uint32_t _environmentImageIndex{ kInvalidResourceIndex };
     uint32_t _iblDiffuseIrradianceImageIndex{ kInvalidResourceIndex };
     uint32_t _iblBrdfLutImageIndex{ kInvalidResourceIndex };
+    uint32_t _iblSpecularPrefilterImageIndex{ kInvalidResourceIndex };
     float _environmentSpecularStrength{ 0.45f };
     glm::vec4 _ssaoParams{ 1.0f, 0.75f, 1.35f, 0.0f };
     glm::vec4 _ssrParams{ 1.0f, 18.0f, 0.18f, 0.65f };
