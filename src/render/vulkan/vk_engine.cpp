@@ -48,10 +48,11 @@ VestaEngine& VestaEngine::Get() { return *loadedEngine; }
 
 namespace {
 constexpr size_t kMaxRecentScenePaths = 5;
-constexpr std::array<std::string_view, 10> kBenchmarkPassNames{
+constexpr std::array<std::string_view, 11> kBenchmarkPassNames{
     "GeometryRasterPass",
     "ShadowMapPass",
     "OverdrawPass",
+    "RayEffectsPass",
     "DeferredLightingPass",
     "GaussianSplatPass",
     "OfficialGaussianRasterPass",
@@ -1334,6 +1335,26 @@ void VestaEngine::init_renderer()
         settings.ssgiSampleCount = std::clamp(*_launchOptions.startupSsgiSamples, 4u, 16u);
         resetAccumulation = true;
     }
+    if (_launchOptions.startupRtShadowsEnabled.has_value()) {
+        settings.enableRtShadows = *_launchOptions.startupRtShadowsEnabled;
+        resetAccumulation = true;
+    }
+    if (_launchOptions.startupRtAoEnabled.has_value()) {
+        settings.enableRtAmbientOcclusion = *_launchOptions.startupRtAoEnabled;
+        resetAccumulation = true;
+    }
+    if (_launchOptions.startupRtHalfResolution.has_value()) {
+        settings.rtHalfResolution = *_launchOptions.startupRtHalfResolution;
+        resetAccumulation = true;
+    }
+    if (_launchOptions.startupRtMaxRayDistance.has_value()) {
+        settings.rtMaxRayDistance = std::clamp(*_launchOptions.startupRtMaxRayDistance, 0.1f, 10000.0f);
+        resetAccumulation = true;
+    }
+    if (_launchOptions.startupRtAoRadius.has_value()) {
+        settings.rtAoRadius = std::clamp(*_launchOptions.startupRtAoRadius, 0.05f, 32.0f);
+        resetAccumulation = true;
+    }
     if (_launchOptions.startupMotionBlurEnabled.has_value()) {
         settings.enableMotionBlur = *_launchOptions.startupMotionBlurEnabled;
         resetAccumulation = true;
@@ -1876,7 +1897,7 @@ void VestaEngine::finish_benchmark()
                << "gaussian_projected,gaussian_duplicates,gaussian_padded_duplicates,gaussian_tiles,gaussian_avg_tiles_touched,gaussian_rebuilds,"
                << "gaussian_preprocess_ms,gaussian_scan_ms,gaussian_duplicate_ms,gaussian_sort_ms,gaussian_range_ms,"
                << "gaussian_raster_ms,gaussian_total_build_ms,"
-               << "geometry_pass_gpu_ms,shadow_pass_gpu_ms,overdraw_pass_gpu_ms,deferred_pass_gpu_ms,legacy_gaussian_pass_gpu_ms,official_gaussian_pass_gpu_ms,"
+               << "geometry_pass_gpu_ms,shadow_pass_gpu_ms,overdraw_pass_gpu_ms,ray_effects_pass_gpu_ms,deferred_pass_gpu_ms,legacy_gaussian_pass_gpu_ms,official_gaussian_pass_gpu_ms,"
                << "path_trace_pass_gpu_ms,path_denoise_pass_gpu_ms,temporal_aa_pass_gpu_ms,composite_pass_gpu_ms\n";
     }
 
@@ -2122,7 +2143,8 @@ void VestaEngine::finish_benchmark()
            << averagePassGpuMs(6) << ','
            << averagePassGpuMs(7) << ','
            << averagePassGpuMs(8) << ','
-           << averagePassGpuMs(9) << '\n';
+           << averagePassGpuMs(9) << ','
+           << averagePassGpuMs(10) << '\n';
 
     fmt::println("Benchmark written to {}", outputPath.string());
 }
@@ -6099,7 +6121,8 @@ void VestaEngine::draw_ray_tracing_debug_panel()
 
     ImGui::SeparatorText("Implemented vs Stub");
     ImGui::BulletText("Hardware path tracing uses RT pipeline when available.");
-    ImGui::BulletText("Hybrid RT shadow/AO/reflection controls are staged UI until ray-query passes are added.");
+    ImGui::BulletText("Hybrid RT shadows and AO use a ray-query visibility pass when Ray Query and TLAS are available.");
+    ImGui::BulletText("RT reflection and GI controls remain staged until hit shading and resolve passes are added.");
     ImGui::BulletText("Acceleration structure residency and build timing are live in Resource Inspector.");
 }
 

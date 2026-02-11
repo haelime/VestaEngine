@@ -38,6 +38,11 @@ void PrintUsage()
         << "  --ssgi-radius <value>         SSGI sample radius.\n"
         << "  --ssgi-intensity <value>      SSGI bounce strength.\n"
         << "  --ssgi-samples <4-16>         SSGI sample count.\n"
+        << "  --rt-shadows <on|off>         Toggle hybrid ray-query shadows.\n"
+        << "  --rt-ao <on|off>              Toggle hybrid ray-query ambient occlusion.\n"
+        << "  --rt-half <on|off>            Toggle half-resolution hybrid ray effects.\n"
+        << "  --rt-distance <value>         Hybrid ray effects max ray distance.\n"
+        << "  --rt-ao-radius <value>        Hybrid ray-query AO radius.\n"
         << "  --shadow-pcss <on|off>        Toggle PCSS-style soft shadow filtering.\n"
         << "  --shadow-filter-radius <0.5-4> Shadow PCF/PCSS filter radius.\n"
         << "  --motion-blur <on|off>        Toggle screen-space motion blur.\n"
@@ -600,6 +605,68 @@ int main(int argc, char* argv[])
                 return 1;
             }
             options.startupSsgiSamples = samples;
+            continue;
+        }
+        if (argument == "--rt-shadows") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            options.startupRtShadowsEnabled = ParseToggle(value);
+            if (!options.startupRtShadowsEnabled.has_value()) {
+                std::cerr << "Invalid RT shadows toggle: " << value << "\n";
+                return 1;
+            }
+            continue;
+        }
+        if (argument == "--rt-ao") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            options.startupRtAoEnabled = ParseToggle(value);
+            if (!options.startupRtAoEnabled.has_value()) {
+                std::cerr << "Invalid RT AO toggle: " << value << "\n";
+                return 1;
+            }
+            continue;
+        }
+        if (argument == "--rt-half") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            options.startupRtHalfResolution = ParseToggle(value);
+            if (!options.startupRtHalfResolution.has_value()) {
+                std::cerr << "Invalid RT half-resolution toggle: " << value << "\n";
+                return 1;
+            }
+            continue;
+        }
+        if (argument == "--rt-distance") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            float distance = 0.0f;
+            if (!TryParseFloat(value, distance) || distance <= 0.0f) {
+                std::cerr << "Invalid RT ray distance: " << value << "\n";
+                return 1;
+            }
+            options.startupRtMaxRayDistance = distance;
+            continue;
+        }
+        if (argument == "--rt-ao-radius") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            float radius = 0.0f;
+            if (!TryParseFloat(value, radius) || radius <= 0.0f) {
+                std::cerr << "Invalid RT AO radius: " << value << "\n";
+                return 1;
+            }
+            options.startupRtAoRadius = radius;
             continue;
         }
         if (argument == "--shadow-pcss") {

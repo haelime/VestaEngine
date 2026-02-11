@@ -48,6 +48,11 @@ struct EngineLaunchOptions {
     std::optional<float> startupSsgiRadius;
     std::optional<float> startupSsgiIntensity;
     std::optional<uint32_t> startupSsgiSamples;
+    std::optional<bool> startupRtShadowsEnabled;
+    std::optional<bool> startupRtAoEnabled;
+    std::optional<bool> startupRtHalfResolution;
+    std::optional<float> startupRtMaxRayDistance;
+    std::optional<float> startupRtAoRadius;
     std::optional<bool> startupMotionBlurEnabled;
     std::optional<float> startupMotionBlurStrength;
     std::optional<uint32_t> startupEnvironmentPreset;
@@ -192,8 +197,8 @@ private:
         uint32_t stableGaussianFrames{ 0 };
         bool screenshotQueued{ false };
         std::vector<float> frameTimesMs;
-        std::array<float, 10> passGpuMsSums{};
-        std::array<uint32_t, 10> passGpuSampleCounts{};
+        std::array<float, 11> passGpuMsSums{};
+        std::array<uint32_t, 11> passGpuSampleCounts{};
     } _benchmarkState;
     struct StartupState {
         bool safeOverridesActive{ false };

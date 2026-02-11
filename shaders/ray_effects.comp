@@ -1,0 +1,119 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : enable
+#extension GL_EXT_ray_query : require
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D sampledImages[];
+layout(rgba16f, set = 0, binding = 1) uniform image2D storageImages[];
+layout(set = 1, binding = 0) uniform accelerationStructureEXT topLevelAS;
+
+layout(push_constant) uniform RayEffectsPushConstants {
+    uint normalImageIndex;
+    uint depthImageIndex;
+    uint outputImageIndex;
+    uint frameIndex;
+    mat4 inverseViewProjection;
+    vec4 cameraPosition;
+    vec4 lightDirectionAndIntensity;
+    uvec4 sampleCounts;
+    vec4 rayParams;
+    uvec4 flags;
+} pc;
+
+const uint INVALID_IMAGE_INDEX = 0xffffffffu;
+
+vec3 reconstructWorldPosition(vec2 uv, float depth)
+{
+    vec2 ndc = uv * 2.0 - 1.0;
+    vec4 world = pc.inverseViewProjection * vec4(ndc, depth, 1.0);
+    return world.xyz / max(world.w, 1.0e-4);
+}
+
+float traceVisibility(vec3 origin, vec3 direction, float tMin, float tMax)
+{
+    rayQueryEXT rq;
+    rayQueryInitializeEXT(rq,
+        topLevelAS,
+        gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT,
+        0xff,
+        origin,
+        tMin,
+        direction,
+        tMax);
+    while (rayQueryProceedEXT(rq)) {
+    }
+    return rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT ? 1.0 : 0.0;
+}
+
+uint hash(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+float random01(uint seed)
+{
+    return float(hash(seed) & 0x00ffffffu) / float(0x01000000u);
+}
+
+vec3 sampleHemisphere(vec3 normal, uint sampleIndex, uint sampleCount, ivec2 pixel)
+{
+    uint seed = uint(pixel.x) * 1973u + uint(pixel.y) * 9277u + pc.frameIndex * 26699u + sampleIndex * 7919u;
+    float u = (float(sampleIndex) + random01(seed)) / max(float(sampleCount), 1.0);
+    float v = random01(seed ^ 0x9e3779b9u);
+    float phi = 6.28318530718 * v;
+    float cosTheta = sqrt(1.0 - u);
+    float sinTheta = sqrt(max(1.0 - cosTheta * cosTheta, 0.0));
+    vec3 local = vec3(cos(phi) * sinTheta, sin(phi) * sinTheta, cosTheta);
+    vec3 up = abs(normal.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    vec3 tangent = normalize(cross(up, normal));
+    vec3 bitangent = cross(normal, tangent);
+    return normalize(tangent * local.x + bitangent * local.y + normal * local.z);
+}
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 outputSize = imageSize(storageImages[nonuniformEXT(int(pc.outputImageIndex))]);
+    if (pixel.x >= outputSize.x || pixel.y >= outputSize.y) {
+        return;
+    }
+
+    vec2 uv = (vec2(pixel) + 0.5) / vec2(outputSize);
+    float depth = texture(sampledImages[nonuniformEXT(int(pc.depthImageIndex))], uv).r;
+    if (depth >= 0.99999) {
+        imageStore(storageImages[nonuniformEXT(int(pc.outputImageIndex))], pixel, vec4(1.0, 1.0, 0.0, 1.0));
+        return;
+    }
+
+    ivec2 normalSize = imageSize(storageImages[nonuniformEXT(int(pc.normalImageIndex))]);
+    ivec2 normalPixel = clamp(ivec2(uv * vec2(normalSize)), ivec2(0), normalSize - ivec2(1));
+    vec4 normalRoughness = imageLoad(storageImages[nonuniformEXT(int(pc.normalImageIndex))], normalPixel);
+    vec3 normal = normalize(normalRoughness.xyz * 2.0 - 1.0);
+    vec3 worldPosition = reconstructWorldPosition(uv, depth);
+
+    vec3 rayOrigin = worldPosition + normal * 0.025;
+    vec3 lightDirection = normalize(-pc.lightDirectionAndIntensity.xyz);
+    float shadowVisibility = 1.0;
+    if (pc.flags.x != 0u) {
+        shadowVisibility = traceVisibility(rayOrigin, lightDirection, 0.03, max(pc.rayParams.x, 0.1));
+    }
+
+    float aoVisibility = 1.0;
+    if (pc.flags.y != 0u) {
+        uint sampleCount = clamp(pc.sampleCounts.y, 1u, 8u);
+        float occlusion = 0.0;
+        for (uint sampleIndex = 0u; sampleIndex < sampleCount; ++sampleIndex) {
+            vec3 aoDirection = sampleHemisphere(normal, sampleIndex, sampleCount, pixel);
+            occlusion += 1.0 - traceVisibility(rayOrigin, aoDirection, 0.03, max(pc.rayParams.y, 0.05));
+        }
+        aoVisibility = clamp(1.0 - occlusion / float(sampleCount), 0.0, 1.0);
+    }
+
+    imageStore(storageImages[nonuniformEXT(int(pc.outputImageIndex))], pixel, vec4(shadowVisibility, aoVisibility, 0.0, 1.0));
+}

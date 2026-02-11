@@ -55,6 +55,7 @@ struct DeferredLightingConstants {
     glm::vec4 contactShadowParams{ 1.0f, 1.2f, 0.35f, 0.0f }; // enabled, length, intensity
     glm::uvec4 shadowIndices{ kInvalidResourceIndex, 0u, 0u, 0u };
     glm::uvec4 iblIndices{ kInvalidResourceIndex, kInvalidResourceIndex, kInvalidResourceIndex, kInvalidResourceIndex };
+    glm::uvec4 rayEffects{ kInvalidResourceIndex, 0u, 0u, 0u };
     glm::vec4 directionalColor{ 1.0f, 1.0f, 1.0f, 0.0f };
     glm::vec4 pointPositionAndIntensity{ 0.0f, 2.0f, 0.0f, 0.0f };
     glm::vec4 pointColor{ 1.0f, 0.82f, 0.55f, 0.0f };
@@ -170,6 +171,17 @@ void DeferredLightingPass::SetEnvironmentSpecularStrength(float strength)
     _environmentSpecularStrength = std::clamp(strength, 0.0f, 2.0f);
 }
 
+void DeferredLightingPass::SetRayEffects(
+    GraphTextureHandle rayEffects, bool shadowsEnabled, bool ambientOcclusionEnabled, bool reflectionsEnabled)
+{
+    _rayEffects = rayEffects;
+    _rayEffectsFlags = glm::uvec4(
+        shadowsEnabled ? 1u : 0u,
+        ambientOcclusionEnabled ? 1u : 0u,
+        reflectionsEnabled ? 1u : 0u,
+        0u);
+}
+
 void DeferredLightingPass::SetAmbientOcclusion(bool enabled, float radius, float intensity)
 {
     _ssaoParams = glm::vec4(enabled ? 1.0f : 0.0f, std::max(radius, 0.01f), std::clamp(intensity, 0.0f, 4.0f), 0.0f);
@@ -264,6 +276,9 @@ void DeferredLightingPass::Setup(RenderGraphBuilder& builder)
     if (_shadowMap) {
         builder.Read(_shadowMap, ResourceUsage::SampledRead);
     }
+    if (_rayEffects) {
+        builder.Read(_rayEffects, ResourceUsage::StorageRead);
+    }
     builder.Write(_output, ResourceUsage::StorageWrite);
     if (_debugOutput) {
         builder.Write(_debugOutput, ResourceUsage::StorageWrite);
@@ -286,6 +301,9 @@ void DeferredLightingPass::Execute(const RenderGraphContext& context)
         : kInvalidResourceIndex;
     const uint32_t debugOutputImageIndex = _debugOutput
         ? context.GetDevice().GetImageResource(context.GetTextureHandle(_debugOutput)).bindless.storageImage
+        : kInvalidResourceIndex;
+    const uint32_t rayEffectsImageIndex = _rayEffects
+        ? context.GetDevice().GetImageResource(context.GetTextureHandle(_rayEffects)).bindless.storageImage
         : kInvalidResourceIndex;
 
     const AllocatedBuffer& lightingConstantsBuffer = context.GetDevice().GetBufferResource(_lightingConstantsBuffer);
@@ -318,6 +336,7 @@ void DeferredLightingPass::Execute(const RenderGraphContext& context)
             .contactShadowParams = _contactShadowParams,
             .shadowIndices = glm::uvec4(shadowMapIndex, _environmentImageIndex, _shadowCascadeCount, _iblBrdfLutImageIndex),
             .iblIndices = glm::uvec4(_environmentImageIndex, _iblDiffuseIrradianceImageIndex, _iblBrdfLutImageIndex, _iblSpecularPrefilterImageIndex),
+            .rayEffects = glm::uvec4(rayEffectsImageIndex, _rayEffectsFlags.x, _rayEffectsFlags.y, _rayEffectsFlags.z),
             .directionalColor = _directionalLightColor,
             .pointPositionAndIntensity = _pointLightPositionAndIntensity,
             .pointColor = _pointLightColor,

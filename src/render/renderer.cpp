@@ -31,6 +31,7 @@
 #include <vesta/render/passes/geometry_raster_pass.h>
 #include <vesta/render/passes/path_denoise_pass.h>
 #include <vesta/render/passes/path_tracer_pass.h>
+#include <vesta/render/passes/ray_effects_pass.h>
 #include <vesta/render/passes/shadow_map_pass.h>
 #include <vesta/render/passes/temporal_aa_pass.h>
 #include <vesta/render/vulkan/vk_images.h>
@@ -255,12 +256,18 @@ bool NeedsTemporalAAPass(const RendererSettings& settings)
     return NeedsDeferredPass(settings) && (settings.enableTaa || IsTemporalDebugView(settings.debugView));
 }
 
+bool IsRayEffectsRequested(const RendererSettings& settings)
+{
+    return settings.enableRtShadows || settings.enableRtAmbientOcclusion || settings.enableRtReflections
+        || settings.enableRtGlobalIllumination;
+}
+
 struct RuntimeShaderSource {
     std::string_view sourceName;
     bool requiresVulkan13{ false };
 };
 
-constexpr std::array<RuntimeShaderSource, 30> kRuntimeShaderSources{
+constexpr std::array<RuntimeShaderSource, 31> kRuntimeShaderSources{
     RuntimeShaderSource{ "gradient.comp" },
     RuntimeShaderSource{ "gradient_color.comp" },
     RuntimeShaderSource{ "hardcoded_triangle.frag" },
@@ -285,6 +292,7 @@ constexpr std::array<RuntimeShaderSource, 30> kRuntimeShaderSources{
     RuntimeShaderSource{ "shadow_depth.vert" },
     RuntimeShaderSource{ "overdraw.frag" },
     RuntimeShaderSource{ "overdraw.vert" },
+    RuntimeShaderSource{ "ray_effects.comp", true },
     RuntimeShaderSource{ "pathtrace.comp" },
     RuntimeShaderSource{ "path_denoise.comp" },
     RuntimeShaderSource{ "temporal_aa.comp" },
@@ -772,6 +780,8 @@ void ConfigureDeferredLightingPass(Renderer& renderer, IRenderPass& pass, const 
     lightingPass.SetIblBrdfLutImage(renderer.GetIblBrdfLutSampledImageIndex());
     lightingPass.SetIblSpecularPrefilterImage(renderer.GetIblSpecularPrefilterSampledImageIndex());
     lightingPass.SetEnvironmentSpecularStrength(settings.environmentSpecularStrength);
+    lightingPass.SetRayEffects(
+        resources.rayEffects, settings.enableRtShadows, settings.enableRtAmbientOcclusion, settings.enableRtReflections);
     lightingPass.SetAmbientOcclusion(settings.enableSsao, settings.ssaoRadius, settings.ssaoIntensity);
     lightingPass.SetScreenSpaceReflections(
         settings.enableSsr, settings.ssrMaxDistance, settings.ssrThickness, settings.ssrIntensity);
@@ -807,6 +817,29 @@ void ConfigureDeferredLightingPass(Renderer& renderer, IRenderPass& pass, const 
     }
     lightingPass.SetOutput(resources.deferredLighting);
     lightingPass.SetDebugOutput(resources.deferredLightingDebug, static_cast<uint32_t>(settings.debugView));
+}
+
+void ConfigureRayEffectsPass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
+{
+    auto& rayEffectsPass = static_cast<RayEffectsPass&>(pass);
+    const auto& settings = renderer.GetSettings();
+    rayEffectsPass.SetInputs(resources.gbufferNormal, resources.sceneDepth);
+    rayEffectsPass.SetOutput(resources.rayEffects);
+    rayEffectsPass.SetScene(&renderer.GetScene());
+    rayEffectsPass.SetCamera(&renderer.GetCamera());
+    rayEffectsPass.SetFrameSlot(renderer.GetFrameSlot());
+    rayEffectsPass.SetFrameIndex(renderer.GetPathTraceFrameIndex());
+    rayEffectsPass.SetLight(settings.lightDirectionAndIntensity);
+    rayEffectsPass.SetControls(settings.enableRtShadows,
+        settings.enableRtAmbientOcclusion,
+        settings.enableRtReflections,
+        settings.enableRtGlobalIllumination,
+        settings.rtShadowSamples,
+        settings.rtAoSamples,
+        settings.rtReflectionSamples,
+        settings.rtGiSamples,
+        settings.rtMaxRayDistance,
+        settings.rtAoRadius);
 }
 
 void ConfigureGaussianPass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
@@ -2390,7 +2423,9 @@ RayEffectsStats Renderer::GetRayEffectsStats() const
     stats.rayQueryAvailable = _device.GetRayTracingSupport().rayQueryFeatures.rayQuery == VK_TRUE;
     stats.rtPipelineAvailable = _device.GetRayTracingSupport().rayTracingPipelineFeatures.rayTracingPipeline == VK_TRUE;
     stats.tlasAvailable = _scene.HasRayTracingScene();
-    stats.backendAvailable = false;
+    const auto* rayEffectsPass = FindPass<RayEffectsPass>("ray-effects");
+    stats.backendAvailable = stats.rayQueryAvailable && stats.tlasAvailable && IsRayEffectsRequested(_settings)
+        && rayEffectsPass != nullptr && rayEffectsPass->IsBackendAvailable();
     stats.halfResolution = _settings.rtHalfResolution;
     stats.denoiserRequested = _settings.rtDenoiser;
     stats.temporalAccumulation = _settings.rtTemporalAccumulation;
@@ -2493,6 +2528,19 @@ std::vector<RenderPassDebugInfo> Renderer::GetRenderPassDebugInfo() const
         } else if (entry.id == "deferred-lighting") {
             info.dispatchCount = 1u;
             info.rayCount = fullResDispatchGrid * 64ull;
+        } else if (entry.id == "ray-effects") {
+            info.dispatchCount = 1u;
+            const uint32_t rayEffectsWidth =
+                _settings.rtHalfResolution ? std::max(1u, (extent.width + 1u) / 2u) : extent.width;
+            const uint32_t rayEffectsHeight =
+                _settings.rtHalfResolution ? std::max(1u, (extent.height + 1u) / 2u) : extent.height;
+            const uint64_t rayPixels = static_cast<uint64_t>(rayEffectsWidth) * rayEffectsHeight;
+            info.shadowRayCount = _settings.enableRtShadows ? rayPixels * std::clamp(_settings.rtShadowSamples, 1u, 8u) : 0ull;
+            info.diffuseRayCount =
+                _settings.enableRtAmbientOcclusion ? rayPixels * std::clamp(_settings.rtAoSamples, 1u, 8u) : 0ull;
+            info.specularRayCount =
+                _settings.enableRtReflections ? rayPixels * std::clamp(_settings.rtReflectionSamples, 1u, 8u) : 0ull;
+            info.rayCount = info.shadowRayCount + info.diffuseRayCount + info.specularRayCount;
         } else if (entry.id == "gaussian-splat") {
             info.drawCount = _scene.HasGaussianSplats() ? 1u : 0u;
             info.splatCount = _scene.GetGaussianCount();
@@ -2699,6 +2747,15 @@ void Renderer::InitializeDefaultPasses()
             ConfigureOverdrawPass(*this, pass, resources);
         },
         .order = 16,
+        .enabled = true,
+    });
+    RegisterPass(RenderPassRegistrationDesc{
+        .id = "ray-effects",
+        .pass = std::make_unique<RayEffectsPass>(),
+        .configure = [this](IRenderPass& pass, const RendererGraphResources& resources) {
+            ConfigureRayEffectsPass(*this, pass, resources);
+        },
+        .order = 18,
         .enabled = true,
     });
     RegisterPass(RenderPassRegistrationDesc{
@@ -3642,6 +3699,8 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
     const bool useShadowMapPass = useGeometryPass && _settings.enableShadowMap && _scene.HasRasterGeometry();
     const bool useOverdrawPass = useGeometryPass && _settings.debugView == RendererDebugView::Overdraw && _scene.HasRasterGeometry();
     const bool useDeferredPass = NeedsDeferredPass(_settings);
+    const bool useRayEffectsPass = useDeferredPass && IsRayEffectsRequested(_settings)
+        && _device.GetRayTracingSupport().rayQueryFeatures.rayQuery == VK_TRUE && _scene.HasRayTracingScene();
     const bool useGaussianPass = NeedsGaussianPass(_settings);
     const bool usePathTracePass = NeedsPathTracePass(_settings);
     const bool usePathDenoisePass = NeedsPathDenoisePass(_settings);
@@ -3701,6 +3760,15 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
     if (useOverdrawPass) {
         resources.overdraw = graph.CreateTexture("RasterOverdraw", storageDesc);
     }
+    if (useRayEffectsPass) {
+        ImageDesc rayEffectsDesc = storageDesc;
+        rayEffectsDesc.debugName = "RayEffects";
+        if (_settings.rtHalfResolution) {
+            rayEffectsDesc.extent.width = std::max(1u, (renderExtent.width + 1u) / 2u);
+            rayEffectsDesc.extent.height = std::max(1u, (renderExtent.height + 1u) / 2u);
+        }
+        resources.rayEffects = graph.CreateTexture("RayEffects", rayEffectsDesc);
+    }
     if (useDeferredPass) {
         resources.deferredLighting = graph.CreateTexture("DeferredLighting", storageDesc);
         resources.deferredLightingDebug = graph.CreateTexture("DeferredLighting.DebugAOV", storageDesc);
@@ -3733,6 +3801,9 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
             continue;
         }
         if (id == "overdraw" && !useOverdrawPass) {
+            continue;
+        }
+        if (id == "ray-effects" && !useRayEffectsPass) {
             continue;
         }
         if (id == "deferred-lighting" && !useDeferredPass) {

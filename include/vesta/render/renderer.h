@@ -523,6 +523,7 @@ struct RendererGraphResources {
     GraphTextureHandle sceneDepth{};
     GraphTextureHandle shadowMap{};
     GraphTextureHandle overdraw{};
+    GraphTextureHandle rayEffects{};
     GraphTextureHandle deferredLighting{};
     GraphTextureHandle deferredLightingDebug{};
     GraphTextureHandle temporalLighting{};
