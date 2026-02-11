@@ -281,12 +281,15 @@ struct IblStats {
     uint32_t specularCubemapResolution{ 128 };
     uint32_t specularMipCount{ 8 };
     uint32_t brdfLutResolution{ 256 };
+    uint32_t environmentCubemapResolution{ 128 };
+    uint64_t estimatedEnvironmentCubemapBytes{ 0 };
     uint64_t estimatedDiffuseBytes{ 0 };
     uint64_t estimatedSpecularBytes{ 0 };
     uint64_t estimatedBrdfLutBytes{ 0 };
     bool requested{ true };
     bool externalSourceAvailable{ false };
     bool environmentMapUploaded{ false };
+    bool environmentCubemapAvailable{ false };
     bool sourceIsHdr{ false };
     bool proceduralSource{ true };
     bool diffuseBackendAvailable{ true };
@@ -697,9 +700,11 @@ public:
     [[nodiscard]] std::string GetSelectionLabel() const;
     [[nodiscard]] uint32_t GetEnvironmentSampledImageIndex() const { return _environmentSampledImageIndex; }
     [[nodiscard]] uint32_t GetIblBrdfLutSampledImageIndex() const { return _iblBrdfLutSampledImageIndex; }
+    [[nodiscard]] uint32_t GetIblEnvironmentCubemapSampledImageIndex() const { return _iblEnvironmentCubemapSampledImageIndex; }
     [[nodiscard]] uint32_t GetIblDiffuseIrradianceSampledImageIndex() const { return _iblDiffuseIrradianceSampledImageIndex; }
     [[nodiscard]] uint32_t GetIblSpecularPrefilterSampledImageIndex() const { return _iblSpecularPrefilterSampledImageIndex; }
     [[nodiscard]] ImageHandle GetExternalEnvironmentImage() const { return _externalEnvironmentImage; }
+    [[nodiscard]] ImageHandle GetIblEnvironmentCubemapImage() const { return _iblEnvironmentCubemapImage; }
     [[nodiscard]] ImageHandle GetIblBrdfLutImage() const { return _iblBrdfLutImage; }
     [[nodiscard]] ImageHandle GetIblDiffuseIrradianceImage() const { return _iblDiffuseIrradianceImage; }
     [[nodiscard]] ImageHandle GetIblSpecularPrefilterImage() const { return _iblSpecularPrefilterImage; }
@@ -843,6 +848,7 @@ private:
     [[nodiscard]] RegisteredPassEntry* FindPassEntry(std::string_view id);
     [[nodiscard]] const RegisteredPassEntry* FindPassEntry(std::string_view id) const;
     void CreateIblBrdfLut();
+    void CreateEnvironmentCubemapAtlas(std::span<const float> rgbaPixels, uint32_t width, uint32_t height);
     void CreateDiffuseIrradianceEquirect(std::span<const float> rgbaPixels, uint32_t width, uint32_t height);
     void CreateSpecularPrefilterEquirectAtlas(std::span<const float> rgbaPixels, uint32_t width, uint32_t height);
     void DestroyIblResources();
@@ -891,6 +897,8 @@ private:
     std::filesystem::path _pendingScreenshotPath;
     ImageHandle _externalEnvironmentImage{};
     uint32_t _environmentSampledImageIndex{ kInvalidResourceIndex };
+    ImageHandle _iblEnvironmentCubemapImage{};
+    uint32_t _iblEnvironmentCubemapSampledImageIndex{ kInvalidResourceIndex };
     ImageHandle _iblDiffuseIrradianceImage{};
     uint32_t _iblDiffuseIrradianceSampledImageIndex{ kInvalidResourceIndex };
     ImageHandle _iblSpecularPrefilterImage{};

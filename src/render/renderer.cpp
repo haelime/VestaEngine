@@ -135,6 +135,27 @@ glm::vec3 DirectionFromEquirectUv(float u, float v)
     return glm::normalize(glm::vec3(std::cos(phi) * sinTheta, std::cos(theta), std::sin(phi) * sinTheta));
 }
 
+glm::vec3 DirectionFromCubeFace(uint32_t faceIndex, float u, float v)
+{
+    const float x = u * 2.0f - 1.0f;
+    const float y = v * 2.0f - 1.0f;
+    switch (faceIndex) {
+    case 0: // +X
+        return glm::normalize(glm::vec3(1.0f, -y, -x));
+    case 1: // -X
+        return glm::normalize(glm::vec3(-1.0f, -y, x));
+    case 2: // +Y
+        return glm::normalize(glm::vec3(x, 1.0f, y));
+    case 3: // -Y
+        return glm::normalize(glm::vec3(x, -1.0f, -y));
+    case 4: // +Z
+        return glm::normalize(glm::vec3(x, -y, 1.0f));
+    case 5: // -Z
+    default:
+        return glm::normalize(glm::vec3(-x, -y, -1.0f));
+    }
+}
+
 glm::vec3 SampleEquirect(std::span<const float> rgbaPixels, uint32_t width, uint32_t height, glm::vec3 direction)
 {
     if (rgbaPixels.empty() || width == 0u || height == 0u) {
@@ -1972,6 +1993,54 @@ void Renderer::CreateIblBrdfLut()
     _iblBrdfLutSampledImageIndex = _device.GetImageResource(_iblBrdfLutImage).bindless.sampledImage;
 }
 
+void Renderer::CreateEnvironmentCubemapAtlas(std::span<const float> rgbaPixels, uint32_t width, uint32_t height)
+{
+    if (_device.GetDevice() == VK_NULL_HANDLE || rgbaPixels.empty() || width == 0u || height == 0u) {
+        return;
+    }
+    if (_iblEnvironmentCubemapImage) {
+        _device.DestroyImage(_iblEnvironmentCubemapImage);
+        _iblEnvironmentCubemapImage = {};
+        _iblEnvironmentCubemapSampledImageIndex = kInvalidResourceIndex;
+    }
+
+    constexpr uint32_t kFaceSize = 128u;
+    constexpr uint32_t kAtlasColumns = 3u;
+    constexpr uint32_t kAtlasRows = 2u;
+    constexpr uint32_t kAtlasWidth = kFaceSize * kAtlasColumns;
+    constexpr uint32_t kAtlasHeight = kFaceSize * kAtlasRows;
+    std::vector<float> atlas(static_cast<size_t>(kAtlasWidth) * kAtlasHeight * 4u, 1.0f);
+    for (uint32_t face = 0; face < 6u; ++face) {
+        const uint32_t faceOffsetX = (face % kAtlasColumns) * kFaceSize;
+        const uint32_t faceOffsetY = (face / kAtlasColumns) * kFaceSize;
+        for (uint32_t y = 0; y < kFaceSize; ++y) {
+            const float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(kFaceSize);
+            for (uint32_t x = 0; x < kFaceSize; ++x) {
+                const float u = (static_cast<float>(x) + 0.5f) / static_cast<float>(kFaceSize);
+                const glm::vec3 value = SampleEquirect(rgbaPixels, width, height, DirectionFromCubeFace(face, u, v));
+                const size_t offset = (static_cast<size_t>(faceOffsetY + y) * kAtlasWidth + (faceOffsetX + x)) * 4u;
+                atlas[offset + 0u] = value.r;
+                atlas[offset + 1u] = value.g;
+                atlas[offset + 2u] = value.b;
+                atlas[offset + 3u] = 1.0f;
+            }
+        }
+    }
+
+    _iblEnvironmentCubemapImage = _device.CreateImage(ImageDesc{
+        .extent = VkExtent3D{ kAtlasWidth, kAtlasHeight, 1u },
+        .format = VK_FORMAT_R32G32B32A32_SFLOAT,
+        .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        .aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT,
+        .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+        .registerBindlessSampled = true,
+        .debugName = "IblEnvironmentCubemapAtlas",
+    });
+    _device.UploadImageData(_iblEnvironmentCubemapImage,
+        std::span<const std::byte>(reinterpret_cast<const std::byte*>(atlas.data()), atlas.size() * sizeof(float)));
+    _iblEnvironmentCubemapSampledImageIndex = _device.GetImageResource(_iblEnvironmentCubemapImage).bindless.sampledImage;
+}
+
 void Renderer::CreateDiffuseIrradianceEquirect(std::span<const float> rgbaPixels, uint32_t width, uint32_t height)
 {
     if (_device.GetDevice() == VK_NULL_HANDLE || rgbaPixels.empty() || width == 0u || height == 0u) {
@@ -2128,6 +2197,9 @@ bool Renderer::LoadExternalEnvironmentMap(const std::filesystem::path& path)
         std::span<const std::byte>(reinterpret_cast<const std::byte*>(pixels), byteCount));
     _environmentSampledImageIndex = _device.GetImageResource(_externalEnvironmentImage).bindless.sampledImage;
     if (_environmentSampledImageIndex != kInvalidResourceIndex) {
+        CreateEnvironmentCubemapAtlas(std::span<const float>(pixels, texelCount * 4u),
+            static_cast<uint32_t>(width),
+            static_cast<uint32_t>(height));
         CreateDiffuseIrradianceEquirect(std::span<const float>(pixels, texelCount * 4u),
             static_cast<uint32_t>(width),
             static_cast<uint32_t>(height));
@@ -2147,6 +2219,11 @@ void Renderer::ClearExternalEnvironmentMap()
         _externalEnvironmentImage = {};
     }
     _environmentSampledImageIndex = kInvalidResourceIndex;
+    if (_iblEnvironmentCubemapImage) {
+        _device.DestroyImage(_iblEnvironmentCubemapImage);
+        _iblEnvironmentCubemapImage = {};
+    }
+    _iblEnvironmentCubemapSampledImageIndex = kInvalidResourceIndex;
     if (_iblDiffuseIrradianceImage) {
         _device.DestroyImage(_iblDiffuseIrradianceImage);
         _iblDiffuseIrradianceImage = {};
@@ -2364,6 +2441,7 @@ IblStats Renderer::GetIblStats() const
 {
     constexpr uint64_t kCubeFaces = 6u;
     constexpr uint64_t kRgba16fBytesPerTexel = 8u;
+    constexpr uint64_t kRgba32fBytesPerTexel = 16u;
     constexpr uint64_t kRg32fBytesPerTexel = 8u;
 
     IblStats stats{};
@@ -2371,11 +2449,18 @@ IblStats Renderer::GetIblStats() const
         && (_settings.environmentDiffuseStrength > 0.0f || _settings.environmentSpecularStrength > 0.0f);
     stats.externalSourceAvailable = _settings.externalHdriAvailable;
     stats.environmentMapUploaded = _environmentSampledImageIndex != kInvalidResourceIndex;
+    stats.environmentCubemapAvailable = _iblEnvironmentCubemapSampledImageIndex != kInvalidResourceIndex;
     stats.proceduralSource = !_settings.externalHdriAvailable;
     stats.sourceIsHdr = _settings.externalHdriIsHdr;
     stats.sourceWidth = _settings.externalHdriWidth;
     stats.sourceHeight = _settings.externalHdriHeight;
     stats.sourceChannels = _settings.externalHdriChannels;
+
+    const uint64_t environmentCubePixels = kCubeFaces * stats.environmentCubemapResolution * stats.environmentCubemapResolution;
+    stats.estimatedEnvironmentCubemapBytes = _iblEnvironmentCubemapImage
+        ? static_cast<uint64_t>(_device.GetImageExtent(_iblEnvironmentCubemapImage).width)
+            * _device.GetImageExtent(_iblEnvironmentCubemapImage).height * kRgba32fBytesPerTexel
+        : environmentCubePixels * kRgba16fBytesPerTexel;
 
     const uint64_t diffusePixels = kCubeFaces * stats.diffuseCubemapResolution * stats.diffuseCubemapResolution;
     stats.estimatedDiffuseBytes = _iblDiffuseIrradianceImage

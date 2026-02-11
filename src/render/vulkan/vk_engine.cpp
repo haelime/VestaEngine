@@ -1925,6 +1925,24 @@ void VestaEngine::finish_benchmark()
     const auto ddgiStats = _renderer.GetDdgiStats();
     const auto iblStats = _renderer.GetIblStats();
     const auto rayEffectsStats = _renderer.GetRayEffectsStats();
+    std::string iblBackendLabel;
+    if (iblStats.environmentMapUploaded) {
+        iblBackendLabel = "EquirectSampling";
+        if (iblStats.environmentCubemapAvailable) {
+            iblBackendLabel += "+CubemapAtlas";
+        }
+        if (iblStats.diffuseIrradianceAvailable) {
+            iblBackendLabel += "+DiffuseIrradiance";
+        }
+        if (iblStats.specularPrefilterAvailable) {
+            iblBackendLabel += "+SpecularPrefilter";
+        }
+        if (iblStats.brdfLutAvailable) {
+            iblBackendLabel += "+BRDFLUT";
+        }
+    } else {
+        iblBackendLabel = iblStats.brdfLutAvailable ? "Procedural+BRDFLUT" : "Staged";
+    }
     const auto averagePassGpuMs = [&](size_t passIndex) {
         const uint32_t sampleCount = _benchmarkState.passGpuSampleCounts[passIndex];
         return sampleCount > 0u ? _benchmarkState.passGpuMsSums[passIndex] / static_cast<float>(sampleCount) : 0.0f;
@@ -2073,16 +2091,11 @@ void VestaEngine::finish_benchmark()
            << CsvEscape(settings.externalHdriAvailable ? fmt::format("{}x{}", settings.externalHdriWidth, settings.externalHdriHeight) : "") << ','
            << (settings.externalHdriIsHdr ? "true" : "false") << ','
            << (iblStats.externalSourceAvailable ? "External" : "Procedural") << ','
-           << CsvEscape(iblStats.environmentMapUploaded
-                   ? (iblStats.diffuseIrradianceAvailable
-                           ? (iblStats.specularPrefilterAvailable ? "EquirectSampling+DiffuseIrradiance+SpecularPrefilter+BRDFLUT" : "EquirectSampling+DiffuseIrradiance+BRDFLUT")
-                           : "EquirectSampling+BRDFLUT")
-                   : (iblStats.brdfLutAvailable ? "Procedural+BRDFLUT" : "Staged"))
-           << ','
+           << CsvEscape(iblBackendLabel) << ','
            << CsvEscape(fmt::format("{}^2", iblStats.diffuseCubemapResolution)) << ','
            << CsvEscape(fmt::format("{}^2/{} mips", iblStats.specularCubemapResolution, iblStats.specularMipCount)) << ','
            << CsvEscape(fmt::format("{}^2", iblStats.brdfLutResolution)) << ','
-           << MiB(iblStats.estimatedDiffuseBytes + iblStats.estimatedSpecularBytes + iblStats.estimatedBrdfLutBytes) << ','
+           << MiB(iblStats.estimatedEnvironmentCubemapBytes + iblStats.estimatedDiffuseBytes + iblStats.estimatedSpecularBytes + iblStats.estimatedBrdfLutBytes) << ','
            << settings.environmentDiffuseStrength << ','
            << settings.environmentSpecularStrength << ','
            << settings.cameraExposureEv << ','
@@ -2357,10 +2370,13 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "    \"source_height\": " << iblStats.sourceHeight << ",\n"
            << "    \"source_channels\": " << iblStats.sourceChannels << ",\n"
            << "    \"source_is_hdr\": " << (iblStats.sourceIsHdr ? "true" : "false") << ",\n"
+           << "    \"environment_cubemap_resolution\": " << iblStats.environmentCubemapResolution << ",\n"
+           << "    \"environment_cubemap_available\": " << (iblStats.environmentCubemapAvailable ? "true" : "false") << ",\n"
            << "    \"diffuse_cubemap_resolution\": " << iblStats.diffuseCubemapResolution << ",\n"
            << "    \"specular_cubemap_resolution\": " << iblStats.specularCubemapResolution << ",\n"
            << "    \"specular_mip_count\": " << iblStats.specularMipCount << ",\n"
            << "    \"brdf_lut_resolution\": " << iblStats.brdfLutResolution << ",\n"
+           << "    \"estimated_environment_cubemap_bytes\": " << iblStats.estimatedEnvironmentCubemapBytes << ",\n"
            << "    \"estimated_diffuse_bytes\": " << iblStats.estimatedDiffuseBytes << ",\n"
            << "    \"estimated_specular_bytes\": " << iblStats.estimatedSpecularBytes << ",\n"
            << "    \"estimated_brdf_lut_bytes\": " << iblStats.estimatedBrdfLutBytes << ",\n"
@@ -4503,23 +4519,26 @@ void VestaEngine::build_debug_ui()
                     ImGui::TextWrapped("%s", settings.externalHdriStatus.c_str());
                     const auto iblStats = _renderer.GetIblStats();
                     ImGui::SeparatorText("IBL Pipeline Readiness");
-                    ImGui::Text("Source %s  Diffuse %u^2  Specular %u^2/%u mips  BRDF LUT %u^2",
+                    ImGui::Text("Source %s  Env Cube %u^2  Diffuse %u^2  Specular %u^2/%u mips  BRDF LUT %u^2",
                         iblStats.externalSourceAvailable ? "External HDRI" : "Procedural sky",
+                        iblStats.environmentCubemapResolution,
                         iblStats.diffuseCubemapResolution,
                         iblStats.specularCubemapResolution,
                         iblStats.specularMipCount,
                         iblStats.brdfLutResolution);
-                    ImGui::Text("Estimated GPU memory %.2f MiB  (diffuse %.2f / specular %.2f / LUT %.2f)",
-                        MiB(iblStats.estimatedDiffuseBytes + iblStats.estimatedSpecularBytes + iblStats.estimatedBrdfLutBytes),
+                    ImGui::Text("Estimated GPU memory %.2f MiB  (env cube %.2f / diffuse %.2f / specular %.2f / LUT %.2f)",
+                        MiB(iblStats.estimatedEnvironmentCubemapBytes + iblStats.estimatedDiffuseBytes + iblStats.estimatedSpecularBytes + iblStats.estimatedBrdfLutBytes),
+                        MiB(iblStats.estimatedEnvironmentCubemapBytes),
                         MiB(iblStats.estimatedDiffuseBytes),
                         MiB(iblStats.estimatedSpecularBytes),
                         MiB(iblStats.estimatedBrdfLutBytes));
-                    ImGui::Text("Diffuse %s  Prefilter %s  BRDF LUT %s",
+                    ImGui::Text("Cube %s  Diffuse %s  Prefilter %s  BRDF LUT %s",
+                        iblStats.environmentCubemapAvailable ? "atlas" : (iblStats.environmentMapUploaded ? "staged" : "procedural fallback"),
                         iblStats.diffuseIrradianceAvailable ? "irradiance texture" : (iblStats.environmentMapUploaded ? "equirect sample" : (iblStats.diffuseBackendAvailable ? "procedural live" : "staged")),
                         iblStats.specularPrefilterAvailable ? "prefilter atlas" : "staged",
                         iblStats.brdfLutAvailable ? "live" : "staged");
                     ImGui::TextDisabled(iblStats.environmentMapUploaded
-                        ? "External HDRI is sampled directly and convolved into diffuse irradiance plus a roughness-sliced specular prefilter atlas."
+                        ? "External HDRI is sampled directly, converted into a cubemap atlas, and convolved into diffuse irradiance plus a roughness-sliced specular prefilter atlas."
                         : "Procedural sky is live; external HDRI irradiance/prefilter generation is available after an HDRI is loaded.");
                     ImGui::EndTabItem();
                 }
@@ -4676,8 +4695,11 @@ void VestaEngine::build_debug_ui()
                 iblStats.environmentMapUploaded && iblStats.sourceWidth > 0u && iblStats.sourceHeight > 0u
                 ? static_cast<uint64_t>(iblStats.sourceWidth) * iblStats.sourceHeight * 4u * sizeof(float)
                 : 0u;
+            const uint64_t environmentCubemapBytes =
+                iblStats.environmentCubemapAvailable ? iblStats.estimatedEnvironmentCubemapBytes : 0u;
             const uint64_t liveIblTextureBytes =
                 externalEnvironmentBytes
+                + environmentCubemapBytes
                 + (iblStats.diffuseIrradianceAvailable ? iblStats.estimatedDiffuseBytes : 0u)
                 + (iblStats.specularPrefilterAvailable ? iblStats.estimatedSpecularBytes : 0u)
                 + (iblStats.brdfLutAvailable ? iblStats.estimatedBrdfLutBytes : 0u);
@@ -4705,6 +4727,19 @@ void VestaEngine::build_debug_ui()
                 .bindlessIndex = _renderer.GetEnvironmentSampledImageIndex(),
                 .state = iblStats.environmentMapUploaded ? "live" : "procedural fallback",
                 .previewable = static_cast<bool>(_renderer.GetExternalEnvironmentImage()),
+            });
+            engineTextures.push_back(EngineTextureRow{
+                .name = "Environment Cubemap Atlas",
+                .image = _renderer.GetIblEnvironmentCubemapImage(),
+                .resolution = iblStats.environmentCubemapAvailable
+                    ? fmt::format("{}x{} atlas", iblStats.environmentCubemapResolution * 3u, iblStats.environmentCubemapResolution * 2u)
+                    : fmt::format("{}x{}x6", iblStats.environmentCubemapResolution, iblStats.environmentCubemapResolution),
+                .format = "RGBA32F",
+                .usage = "sampled cubemap conversion atlas",
+                .memoryBytes = iblStats.estimatedEnvironmentCubemapBytes,
+                .bindlessIndex = _renderer.GetIblEnvironmentCubemapSampledImageIndex(),
+                .state = iblStats.environmentCubemapAvailable ? "live" : "staged",
+                .previewable = static_cast<bool>(_renderer.GetIblEnvironmentCubemapImage()),
             });
             engineTextures.push_back(EngineTextureRow{
                 .name = "IBL BRDF LUT",
@@ -4774,7 +4809,7 @@ void VestaEngine::build_debug_ui()
                     ImGui::Text("Textures %u / %zu resident", scene.GetResidentTextureCount(), scene.GetTextures().size());
                     ImGui::Text("IBL runtime %.2f MiB  staged %.2f MiB",
                         MiB(liveIblTextureBytes),
-                        MiB(iblStats.estimatedDiffuseBytes + iblStats.estimatedSpecularBytes));
+                        MiB(iblStats.estimatedEnvironmentCubemapBytes + iblStats.estimatedDiffuseBytes + iblStats.estimatedSpecularBytes));
                     ImGui::Text("Dedicated VRAM %u MiB", device.GetDedicatedVideoMemoryMiB());
                     ImGui::Text("Upload Last %.2f MiB  Pending %.2f MiB",
                         MiB(static_cast<uint64_t>(device.GetUploadBatchStats().lastSubmittedBytes)),
