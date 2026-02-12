@@ -15,7 +15,8 @@ class Scene;
 namespace vesta::render {
 // Optional ray-query pass for hybrid raster + RT effects. It writes a compact
 // visibility buffer consumed by deferred lighting:
-// R = directional shadow visibility, G = ambient occlusion visibility.
+// R = directional shadow visibility, G = ambient occlusion visibility,
+// B = reflection miss visibility for masking IBL/SSR reflections.
 class RayEffectsPass final : public IRenderPass {
 public:
     void SetInputs(GraphTextureHandle normal, GraphTextureHandle depth);
@@ -34,7 +35,8 @@ public:
         uint32_t reflectionSamples,
         uint32_t giSamples,
         float maxRayDistance,
-        float aoRadius);
+        float aoRadius,
+        float reflectionRoughnessCutoff);
     [[nodiscard]] bool IsBackendAvailable() const { return _backendAvailable; }
 
     [[nodiscard]] std::string_view Name() const override { return "RayEffectsPass"; }
@@ -62,6 +64,7 @@ private:
     uint32_t _giSamples{ 1 };
     float _maxRayDistance{ 100.0f };
     float _aoRadius{ 2.0f };
+    float _reflectionRoughnessCutoff{ 0.8f };
     bool _backendAvailable{ false };
 
     VkDescriptorPool _descriptorPool{ VK_NULL_HANDLE };

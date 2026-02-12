@@ -89,7 +89,8 @@ void RayEffectsPass::SetControls(bool shadowsEnabled,
     uint32_t reflectionSamples,
     uint32_t giSamples,
     float maxRayDistance,
-    float aoRadius)
+    float aoRadius,
+    float reflectionRoughnessCutoff)
 {
     _shadowsEnabled = shadowsEnabled;
     _ambientOcclusionEnabled = ambientOcclusionEnabled;
@@ -101,6 +102,7 @@ void RayEffectsPass::SetControls(bool shadowsEnabled,
     _giSamples = std::clamp(giSamples, 1u, 8u);
     _maxRayDistance = std::clamp(maxRayDistance, 0.1f, 10000.0f);
     _aoRadius = std::clamp(aoRadius, 0.05f, 32.0f);
+    _reflectionRoughnessCutoff = std::clamp(reflectionRoughnessCutoff, 0.0f, 1.0f);
 }
 
 void RayEffectsPass::Initialize(RenderDevice& device)
@@ -190,7 +192,7 @@ void RayEffectsPass::Execute(const RenderGraphContext& context)
         .cameraPosition = glm::vec4(_camera->GetPosition(), 0.0f),
         .lightDirectionAndIntensity = _lightDirectionAndIntensity,
         .sampleCounts = glm::uvec4(_shadowSamples, _aoSamples, _reflectionSamples, _giSamples),
-        .rayParams = glm::vec4(_maxRayDistance, _aoRadius, 0.0f, 0.0f),
+        .rayParams = glm::vec4(_maxRayDistance, _aoRadius, _reflectionRoughnessCutoff, 0.0f),
         .flags = glm::uvec4(
             _shadowsEnabled ? 1u : 0u,
             _ambientOcclusionEnabled ? 1u : 0u,

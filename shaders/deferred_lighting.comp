@@ -614,6 +614,10 @@ void main() {
     vec3 indirectBounce = computeScreenSpaceGi(pixel, size, worldPosition, N, baseColor) * ao * (1.0 - metallic);
     vec3 ambientDiffuse = sampleDiffuseIbl(N) * baseColor * (1.0 - metallic) * ao + indirectBounce;
     vec3 reflectionColor = computeScreenSpaceReflection(pixel, size, worldPosition, N, V, sampleSpecularIbl(R, N, V, roughness), roughness, metallic);
+    if (lightingConstants.rayEffects.w != 0u) {
+        float rtReflectionMiss = clamp(rayEffects.b, 0.0, 1.0);
+        reflectionColor *= rtReflectionMiss;
+    }
     vec3 ambientSpecular = reflectionColor * FresnelSchlick(max(dot(N, V), 0.0), F0) * mix(0.08, 0.45, metallic) * (1.0 - roughness * 0.65);
     vec3 lit = ambientDiffuse + ambientSpecular + direct + emissive;
 

@@ -40,6 +40,7 @@ void PrintUsage()
         << "  --ssgi-samples <4-16>         SSGI sample count.\n"
         << "  --rt-shadows <on|off>         Toggle hybrid ray-query shadows.\n"
         << "  --rt-ao <on|off>              Toggle hybrid ray-query ambient occlusion.\n"
+        << "  --rt-reflections <on|off>     Toggle hybrid ray-query reflection visibility.\n"
         << "  --rt-half <on|off>            Toggle half-resolution hybrid ray effects.\n"
         << "  --rt-distance <value>         Hybrid ray effects max ray distance.\n"
         << "  --rt-ao-radius <value>        Hybrid ray-query AO radius.\n"
@@ -627,6 +628,18 @@ int main(int argc, char* argv[])
             options.startupRtAoEnabled = ParseToggle(value);
             if (!options.startupRtAoEnabled.has_value()) {
                 std::cerr << "Invalid RT AO toggle: " << value << "\n";
+                return 1;
+            }
+            continue;
+        }
+        if (argument == "--rt-reflections") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            options.startupRtReflectionsEnabled = ParseToggle(value);
+            if (!options.startupRtReflectionsEnabled.has_value()) {
+                std::cerr << "Invalid RT reflections toggle: " << value << "\n";
                 return 1;
             }
             continue;

@@ -860,7 +860,8 @@ void ConfigureRayEffectsPass(Renderer& renderer, IRenderPass& pass, const Render
         settings.rtReflectionSamples,
         settings.rtGiSamples,
         settings.rtMaxRayDistance,
-        settings.rtAoRadius);
+        settings.rtAoRadius,
+        settings.rtReflectionRoughnessCutoff);
 }
 
 void ConfigureGaussianPass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
