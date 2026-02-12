@@ -48,6 +48,7 @@ struct EngineLaunchOptions {
     std::optional<float> startupSsgiRadius;
     std::optional<float> startupSsgiIntensity;
     std::optional<uint32_t> startupSsgiSamples;
+    std::optional<bool> startupDdgiEnabled;
     std::optional<bool> startupRtShadowsEnabled;
     std::optional<bool> startupRtAoEnabled;
     std::optional<bool> startupRtReflectionsEnabled;

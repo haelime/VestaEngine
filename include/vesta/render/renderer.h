@@ -852,6 +852,8 @@ private:
     void CreateDiffuseIrradianceEquirect(std::span<const float> rgbaPixels, uint32_t width, uint32_t height);
     void CreateSpecularPrefilterEquirectAtlas(std::span<const float> rgbaPixels, uint32_t width, uint32_t height);
     void DestroyIblResources();
+    void EnsureDdgiResources();
+    void DestroyDdgiResources();
 
     RenderDevice _device;
     vesta::core::JobSystem _jobs;
@@ -905,6 +907,10 @@ private:
     uint32_t _iblSpecularPrefilterSampledImageIndex{ kInvalidResourceIndex };
     ImageHandle _iblBrdfLutImage{};
     uint32_t _iblBrdfLutSampledImageIndex{ kInvalidResourceIndex };
+    BufferHandle _ddgiIrradianceBuffer{};
+    BufferHandle _ddgiVisibilityBuffer{};
+    uint64_t _ddgiIrradianceBufferBytes{ 0 };
+    uint64_t _ddgiVisibilityBufferBytes{ 0 };
     glm::vec2 _lastDragMousePosition{ 0.0f };
     glm::vec3 _dragPlaneOrigin{ 0.0f };
     glm::vec3 _dragPlaneNormal{ 0.0f, 1.0f, 0.0f };

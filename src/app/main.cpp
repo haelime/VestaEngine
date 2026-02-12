@@ -38,6 +38,7 @@ void PrintUsage()
         << "  --ssgi-radius <value>         SSGI sample radius.\n"
         << "  --ssgi-intensity <value>      SSGI bounce strength.\n"
         << "  --ssgi-samples <4-16>         SSGI sample count.\n"
+        << "  --ddgi <on|off>               Toggle DDGI probe storage allocation.\n"
         << "  --rt-shadows <on|off>         Toggle hybrid ray-query shadows.\n"
         << "  --rt-ao <on|off>              Toggle hybrid ray-query ambient occlusion.\n"
         << "  --rt-reflections <on|off>     Toggle hybrid ray-query reflection visibility.\n"
@@ -606,6 +607,18 @@ int main(int argc, char* argv[])
                 return 1;
             }
             options.startupSsgiSamples = samples;
+            continue;
+        }
+        if (argument == "--ddgi") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            options.startupDdgiEnabled = ParseToggle(value);
+            if (!options.startupDdgiEnabled.has_value()) {
+                std::cerr << "Invalid DDGI toggle: " << value << "\n";
+                return 1;
+            }
             continue;
         }
         if (argument == "--rt-shadows") {

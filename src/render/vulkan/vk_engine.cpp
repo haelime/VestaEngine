@@ -1335,6 +1335,10 @@ void VestaEngine::init_renderer()
         settings.ssgiSampleCount = std::clamp(*_launchOptions.startupSsgiSamples, 4u, 16u);
         resetAccumulation = true;
     }
+    if (_launchOptions.startupDdgiEnabled.has_value()) {
+        settings.enableDdgi = *_launchOptions.startupDdgiEnabled;
+        resetAccumulation = true;
+    }
     if (_launchOptions.startupRtShadowsEnabled.has_value()) {
         settings.enableRtShadows = *_launchOptions.startupRtShadowsEnabled;
         resetAccumulation = true;
@@ -2018,7 +2022,7 @@ void VestaEngine::finish_benchmark()
            << settings.ssgiIntensity << ','
            << settings.ssgiSampleCount << ','
            << (ddgiStats.requested ? "true" : "false") << ','
-           << (ddgiStats.backendAvailable ? "ProbeUpdatePass" : "Staged") << ','
+           << (ddgiStats.backendAvailable ? "ProbeStorage" : "Staged") << ','
            << CsvEscape(fmt::format("{}x{}x{}", ddgiStats.probeCountX, ddgiStats.probeCountY, ddgiStats.probeCountZ)) << ','
            << ddgiStats.raysPerUpdate << ','
            << MiB(ddgiStats.estimatedIrradianceBytes + ddgiStats.estimatedVisibilityBytes) << ','
@@ -2274,6 +2278,7 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "  \"ddgi_stats\": {\n"
            << "    \"requested\": " << (ddgiStats.requested ? "true" : "false") << ",\n"
            << "    \"backend_available\": " << (ddgiStats.backendAvailable ? "true" : "false") << ",\n"
+           << "    \"probe_storage_available\": " << (ddgiStats.probeStorageAvailable ? "true" : "false") << ",\n"
            << "    \"probe_count_x\": " << ddgiStats.probeCountX << ",\n"
            << "    \"probe_count_y\": " << ddgiStats.probeCountY << ",\n"
            << "    \"probe_count_z\": " << ddgiStats.probeCountZ << ",\n"
@@ -6197,9 +6202,9 @@ void VestaEngine::draw_global_illumination_panel()
     ImGui::Checkbox("GI Probe Overlay", &settings.showGiProbeOverlay);
 
     ImGui::SeparatorText("DDGI Probe Grid");
-    ImGui::BeginDisabled(true);
-    ImGui::Checkbox("DDGI", &settings.enableDdgi);
-    ImGui::EndDisabled();
+    if (ImGui::Checkbox("DDGI Probe Storage", &settings.enableDdgi)) {
+        resetHistory = true;
+    }
     int probesX = static_cast<int>(settings.ddgiProbeCountX);
     int probesY = static_cast<int>(settings.ddgiProbeCountY);
     int probesZ = static_cast<int>(settings.ddgiProbeCountZ);
@@ -6236,7 +6241,10 @@ void VestaEngine::draw_global_illumination_panel()
         ddgiStats.probeSpacing,
         ddgiStats.hysteresis,
         ddgiStats.overlayEnabled ? "on" : "off");
-    ImGui::TextDisabled("DDGI backend is staged; requires probe atlas storage, ray update pass, visibility moments, and irradiance composite.");
+    ImGui::Text("Storage %s  Backend %s",
+        ddgiStats.probeStorageAvailable ? "allocated" : "staged",
+        ddgiStats.backendAvailable ? "ProbeStorage" : "Staged");
+    ImGui::TextDisabled("DDGI probe storage is live when enabled; ray update, visibility moments, and irradiance composite remain staged.");
 
     ImGui::SeparatorText("Advanced GI");
     ImGui::BeginDisabled(true);

@@ -1109,6 +1109,7 @@ void Renderer::Shutdown()
     _pendingSceneUpload = {};
     _scene.DestroyGpu(_device);
     DestroyIblResources();
+    DestroyDdgiResources();
     for (RetiredSceneEntry& retiredScene : _retiredScenes) {
         retiredScene.scene.DestroyGpu(_device);
     }
@@ -1317,6 +1318,7 @@ void Renderer::RenderFrame()
 
     // Build the logical frame graph first, then execute it. This keeps pass code
     // focused on "what it needs" instead of hand-written global barriers.
+    EnsureDdgiResources();
     RenderGraph graph = BuildFrameGraph(swapchainImageIndex);
     RenderGraphExecutionContext executionContext{
         .device = _device,
@@ -2432,10 +2434,60 @@ DdgiStats Renderer::GetDdgiStats() const
     stats.probeSpacing = std::clamp(_settings.ddgiProbeSpacing, 0.25f, 10.0f);
     stats.hysteresis = std::clamp(_settings.ddgiHysteresis, 0.0f, 1.0f);
     stats.requested = _settings.enableDdgi;
-    stats.backendAvailable = false;
-    stats.probeStorageAvailable = false;
+    stats.probeStorageAvailable = _ddgiIrradianceBuffer && _ddgiVisibilityBuffer
+        && _ddgiIrradianceBufferBytes >= stats.estimatedIrradianceBytes
+        && _ddgiVisibilityBufferBytes >= stats.estimatedVisibilityBytes;
+    stats.backendAvailable = stats.requested && stats.probeStorageAvailable;
     stats.overlayEnabled = _settings.showGiProbeOverlay;
     return stats;
+}
+
+void Renderer::EnsureDdgiResources()
+{
+    const DdgiStats stats = GetDdgiStats();
+    if (!stats.requested || _device.GetDevice() == VK_NULL_HANDLE) {
+        DestroyDdgiResources();
+        return;
+    }
+
+    const auto recreateBuffer = [&](BufferHandle& handle, uint64_t& currentBytes, uint64_t requiredBytes, std::string_view name) {
+        if (handle && currentBytes == requiredBytes) {
+            return;
+        }
+        if (handle) {
+            _device.DestroyBuffer(handle);
+            handle = {};
+            currentBytes = 0;
+        }
+        if (requiredBytes == 0u) {
+            return;
+        }
+        handle = _device.CreateBuffer(BufferDesc{
+            .size = static_cast<VkDeviceSize>(requiredBytes),
+            .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+            .registerBindlessStorage = true,
+            .debugName = std::string(name),
+        });
+        currentBytes = requiredBytes;
+    };
+
+    recreateBuffer(_ddgiIrradianceBuffer, _ddgiIrradianceBufferBytes, stats.estimatedIrradianceBytes, "DDGI.IrradianceProbeStorage");
+    recreateBuffer(_ddgiVisibilityBuffer, _ddgiVisibilityBufferBytes, stats.estimatedVisibilityBytes, "DDGI.VisibilityProbeStorage");
+}
+
+void Renderer::DestroyDdgiResources()
+{
+    if (_ddgiIrradianceBuffer) {
+        _device.DestroyBuffer(_ddgiIrradianceBuffer);
+        _ddgiIrradianceBuffer = {};
+    }
+    if (_ddgiVisibilityBuffer) {
+        _device.DestroyBuffer(_ddgiVisibilityBuffer);
+        _ddgiVisibilityBuffer = {};
+    }
+    _ddgiIrradianceBufferBytes = 0;
+    _ddgiVisibilityBufferBytes = 0;
 }
 
 IblStats Renderer::GetIblStats() const
