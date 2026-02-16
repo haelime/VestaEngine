@@ -3110,6 +3110,10 @@ void VestaEngine::build_main_menu_bar()
             ImGui::MenuItem("Resource Inspector", nullptr, &_showResourceInspectorPanel);
             ImGui::MenuItem("Log Console", nullptr, &_showLogConsolePanel);
             ImGui::Separator();
+            ImGui::MenuItem("Legacy Stats", nullptr, &_showLegacyStatsPanel);
+            ImGui::MenuItem("Legacy Render Controls", nullptr, &_showLegacyRenderPanel);
+            ImGui::MenuItem("Legacy Camera Controls", nullptr, &_showLegacyCameraPanel);
+            ImGui::Separator();
             if (ImGui::MenuItem("Reset Accumulation")) {
                 _renderer.ResetAccumulation();
                 log_startup_event("Path tracing accumulation reset");
@@ -3681,9 +3685,10 @@ void VestaEngine::build_debug_ui()
 
     build_render_mode_control_panel();
 
-    ImGui::SetNextWindowPos(ImVec2(18.0f, 18.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(420.0f, 0.0f), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("Stats", nullptr, ImGuiWindowFlags_NoSavedSettings)) {
+    if (_showLegacyStatsPanel) {
+        ImGui::SetNextWindowPos(ImVec2(18.0f, 18.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(420.0f, 0.0f), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Stats", &_showLegacyStatsPanel, ImGuiWindowFlags_NoSavedSettings)) {
         ImGui::Text("Frame %.2f ms", frameMs);
         ImGui::Text("FPS %.1f", fps);
         ImGui::Text("%s", device.GetGpuName().c_str());
@@ -3896,11 +3901,13 @@ void VestaEngine::build_debug_ui()
             }
         }
     }
-    ImGui::End();
+        ImGui::End();
+    }
 
-    ImGui::SetNextWindowPos(ImVec2(458.0f, 18.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(380.0f, 0.0f), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("Render", nullptr, ImGuiWindowFlags_NoSavedSettings)) {
+    if (_showLegacyRenderPanel) {
+        ImGui::SetNextWindowPos(ImVec2(458.0f, 18.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(380.0f, 0.0f), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Render", &_showLegacyRenderPanel, ImGuiWindowFlags_NoSavedSettings)) {
         if (ImGui::Button("Apply Recommended")) {
             _renderer.ApplyPreset(vesta::render::RendererPreset::Recommended);
         }
@@ -4118,11 +4125,13 @@ void VestaEngine::build_debug_ui()
             _renderer.ResetAccumulation();
         }
     }
-    ImGui::End();
+        ImGui::End();
+    }
 
-    ImGui::SetNextWindowPos(ImVec2(18.0f, 340.0f), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(420.0f, 0.0f), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("Camera", nullptr, ImGuiWindowFlags_NoSavedSettings)) {
+    if (_showLegacyCameraPanel) {
+        ImGui::SetNextWindowPos(ImVec2(18.0f, 340.0f), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(420.0f, 0.0f), ImGuiCond_FirstUseEver);
+        if (ImGui::Begin("Camera", &_showLegacyCameraPanel, ImGuiWindowFlags_NoSavedSettings)) {
         const bool canOrbitSelection =
             _renderer.GetSelection().kind == vesta::render::SelectionKind::Object
             && _renderer.GetSelection().objectIndex < scene.GetObjects().size();
@@ -4190,7 +4199,8 @@ void VestaEngine::build_debug_ui()
         ImGui::Text("1 Raster, 2 Gaussian, 3 PT, 4 Composite");
         ImGui::Text("R/G/P toggles, F1 UI, F5 Reload, F12 Screenshot");
     }
-    ImGui::End();
+        ImGui::End();
+    }
 
     if (_showSceneInspectorPanel) {
         ImGui::SetNextWindowPos(ImVec2(1124.0f, 552.0f), ImGuiCond_FirstUseEver);

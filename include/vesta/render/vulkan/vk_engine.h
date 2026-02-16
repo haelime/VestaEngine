@@ -104,6 +104,9 @@ public:
     bool _imguiInitialized{ false };
     bool _showDebugUi{ false };
     bool _showDetailedStats{ false };
+    bool _showLegacyStatsPanel{ false };
+    bool _showLegacyRenderPanel{ false };
+    bool _showLegacyCameraPanel{ false };
     bool _showFrameOverview{ false };
     bool _showRenderGraphPanel{ false };
     bool _showGpuProfilerPanel{ false };
