@@ -1110,6 +1110,7 @@ void Renderer::Shutdown()
     _scene.DestroyGpu(_device);
     DestroyIblResources();
     DestroyDdgiResources();
+    DestroyRestirResources();
     for (RetiredSceneEntry& retiredScene : _retiredScenes) {
         retiredScene.scene.DestroyGpu(_device);
     }
@@ -1319,6 +1320,7 @@ void Renderer::RenderFrame()
     // Build the logical frame graph first, then execute it. This keeps pass code
     // focused on "what it needs" instead of hand-written global barriers.
     EnsureDdgiResources();
+    EnsureRestirResources();
     RenderGraph graph = BuildFrameGraph(swapchainImageIndex);
     RenderGraphExecutionContext executionContext{
         .device = _device,
@@ -2401,7 +2403,7 @@ RestirStats Renderer::GetRestirStats() const
     stats.reservoirBuffersAvailable = false;
     stats.temporalReuse = _settings.restirTemporalReuse;
     stats.spatialReuse = _settings.restirSpatialReuse;
-    stats.historyAvailable = _settings.enableTaa || IsTemporalDebugView(_settings.debugView);
+    stats.historyAvailable = false;
     stats.emissiveTriangleCount = static_cast<uint32_t>(std::min<size_t>(_scene.GetEmissiveTriangles().size(), std::numeric_limits<uint32_t>::max()));
     stats.localLightCount = 1u
         + (_settings.enablePointLight ? 1u : 0u)
@@ -2411,7 +2413,14 @@ RestirStats Renderer::GetRestirStats() const
     stats.candidateLightCount = std::clamp(_settings.restirCandidateLights, 1u, std::max(1u, stats.activeLightCount));
     stats.reservoirCount = std::clamp(_settings.restirReservoirCount, 1u, 8u);
     stats.reservoirPixels = static_cast<uint64_t>(extent.width) * static_cast<uint64_t>(extent.height) * stats.reservoirCount;
-    stats.estimatedReservoirBytes = stats.reservoirPixels * kEstimatedReservoirBytes;
+    const uint64_t reservoirBufferBytes = stats.reservoirPixels * kEstimatedReservoirBytes;
+    stats.estimatedReservoirBytes = reservoirBufferBytes * (stats.temporalReuse ? 2u : 1u);
+    const bool requested = stats.requestedDi || stats.requestedGi || stats.requestedPt;
+    stats.reservoirBuffersAvailable = _restirReservoirBuffer && _restirReservoirBufferBytes >= reservoirBufferBytes
+        && (!stats.temporalReuse
+            || (_restirHistoryReservoirBuffer && _restirHistoryReservoirBufferBytes >= reservoirBufferBytes));
+    stats.historyAvailable = stats.temporalReuse && _restirHistoryReservoirBuffer && _restirHistoryReservoirBufferBytes >= reservoirBufferBytes;
+    stats.backendAvailable = requested && stats.reservoirBuffersAvailable;
     return stats;
 }
 
@@ -2488,6 +2497,63 @@ void Renderer::DestroyDdgiResources()
     }
     _ddgiIrradianceBufferBytes = 0;
     _ddgiVisibilityBufferBytes = 0;
+}
+
+void Renderer::EnsureRestirResources()
+{
+    const RestirStats stats = GetRestirStats();
+    const bool requested = stats.requestedDi || stats.requestedGi || stats.requestedPt;
+    if (!requested || _device.GetDevice() == VK_NULL_HANDLE) {
+        DestroyRestirResources();
+        return;
+    }
+
+    constexpr uint64_t kEstimatedReservoirBytes = 32u;
+    const uint64_t reservoirBufferBytes = stats.reservoirPixels * kEstimatedReservoirBytes;
+    const auto recreateBuffer = [&](BufferHandle& handle, uint64_t& currentBytes, uint64_t requiredBytes, std::string_view name) {
+        if (handle && currentBytes == requiredBytes) {
+            return;
+        }
+        if (handle) {
+            _device.DestroyBuffer(handle);
+            handle = {};
+            currentBytes = 0;
+        }
+        if (requiredBytes == 0u) {
+            return;
+        }
+        handle = _device.CreateBuffer(BufferDesc{
+            .size = static_cast<VkDeviceSize>(requiredBytes),
+            .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+            .registerBindlessStorage = true,
+            .debugName = std::string(name),
+        });
+        currentBytes = requiredBytes;
+    };
+
+    recreateBuffer(_restirReservoirBuffer, _restirReservoirBufferBytes, reservoirBufferBytes, "ReSTIR.CurrentReservoirStorage");
+    if (stats.temporalReuse) {
+        recreateBuffer(_restirHistoryReservoirBuffer, _restirHistoryReservoirBufferBytes, reservoirBufferBytes, "ReSTIR.HistoryReservoirStorage");
+    } else if (_restirHistoryReservoirBuffer) {
+        _device.DestroyBuffer(_restirHistoryReservoirBuffer);
+        _restirHistoryReservoirBuffer = {};
+        _restirHistoryReservoirBufferBytes = 0;
+    }
+}
+
+void Renderer::DestroyRestirResources()
+{
+    if (_restirReservoirBuffer) {
+        _device.DestroyBuffer(_restirReservoirBuffer);
+        _restirReservoirBuffer = {};
+    }
+    if (_restirHistoryReservoirBuffer) {
+        _device.DestroyBuffer(_restirHistoryReservoirBuffer);
+        _restirHistoryReservoirBuffer = {};
+    }
+    _restirReservoirBufferBytes = 0;
+    _restirHistoryReservoirBufferBytes = 0;
 }
 
 IblStats Renderer::GetIblStats() const

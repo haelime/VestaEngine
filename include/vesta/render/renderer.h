@@ -854,6 +854,8 @@ private:
     void DestroyIblResources();
     void EnsureDdgiResources();
     void DestroyDdgiResources();
+    void EnsureRestirResources();
+    void DestroyRestirResources();
 
     RenderDevice _device;
     vesta::core::JobSystem _jobs;
@@ -911,6 +913,10 @@ private:
     BufferHandle _ddgiVisibilityBuffer{};
     uint64_t _ddgiIrradianceBufferBytes{ 0 };
     uint64_t _ddgiVisibilityBufferBytes{ 0 };
+    BufferHandle _restirReservoirBuffer{};
+    BufferHandle _restirHistoryReservoirBuffer{};
+    uint64_t _restirReservoirBufferBytes{ 0 };
+    uint64_t _restirHistoryReservoirBufferBytes{ 0 };
     glm::vec2 _lastDragMousePosition{ 0.0f };
     glm::vec3 _dragPlaneOrigin{ 0.0f };
     glm::vec3 _dragPlaneNormal{ 0.0f, 1.0f, 0.0f };

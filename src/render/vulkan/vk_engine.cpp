@@ -1339,6 +1339,18 @@ void VestaEngine::init_renderer()
         settings.enableDdgi = *_launchOptions.startupDdgiEnabled;
         resetAccumulation = true;
     }
+    if (_launchOptions.startupRestirDiEnabled.has_value()) {
+        settings.enableRestirDi = *_launchOptions.startupRestirDiEnabled;
+        resetAccumulation = true;
+    }
+    if (_launchOptions.startupRestirGiEnabled.has_value()) {
+        settings.enableRestirGi = *_launchOptions.startupRestirGiEnabled;
+        resetAccumulation = true;
+    }
+    if (_launchOptions.startupRestirPtEnabled.has_value()) {
+        settings.enableRestirPt = *_launchOptions.startupRestirPtEnabled;
+        resetAccumulation = true;
+    }
     if (_launchOptions.startupRtShadowsEnabled.has_value()) {
         settings.enableRtShadows = *_launchOptions.startupRtShadowsEnabled;
         resetAccumulation = true;
@@ -1878,7 +1890,7 @@ void VestaEngine::finish_benchmark()
                << "debug_view,path_trace_debug_view,gaussian_debug_view,compare_mode,compare_split,compare_difference_scale,"
                << "ssao,ssao_radius,ssao_intensity,"
                << "taa,taa_feedback,temporal_upscaler,temporal_upscaler_backend,temporal_upscaler_input,temporal_upscaler_output,temporal_upscaler_scale,temporal_upscaler_history,temporal_upscaler_reactive_mask,"
-               << "restir_di,restir_gi,restir_pt,restir_backend,restir_lights,restir_emissive_lights,restir_candidates,restir_reservoirs,restir_reservoir_mb,restir_temporal_reuse,restir_spatial_reuse,restir_history,"
+               << "restir_di,restir_gi,restir_pt,restir_backend,restir_reservoir_storage,restir_lights,restir_emissive_lights,restir_candidates,restir_reservoirs,restir_reservoir_mb,restir_temporal_reuse,restir_spatial_reuse,restir_history,"
                << "rt_hybrid_backend,rt_hybrid_ray_query,rt_hybrid_tlas,rt_hybrid_resolution,rt_shadow_rays,rt_ao_rays,rt_reflection_rays,rt_gi_rays,rt_denoiser,rt_temporal,"
                << "ssr,ssr_max_distance,ssr_thickness,ssr_intensity,"
                << "ssgi,ssgi_radius,ssgi_intensity,ssgi_samples,"
@@ -1994,7 +2006,8 @@ void VestaEngine::finish_benchmark()
            << (restirStats.requestedDi ? "true" : "false") << ','
            << (restirStats.requestedGi ? "true" : "false") << ','
            << (restirStats.requestedPt ? "true" : "false") << ','
-           << (restirStats.backendAvailable ? "ReservoirPass" : "Staged") << ','
+           << (restirStats.backendAvailable ? "ReservoirStorage" : "Staged") << ','
+           << (restirStats.reservoirBuffersAvailable ? "true" : "false") << ','
            << restirStats.activeLightCount << ','
            << restirStats.emissiveTriangleCount << ','
            << restirStats.candidateLightCount << ','
@@ -2257,6 +2270,7 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "    \"gi_requested\": " << (restirStats.requestedGi ? "true" : "false") << ",\n"
            << "    \"pt_requested\": " << (restirStats.requestedPt ? "true" : "false") << ",\n"
            << "    \"backend_available\": " << (restirStats.backendAvailable ? "true" : "false") << ",\n"
+           << "    \"reservoir_buffers_available\": " << (restirStats.reservoirBuffersAvailable ? "true" : "false") << ",\n"
            << "    \"active_light_count\": " << restirStats.activeLightCount << ",\n"
            << "    \"emissive_triangle_count\": " << restirStats.emissiveTriangleCount << ",\n"
            << "    \"candidate_light_count\": " << restirStats.candidateLightCount << ",\n"
@@ -6322,11 +6336,9 @@ void VestaEngine::draw_advanced_portfolio_panel()
     const auto& device = _renderer.GetRenderDevice();
 
     ImGui::SeparatorText("ReSTIR");
-    ImGui::BeginDisabled(true);
     ImGui::Checkbox("ReSTIR DI", &settings.enableRestirDi);
     ImGui::Checkbox("ReSTIR GI", &settings.enableRestirGi);
     ImGui::Checkbox("ReSTIR PT", &settings.enableRestirPt);
-    ImGui::EndDisabled();
     int candidateLights = static_cast<int>(settings.restirCandidateLights);
     int reservoirs = static_cast<int>(settings.restirReservoirCount);
     int spatialSamples = static_cast<int>(settings.restirSpatialSamples);
@@ -6356,7 +6368,10 @@ void VestaEngine::draw_advanced_portfolio_panel()
         restirStats.historyAvailable ? "ready" : "disabled",
         restirStats.temporalReuse ? "on" : "off",
         restirStats.spatialReuse ? "on" : "off");
-    ImGui::TextDisabled("Backend is staged; requires reservoir buffers, candidate sampling, temporal/spatial reuse, and lighting resolve passes.");
+    ImGui::Text("Storage %s  Backend %s",
+        restirStats.reservoirBuffersAvailable ? "allocated" : "staged",
+        restirStats.backendAvailable ? "ReservoirStorage" : "Staged");
+    ImGui::TextDisabled("Reservoir storage is live when enabled; candidate sampling, temporal/spatial reuse passes, and lighting resolve remain staged.");
 
     ImGui::SeparatorText("GPU-driven Rendering");
     ImGui::Checkbox("Indirect Draw", &settings.useIndirectDraw);

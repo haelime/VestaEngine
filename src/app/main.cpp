@@ -39,6 +39,9 @@ void PrintUsage()
         << "  --ssgi-intensity <value>      SSGI bounce strength.\n"
         << "  --ssgi-samples <4-16>         SSGI sample count.\n"
         << "  --ddgi <on|off>               Toggle DDGI probe storage allocation.\n"
+        << "  --restir-di <on|off>          Toggle ReSTIR DI reservoir storage allocation.\n"
+        << "  --restir-gi <on|off>          Toggle ReSTIR GI reservoir storage allocation.\n"
+        << "  --restir-pt <on|off>          Toggle ReSTIR PT reservoir storage allocation.\n"
         << "  --rt-shadows <on|off>         Toggle hybrid ray-query shadows.\n"
         << "  --rt-ao <on|off>              Toggle hybrid ray-query ambient occlusion.\n"
         << "  --rt-reflections <on|off>     Toggle hybrid ray-query reflection visibility.\n"
@@ -617,6 +620,42 @@ int main(int argc, char* argv[])
             options.startupDdgiEnabled = ParseToggle(value);
             if (!options.startupDdgiEnabled.has_value()) {
                 std::cerr << "Invalid DDGI toggle: " << value << "\n";
+                return 1;
+            }
+            continue;
+        }
+        if (argument == "--restir-di") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            options.startupRestirDiEnabled = ParseToggle(value);
+            if (!options.startupRestirDiEnabled.has_value()) {
+                std::cerr << "Invalid ReSTIR DI toggle: " << value << "\n";
+                return 1;
+            }
+            continue;
+        }
+        if (argument == "--restir-gi") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            options.startupRestirGiEnabled = ParseToggle(value);
+            if (!options.startupRestirGiEnabled.has_value()) {
+                std::cerr << "Invalid ReSTIR GI toggle: " << value << "\n";
+                return 1;
+            }
+            continue;
+        }
+        if (argument == "--restir-pt") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            options.startupRestirPtEnabled = ParseToggle(value);
+            if (!options.startupRestirPtEnabled.has_value()) {
+                std::cerr << "Invalid ReSTIR PT toggle: " << value << "\n";
                 return 1;
             }
             continue;
