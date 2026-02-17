@@ -5217,7 +5217,11 @@ void VestaEngine::build_debug_ui()
                         vesta::render::BufferHandle handle;
                         uint64_t logicalBytes;
                     };
-                    const std::array<BufferInspectorEntry, 6> bufferEntries{
+                    const auto ddgiStats = _renderer.GetDdgiStats();
+                    const auto restirStats = _renderer.GetRestirStats();
+                    const uint64_t restirPerBufferBytes =
+                        restirStats.temporalReuse ? restirStats.estimatedReservoirBytes / 2u : restirStats.estimatedReservoirBytes;
+                    std::vector<BufferInspectorEntry> bufferEntries{
                         BufferInspectorEntry{ "Vertex Buffer", scene.GetVertexBuffer(), vertexBytes },
                         BufferInspectorEntry{ "Index Buffer", scene.GetIndexBuffer(), indexBytes },
                         BufferInspectorEntry{ "Material Buffer", scene.GetMaterialBuffer(), materialBytes },
@@ -5225,6 +5229,26 @@ void VestaEngine::build_debug_ui()
                         BufferInspectorEntry{ "Emissive Triangle Buffer", scene.GetEmissiveTriangleBuffer(), emissiveBytes },
                         BufferInspectorEntry{ "Gaussian Position/Covariance/SH", scene.GetGaussianBuffer(), gaussianBytes },
                     };
+                    bufferEntries.push_back(BufferInspectorEntry{
+                        "DDGI Irradiance Probe Storage",
+                        _renderer.GetDdgiIrradianceBuffer(),
+                        ddgiStats.estimatedIrradianceBytes,
+                    });
+                    bufferEntries.push_back(BufferInspectorEntry{
+                        "DDGI Visibility Probe Storage",
+                        _renderer.GetDdgiVisibilityBuffer(),
+                        ddgiStats.estimatedVisibilityBytes,
+                    });
+                    bufferEntries.push_back(BufferInspectorEntry{
+                        "ReSTIR Current Reservoir Storage",
+                        _renderer.GetRestirReservoirBuffer(),
+                        restirPerBufferBytes,
+                    });
+                    bufferEntries.push_back(BufferInspectorEntry{
+                        "ReSTIR History Reservoir Storage",
+                        _renderer.GetRestirHistoryReservoirBuffer(),
+                        restirStats.temporalReuse ? restirPerBufferBytes : 0u,
+                    });
                     if (ImGui::BeginTable("BufferTable", 8, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
                         ImGui::TableSetupColumn("Name");
                         ImGui::TableSetupColumn("State", ImGuiTableColumnFlags_WidthFixed, 74.0f);

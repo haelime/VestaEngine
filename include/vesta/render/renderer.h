@@ -663,6 +663,10 @@ public:
     [[nodiscard]] TemporalUpscalerStats GetTemporalUpscalerStats() const;
     [[nodiscard]] RestirStats GetRestirStats() const;
     [[nodiscard]] DdgiStats GetDdgiStats() const;
+    [[nodiscard]] BufferHandle GetDdgiIrradianceBuffer() const { return _ddgiIrradianceBuffer; }
+    [[nodiscard]] BufferHandle GetDdgiVisibilityBuffer() const { return _ddgiVisibilityBuffer; }
+    [[nodiscard]] BufferHandle GetRestirReservoirBuffer() const { return _restirReservoirBuffer; }
+    [[nodiscard]] BufferHandle GetRestirHistoryReservoirBuffer() const { return _restirHistoryReservoirBuffer; }
     [[nodiscard]] IblStats GetIblStats() const;
     [[nodiscard]] RayEffectsStats GetRayEffectsStats() const;
     [[nodiscard]] std::vector<RenderPassDebugInfo> GetRenderPassDebugInfo() const;
