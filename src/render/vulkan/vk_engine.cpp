@@ -2472,6 +2472,7 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
                << "      \"cpu_ms\": " << timing.cpuMs << ",\n"
                << "      \"gpu_ms\": " << timing.gpuMs << ",\n"
                << "      \"gpu_timing_valid\": " << (timing.gpuTimingValid ? "true" : "false") << ",\n"
+               << "      \"render_extent\": \"" << timing.renderExtent.width << "x" << timing.renderExtent.height << "\",\n"
                << "      \"read_count\": " << timing.readCount << ",\n"
                << "      \"write_count\": " << timing.writeCount << ",\n"
                << "      \"barrier_count\": " << timing.barrierCount << ",\n"
@@ -3464,9 +3465,18 @@ void VestaEngine::build_debug_ui()
             for (const auto& timing : graphTimings) {
                 if (ImGui::TreeNode(timing.name.c_str())) {
                     if (timing.gpuTimingValid) {
-                        ImGui::Text("CPU %.3f ms, GPU %.3f ms, Barriers %u", timing.cpuMs, timing.gpuMs, timing.barrierCount);
+                        ImGui::Text("CPU %.3f ms, GPU %.3f ms, Render %ux%u, Barriers %u",
+                            timing.cpuMs,
+                            timing.gpuMs,
+                            timing.renderExtent.width,
+                            timing.renderExtent.height,
+                            timing.barrierCount);
                     } else {
-                        ImGui::Text("CPU %.3f ms, GPU -, Barriers %u", timing.cpuMs, timing.barrierCount);
+                        ImGui::Text("CPU %.3f ms, GPU -, Render %ux%u, Barriers %u",
+                            timing.cpuMs,
+                            timing.renderExtent.width,
+                            timing.renderExtent.height,
+                            timing.barrierCount);
                     }
                     DrawRenderGraphBarrierList(timing.barriers);
                     DrawRenderGraphResourceList("Inputs", timing.inputs);

@@ -70,6 +70,7 @@ struct RenderGraphPassTiming {
     float cpuMs{ 0.0f };
     float gpuMs{ 0.0f };
     bool gpuTimingValid{ false };
+    VkExtent2D renderExtent{ 1, 1 };
     std::vector<ResourceAccess> inputs;
     std::vector<ResourceAccess> outputs;
     std::vector<BarrierInfo> barriers;
@@ -156,6 +157,7 @@ private:
         IRenderPass* pass{ nullptr };
         uint32_t readCount{ 0 };
         uint32_t writeCount{ 0 };
+        VkExtent2D renderExtent{ 1, 1 };
         std::vector<CompiledBarrier> barriers;
         std::vector<RenderGraphPassTiming::ResourceAccess> inputs;
         std::vector<RenderGraphPassTiming::ResourceAccess> outputs;

@@ -8,6 +8,18 @@
 #include <vesta/render/vulkan/vk_initializers.h>
 
 namespace vesta::render {
+namespace {
+VkExtent2D ToExtent2D(const VkExtent3D& extent)
+{
+    return VkExtent2D{ std::max(1u, extent.width), std::max(1u, extent.height) };
+}
+
+uint64_t ExtentArea(const VkExtent2D& extent)
+{
+    return static_cast<uint64_t>(extent.width) * static_cast<uint64_t>(extent.height);
+}
+} // namespace
+
 // RenderGraphBuilder is intentionally tiny. Passes only say "I read this" or
 // "I write that", and the graph handles the synchronization details later.
 void RenderGraphBuilder::Read(GraphTextureHandle texture, ResourceUsage usage)
@@ -182,6 +194,7 @@ void RenderGraph::Compile(RenderDevice& device)
         compiledPass.pass = pass.pass;
         compiledPass.readCount = static_cast<uint32_t>(pass.reads.size());
         compiledPass.writeCount = static_cast<uint32_t>(pass.writes.size());
+        compiledPass.renderExtent = device.GetSwapchainExtent();
 
         auto makeAccessSummary = [&](const RenderGraphTextureAccess& access) {
             const TextureResource& resource = _textures[access.texture.index];
@@ -219,6 +232,16 @@ void RenderGraph::Compile(RenderDevice& device)
 
             previous = next;
         };
+
+        bool hasWriteExtent = false;
+        for (const RenderGraphTextureAccess& write : pass.writes) {
+            const TextureResource& resource = _textures[write.texture.index];
+            const VkExtent2D writeExtent = ToExtent2D(resource.desc.extent);
+            if (!hasWriteExtent || ExtentArea(writeExtent) > ExtentArea(compiledPass.renderExtent)) {
+                compiledPass.renderExtent = writeExtent;
+                hasWriteExtent = true;
+            }
+        }
 
         for (const RenderGraphTextureAccess& read : pass.reads) {
             compiledPass.inputs.push_back(makeAccessSummary(read));
@@ -361,7 +384,7 @@ void RenderGraph::Execute(RenderGraphExecutionContext& executionContext)
         }
 
         RenderGraphContext context(
-            executionContext.device, resolvedImages, executionContext.commandBuffer, executionContext.device.GetSwapchainExtent());
+            executionContext.device, resolvedImages, executionContext.commandBuffer, compiledPass.renderExtent);
         if (passIndex < timestampPassCount) {
             vkCmdWriteTimestamp2(executionContext.commandBuffer,
                 VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
@@ -415,6 +438,7 @@ void RenderGraph::Execute(RenderGraphExecutionContext& executionContext)
                 .cpuMs = cpuMs,
                 .gpuMs = gpuMs,
                 .gpuTimingValid = gpuTimingValid,
+                .renderExtent = compiledPass.renderExtent,
                 .inputs = std::move(inputs),
                 .outputs = std::move(outputs),
                 .barriers = std::move(barrierInfo),

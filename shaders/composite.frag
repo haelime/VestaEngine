@@ -29,6 +29,7 @@ layout(push_constant) uniform CompositePushConstants {
 layout(location = 0) out vec4 outColor;
 
 const uint INVALID_IMAGE_INDEX = 0xffffffffu;
+const uint GAUSSIAN_TILE_SIZE = 8u;
 
 vec3 srgb_to_linear(vec3 value)
 {
@@ -54,6 +55,11 @@ vec3 reinhardTonemap(vec3 value)
 
 bool hasImage(uint index) {
     return index != INVALID_IMAGE_INDEX;
+}
+
+ivec2 getOutputSize()
+{
+    return ivec2(max(pc.imageIndices4.z, 1u), max(pc.imageIndices4.w, 1u));
 }
 
 vec4 resolveGaussian(ivec2 pixel, vec2 uv)
@@ -293,10 +299,7 @@ vec3 resolveDebugView(ivec2 pixel)
     }
     if (debugView == 16u) {
         if (!hasImage(pc.imageIndices0.y)) { return vec3(-1.0); }
-        ivec2 baseSize = ivec2(1);
-        if (hasImage(pc.imageIndices0.x)) {
-            baseSize = imageSize(storageImages[nonuniformEXT(int(pc.imageIndices0.x))]);
-        }
+        ivec2 baseSize = getOutputSize();
         vec2 uv = (vec2(pixel) + 0.5) / vec2(baseSize);
         ivec2 pathTraceSize = imageSize(storageImages[nonuniformEXT(int(pc.imageIndices0.y))]);
         ivec2 pathTracePixel = clamp(ivec2(uv * vec2(pathTraceSize)), ivec2(0), pathTraceSize - ivec2(1));
@@ -304,9 +307,10 @@ vec3 resolveDebugView(ivec2 pixel)
     }
     if (debugView == 17u) {
         if (!hasImage(pc.imageIndices0.x) || !hasImage(pc.imageIndices0.y)) { return vec3(-1.0); }
+        ivec2 outputSize = getOutputSize();
+        vec2 uv = (vec2(pixel) + 0.5) / vec2(outputSize);
         ivec2 deferredSize = imageSize(storageImages[nonuniformEXT(int(pc.imageIndices0.x))]);
-        ivec2 deferredPixel = clamp(pixel, ivec2(0), deferredSize - ivec2(1));
-        vec2 uv = (vec2(deferredPixel) + 0.5) / vec2(deferredSize);
+        ivec2 deferredPixel = clamp(ivec2(uv * vec2(deferredSize)), ivec2(0), deferredSize - ivec2(1));
         ivec2 pathTraceSize = imageSize(storageImages[nonuniformEXT(int(pc.imageIndices0.y))]);
         ivec2 pathTracePixel = clamp(ivec2(uv * vec2(pathTraceSize)), ivec2(0), pathTraceSize - ivec2(1));
         vec3 rasterDisplay = applyDisplayTransform(imageLoad(storageImages[nonuniformEXT(int(pc.imageIndices0.x))], deferredPixel).rgb);
@@ -543,7 +547,7 @@ vec3 resolveGaussianDebugView(vec4 gaussianColor, ivec2 pixel, vec2 uv)
         if (pc.gaussianDebug.x == INVALID_IMAGE_INDEX || pc.gaussianDebug.y == 0u || pc.gaussianDebug.z == 0u) {
             return vec3(-1.0);
         }
-        uvec2 tileCoord = min(uvec2(pixel) / max(pc.gaussianDebug.w, 1u), uvec2(pc.gaussianDebug.y - 1u, pc.gaussianDebug.z - 1u));
+        uvec2 tileCoord = min(uvec2(pixel) / GAUSSIAN_TILE_SIZE, uvec2(pc.gaussianDebug.y - 1u, pc.gaussianDebug.z - 1u));
         uint tileIndex = tileCoord.y * pc.gaussianDebug.y + tileCoord.x;
         uvec2 range = storageBuffersUvec2[nonuniformEXT(int(pc.gaussianDebug.x))].values[tileIndex];
         if (range.x == INVALID_IMAGE_INDEX || range.y == INVALID_IMAGE_INDEX || range.y <= range.x) {
@@ -626,21 +630,14 @@ vec3 resolveGaussianDebugView(vec4 gaussianColor, ivec2 pixel, vec2 uv)
 
 void main() {
     ivec2 pixel = ivec2(gl_FragCoord.xy);
-    ivec2 baseSize = ivec2(1);
-    if (hasImage(pc.imageIndices0.x)) {
-        baseSize = imageSize(storageImages[nonuniformEXT(int(pc.imageIndices0.x))]);
-    } else if (hasImage(pc.imageIndices0.y)) {
-        baseSize = imageSize(storageImages[nonuniformEXT(int(pc.imageIndices0.y))]);
-    } else if (hasImage(pc.imageIndices0.z)) {
-        baseSize = imageSize(storageImages[nonuniformEXT(int(pc.imageIndices0.z))]);
-    }
+    ivec2 baseSize = getOutputSize();
 
     vec2 uv = (vec2(pixel) + 0.5) / vec2(baseSize);
 
     vec3 deferredColor = vec3(0.0);
     if (hasImage(pc.imageIndices0.x)) {
         ivec2 deferredSize = imageSize(storageImages[nonuniformEXT(int(pc.imageIndices0.x))]);
-        ivec2 deferredPixel = clamp(pixel, ivec2(0), deferredSize - ivec2(1));
+        ivec2 deferredPixel = clamp(ivec2(uv * vec2(deferredSize)), ivec2(0), deferredSize - ivec2(1));
         deferredColor = imageLoad(storageImages[nonuniformEXT(int(pc.imageIndices0.x))], deferredPixel).rgb;
     }
 
@@ -698,7 +695,7 @@ void main() {
     if (pc.imageIndices1.x != 2u) {
         composite = applyDisplayTransform(composite);
     }
-    if (pc.imageIndices4.z != 0u) {
+    if (pc.gaussianDebug.w != 0u) {
         vec3 cascadeColor = resolveShadowCascadeColor(pixel);
         if (cascadeColor.x >= 0.0) {
             composite = mix(composite, cascadeColor, 0.36);

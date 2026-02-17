@@ -29,6 +29,8 @@ struct CompositePushConstants {
     glm::vec4 motionBlurParams{ 0.0f, 0.35f, 5.0f, 0.0f };
     glm::mat4 inverseViewProjection{ 1.0f };
 };
+
+static_assert(sizeof(CompositePushConstants) <= 256, "Composite push constants must fit common Vulkan limits.");
 } // namespace
 
 void CompositePass::SetInputs(
@@ -246,8 +248,10 @@ void CompositePass::Execute(const RenderGraphContext& context)
         .imageIndices1 = glm::uvec4(_mode, _debugView, _gaussianDebugView, kInvalidImageIndex),
         .imageIndices2 = glm::uvec4(kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex),
         .imageIndices3 = glm::uvec4(kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex, kInvalidImageIndex),
-        .imageIndices4 = glm::uvec4(kInvalidImageIndex, kInvalidImageIndex, _shadowCascadeParams.z > 0.5f ? 1u : 0u, kInvalidImageIndex),
-        .gaussianDebug = glm::uvec4(_gaussianTileRangeBufferIndex, _gaussianTileCountX, _gaussianTileCountY, 8u),
+        .imageIndices4 = glm::uvec4(
+            kInvalidImageIndex, kInvalidImageIndex, context.GetRenderExtent().width, context.GetRenderExtent().height),
+        .gaussianDebug = glm::uvec4(
+            _gaussianTileRangeBufferIndex, _gaussianTileCountX, _gaussianTileCountY, _shadowCascadeParams.z > 0.5f ? 1u : 0u),
         .params = glm::vec4(_gaussianMix, _exposureEv, _nearPlane, _farPlane),
         .compareParams = glm::vec4(static_cast<float>(_compareMode), _compareSplitPosition, _compareDifferenceScale, static_cast<float>(_toneMappingMode)),
         .postParams = glm::vec4(_saturation, _contrast, _vignetteEnabled ? 1.0f : 0.0f, _vignetteStrength),
