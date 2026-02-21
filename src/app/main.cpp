@@ -32,6 +32,7 @@ void PrintUsage()
         << "  --taa-feedback <0.0-0.98>     TAA history blend feedback.\n"
         << "  --temporal-upscaler <on|off>  Toggle raster temporal upscaling.\n"
         << "  --upscaler-scale <0.25-1.0>   Internal raster input scale for temporal upscaling.\n"
+        << "  --upscaler-sharpness <0-1>    Contrast sharpening applied by temporal upscaling.\n"
         << "  --ssr <on|off>                Toggle raster screen-space reflections.\n"
         << "  --ssr-distance <value>        SSR max ray distance.\n"
         << "  --ssr-thickness <value>       SSR depth thickness.\n"
@@ -535,6 +536,19 @@ int main(int argc, char* argv[])
                 return 1;
             }
             options.startupTemporalUpscalerScale = scale;
+            continue;
+        }
+        if (argument == "--upscaler-sharpness") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            float sharpness = 0.0f;
+            if (!TryParseFloat(value, sharpness) || sharpness < 0.0f || sharpness > 1.0f) {
+                std::cerr << "Invalid temporal upscaler sharpness: " << value << "\n";
+                return 1;
+            }
+            options.startupTemporalUpscalerSharpness = sharpness;
             continue;
         }
         if (argument == "--ssr") {

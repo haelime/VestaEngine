@@ -15,6 +15,7 @@ public:
     void SetOutput(GraphTextureHandle output);
     void SetEnabled(bool enabled);
     void SetFeedback(float feedback);
+    void SetUpscalerSharpness(float sharpness);
     void SetFrameIndex(uint32_t frameIndex);
     void SetCameraMatrices(const glm::mat4& viewProjection, const glm::mat4& inverseViewProjection);
     void SetDebugView(RendererDebugView debugView);
@@ -33,6 +34,7 @@ private:
     GraphTextureHandle _output{};
     bool _enabled{ true };
     float _feedback{ 0.88f };
+    float _upscalerSharpness{ 0.0f };
     uint32_t _frameIndex{ 0 };
     RendererDebugView _debugView{};
     glm::mat4 _viewProjection{ 1.0f };

@@ -1311,6 +1311,10 @@ void VestaEngine::init_renderer()
         settings.temporalUpscalerScale = std::clamp(*_launchOptions.startupTemporalUpscalerScale, 0.25f, 1.0f);
         resetAccumulation = true;
     }
+    if (_launchOptions.startupTemporalUpscalerSharpness.has_value()) {
+        settings.temporalUpscalerSharpness = std::clamp(*_launchOptions.startupTemporalUpscalerSharpness, 0.0f, 1.0f);
+        resetAccumulation = true;
+    }
     if (_launchOptions.startupSsrEnabled.has_value()) {
         settings.enableSsr = *_launchOptions.startupSsrEnabled;
         resetAccumulation = true;
@@ -1897,7 +1901,7 @@ void VestaEngine::finish_benchmark()
         output << "timestamp,scene,scene_kind,gpu,resolution,vsync,present_mode,fps_limit_enabled,fps_limit,display_mode,"
                << "debug_view,path_trace_debug_view,gaussian_debug_view,compare_mode,compare_split,compare_difference_scale,"
                << "ssao,ssao_radius,ssao_intensity,"
-               << "taa,taa_feedback,temporal_upscaler,temporal_upscaler_backend,temporal_upscaler_input,temporal_upscaler_output,temporal_upscaler_scale,temporal_upscaler_history,temporal_upscaler_reactive_mask,"
+               << "taa,taa_feedback,temporal_upscaler,temporal_upscaler_backend,temporal_upscaler_input,temporal_upscaler_output,temporal_upscaler_scale,temporal_upscaler_sharpness,temporal_upscaler_history,temporal_upscaler_reactive_mask,"
                << "restir_di,restir_gi,restir_pt,restir_backend,restir_reservoir_storage,restir_lights,restir_emissive_lights,restir_candidates,restir_reservoirs,restir_reservoir_mb,restir_temporal_reuse,restir_spatial_reuse,restir_history,"
                << "rt_hybrid_backend,rt_hybrid_ray_query,rt_hybrid_tlas,rt_hybrid_resolution,rt_shadow_rays,rt_ao_rays,rt_reflection_rays,rt_gi_rays,rt_denoiser,rt_temporal,"
                << "ssr,ssr_max_distance,ssr_thickness,ssr_intensity,"
@@ -2009,6 +2013,7 @@ void VestaEngine::finish_benchmark()
            << CsvEscape(fmt::format("{}x{}", temporalUpscalerStats.inputWidth, temporalUpscalerStats.inputHeight)) << ','
            << CsvEscape(fmt::format("{}x{}", temporalUpscalerStats.outputWidth, temporalUpscalerStats.outputHeight)) << ','
            << temporalUpscalerStats.scale << ','
+           << temporalUpscalerStats.sharpness << ','
            << (temporalUpscalerStats.taaHistoryAvailable ? "true" : "false") << ','
            << (temporalUpscalerStats.reactiveMaskAvailable ? "true" : "false") << ','
            << (restirStats.requestedDi ? "true" : "false") << ','
@@ -2268,6 +2273,7 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "    \"output_width\": " << temporalUpscalerStats.outputWidth << ",\n"
            << "    \"output_height\": " << temporalUpscalerStats.outputHeight << ",\n"
            << "    \"scale\": " << temporalUpscalerStats.scale << ",\n"
+           << "    \"sharpness\": " << temporalUpscalerStats.sharpness << ",\n"
            << "    \"taa_history_available\": " << (temporalUpscalerStats.taaHistoryAvailable ? "true" : "false") << ",\n"
            << "    \"motion_vectors_available\": " << (temporalUpscalerStats.motionVectorsAvailable ? "true" : "false") << ",\n"
            << "    \"depth_available\": " << (temporalUpscalerStats.depthAvailable ? "true" : "false") << ",\n"
@@ -5907,6 +5913,10 @@ void VestaEngine::draw_rasterizer_debug_panel()
     ImGui::Checkbox("Show Upscaler Debug", &settings.showTemporalUpscalerDebug);
     if (ImGui::SliderFloat("Upscaler Input Scale", &settings.temporalUpscalerScale, 0.25f, 1.0f, "%.2fx")) {
         settings.temporalUpscalerScale = std::clamp(settings.temporalUpscalerScale, 0.25f, 1.0f);
+        _renderer.ResetAccumulation();
+    }
+    if (ImGui::SliderFloat("Upscaler Sharpness", &settings.temporalUpscalerSharpness, 0.0f, 1.0f, "%.2f")) {
+        settings.temporalUpscalerSharpness = std::clamp(settings.temporalUpscalerSharpness, 0.0f, 1.0f);
         _renderer.ResetAccumulation();
     }
     const auto temporalUpscalerStats = _renderer.GetTemporalUpscalerStats();

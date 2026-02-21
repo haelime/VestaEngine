@@ -17,7 +17,7 @@ layout(push_constant) uniform TemporalAAPushConstants {
     float feedback;
     uint enabled;
     uint debugView;
-    uint reserved1;
+    float sharpness;
     uint reserved2;
     mat4 inverseViewProjection;
     mat4 previousViewProjection;
@@ -89,6 +89,26 @@ vec3 jitterDebugColor(vec2 uv)
     return mix(vec3(jitter + 0.5, 0.35), vec3(1.0, 0.95, 0.25), line);
 }
 
+vec3 loadInputColor(ivec2 pixel, ivec2 size)
+{
+    ivec2 clampedPixel = clamp(pixel, ivec2(0), size - ivec2(1));
+    return imageLoad(storageImages[nonuniformEXT(int(pc.inputImageIndex))], clampedPixel).rgb;
+}
+
+vec3 sharpenUpscaledColor(vec3 color, ivec2 inputPixel, ivec2 inputSize)
+{
+    if (pc.sharpness <= 0.0) {
+        return color;
+    }
+
+    vec3 blur = loadInputColor(inputPixel, inputSize) * 0.4;
+    blur += loadInputColor(inputPixel + ivec2(1, 0), inputSize) * 0.15;
+    blur += loadInputColor(inputPixel + ivec2(-1, 0), inputSize) * 0.15;
+    blur += loadInputColor(inputPixel + ivec2(0, 1), inputSize) * 0.15;
+    blur += loadInputColor(inputPixel + ivec2(0, -1), inputSize) * 0.15;
+    return max(color + (color - blur) * pc.sharpness, vec3(0.0));
+}
+
 void main()
 {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
@@ -105,7 +125,7 @@ void main()
     ivec2 motionSize = imageSize(storageImages[nonuniformEXT(int(pc.motionImageIndex))]);
     ivec2 motionPixel = clamp(ivec2(uv * vec2(motionSize)), ivec2(0), motionSize - ivec2(1));
 
-    vec3 currentColor = imageLoad(storageImages[nonuniformEXT(int(pc.inputImageIndex))], inputPixel).rgb;
+    vec3 currentColor = loadInputColor(inputPixel, inputSize);
     vec4 normalRoughness = imageLoad(storageImages[nonuniformEXT(int(pc.normalImageIndex))], normalPixel);
     vec3 currentNormal = normalize(normalRoughness.xyz * 2.0 - 1.0);
     float currentDepth = texture(sampledImages[nonuniformEXT(int(pc.depthImageIndex))], uv).r;
@@ -134,6 +154,10 @@ void main()
         confidence = (validHistory ? 1.0 : 0.0) * depthAgreement * mix(0.55, 1.0, normalConfidence);
         float blend = clamp(pc.feedback * confidence, 0.0, 0.98);
         temporalColor = mix(currentColor, historyColor, blend);
+    }
+
+    if (inputSize.x != size.x || inputSize.y != size.y) {
+        temporalColor = sharpenUpscaledColor(temporalColor, inputPixel, inputSize);
     }
 
     vec3 outputColor = temporalColor;

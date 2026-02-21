@@ -230,6 +230,7 @@ struct TemporalUpscalerStats {
     uint32_t outputWidth{ 0 };
     uint32_t outputHeight{ 0 };
     float scale{ 1.0f };
+    float sharpness{ 0.0f };
     bool requested{ false };
     bool backendAvailable{ false };
     bool taaHistoryAvailable{ false };
@@ -432,6 +433,7 @@ struct RendererSettings {
     bool enableTemporalUpscaler{ false };
     bool showTemporalUpscalerDebug{ false };
     float temporalUpscalerScale{ 0.67f };
+    float temporalUpscalerSharpness{ 0.25f };
     bool enablePathTraceDenoiser{ true };
     float pathTraceDenoiserStrength{ 0.65f };
     float pathTraceDenoiserTemporalBlend{ 0.88f };

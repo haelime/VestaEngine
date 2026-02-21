@@ -21,7 +21,7 @@ struct TemporalAAPushConstants {
     float feedback{ 0.88f };
     uint32_t enabled{ 1 };
     uint32_t debugView{ 0 };
-    uint32_t reserved1{ 0 };
+    float sharpness{ 0.0f };
     uint32_t reserved2{ 0 };
     glm::mat4 inverseViewProjection{ 1.0f };
     glm::mat4 previousViewProjection{ 1.0f };
@@ -49,6 +49,11 @@ void TemporalAAPass::SetEnabled(bool enabled)
 void TemporalAAPass::SetFeedback(float feedback)
 {
     _feedback = std::clamp(feedback, 0.0f, 0.98f);
+}
+
+void TemporalAAPass::SetUpscalerSharpness(float sharpness)
+{
+    _upscalerSharpness = std::clamp(sharpness, 0.0f, 1.0f);
 }
 
 void TemporalAAPass::SetFrameIndex(uint32_t frameIndex)
@@ -169,6 +174,7 @@ void TemporalAAPass::Execute(const RenderGraphContext& context)
         .feedback = _feedback,
         .enabled = _enabled ? 1u : 0u,
         .debugView = static_cast<uint32_t>(_debugView),
+        .sharpness = _upscalerSharpness,
         .inverseViewProjection = _inverseViewProjection,
         .previousViewProjection = _hasPreviousViewProjection ? _previousViewProjection : _viewProjection,
     };

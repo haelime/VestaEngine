@@ -952,8 +952,9 @@ void ConfigureTemporalAAPass(Renderer& renderer, IRenderPass& pass, const Render
     auto& temporalPass = static_cast<TemporalAAPass&>(pass);
     temporalPass.SetInputs(resources.deferredLighting, resources.gbufferNormal, resources.gbufferMotion, resources.sceneDepth);
     temporalPass.SetOutput(resources.temporalLighting);
-    temporalPass.SetEnabled(renderer.GetSettings().enableTaa);
+    temporalPass.SetEnabled(renderer.GetSettings().enableTaa || renderer.GetSettings().enableTemporalUpscaler);
     temporalPass.SetFeedback(renderer.GetSettings().taaFeedback);
+    temporalPass.SetUpscalerSharpness(renderer.GetSettings().enableTemporalUpscaler ? renderer.GetSettings().temporalUpscalerSharpness : 0.0f);
     temporalPass.SetFrameIndex(renderer.GetPathTraceFrameIndex());
     temporalPass.SetCameraMatrices(renderer.GetCamera().GetViewProjection(), renderer.GetCamera().GetInverseViewProjection());
     temporalPass.SetDebugView(renderer.GetSettings().debugView);
@@ -2383,6 +2384,7 @@ TemporalUpscalerStats Renderer::GetTemporalUpscalerStats() const
     stats.inputWidth = std::max(1u, static_cast<uint32_t>(std::ceil(static_cast<float>(outputExtent.width) * scale)));
     stats.inputHeight = std::max(1u, static_cast<uint32_t>(std::ceil(static_cast<float>(outputExtent.height) * scale)));
     stats.scale = scale;
+    stats.sharpness = std::clamp(_settings.temporalUpscalerSharpness, 0.0f, 1.0f);
     stats.requested = _settings.enableTemporalUpscaler;
     stats.backendAvailable = stats.requested && NeedsDeferredPass(_settings) && !NeedsGaussianPass(_settings);
     stats.taaHistoryAvailable = _settings.enableTaa || _settings.enableTemporalUpscaler || IsTemporalDebugView(_settings.debugView);
