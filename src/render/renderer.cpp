@@ -274,7 +274,8 @@ bool IsTemporalDebugView(RendererDebugView debugView)
 
 bool NeedsTemporalAAPass(const RendererSettings& settings)
 {
-    return NeedsDeferredPass(settings) && (settings.enableTaa || IsTemporalDebugView(settings.debugView));
+    return NeedsDeferredPass(settings)
+        && (settings.enableTaa || settings.enableTemporalUpscaler || IsTemporalDebugView(settings.debugView));
 }
 
 bool IsRayEffectsRequested(const RendererSettings& settings)
@@ -2383,8 +2384,8 @@ TemporalUpscalerStats Renderer::GetTemporalUpscalerStats() const
     stats.inputHeight = std::max(1u, static_cast<uint32_t>(std::ceil(static_cast<float>(outputExtent.height) * scale)));
     stats.scale = scale;
     stats.requested = _settings.enableTemporalUpscaler;
-    stats.backendAvailable = false;
-    stats.taaHistoryAvailable = _settings.enableTaa || IsTemporalDebugView(_settings.debugView);
+    stats.backendAvailable = stats.requested && NeedsDeferredPass(_settings) && !NeedsGaussianPass(_settings);
+    stats.taaHistoryAvailable = _settings.enableTaa || _settings.enableTemporalUpscaler || IsTemporalDebugView(_settings.debugView);
     stats.motionVectorsAvailable = true;
     stats.depthAvailable = true;
     stats.reactiveMaskAvailable = false;
@@ -3914,6 +3915,10 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
 
     const VkExtent2D swapchainExtent = _device.GetSwapchainExtent();
     const VkExtent3D renderExtent{ swapchainExtent.width, swapchainExtent.height, 1 };
+    const bool useTemporalUpscaler = _settings.enableTemporalUpscaler && useDeferredPass && !useGaussianPass;
+    const VkExtent3D rasterRenderExtent = useTemporalUpscaler
+        ? ScaleExtent(renderExtent, _settings.temporalUpscalerScale)
+        : renderExtent;
 
     // These logical resources describe the full frame. The graph decides which
     // concrete VkImage each handle resolves to for this frame execution.
@@ -3922,14 +3927,14 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
         graph.ImportTexture("SwapchainTarget", _device.GetSwapchainImageHandle(swapchainImageIndex), ResourceUsage::Undefined);
 
     ImageDesc gbufferDesc{};
-    gbufferDesc.extent = renderExtent;
+    gbufferDesc.extent = rasterRenderExtent;
     gbufferDesc.format = VK_FORMAT_R16G16B16A16_SFLOAT;
     gbufferDesc.aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT;
     gbufferDesc.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     gbufferDesc.registerBindlessStorage = true;
 
     ImageDesc depthDesc{};
-    depthDesc.extent = renderExtent;
+    depthDesc.extent = rasterRenderExtent;
     depthDesc.format = VK_FORMAT_D32_SFLOAT;
     depthDesc.aspectFlags = VK_IMAGE_ASPECT_DEPTH_BIT;
     depthDesc.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
@@ -3949,6 +3954,8 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
 
     ImageDesc pathTraceDesc = storageDesc;
     pathTraceDesc.extent = ScaleExtent(renderExtent, _settings.pathTraceResolutionScale);
+    ImageDesc rasterStorageDesc = storageDesc;
+    rasterStorageDesc.extent = rasterRenderExtent;
 
     if (useGeometryPass) {
         resources.gbufferAlbedo = graph.CreateTexture("GBuffer.Albedo", gbufferDesc);
@@ -3962,20 +3969,20 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
         resources.shadowMap = graph.CreateTexture("ShadowMap", shadowDesc);
     }
     if (useOverdrawPass) {
-        resources.overdraw = graph.CreateTexture("RasterOverdraw", storageDesc);
+        resources.overdraw = graph.CreateTexture("RasterOverdraw", rasterStorageDesc);
     }
     if (useRayEffectsPass) {
-        ImageDesc rayEffectsDesc = storageDesc;
+        ImageDesc rayEffectsDesc = rasterStorageDesc;
         rayEffectsDesc.debugName = "RayEffects";
         if (_settings.rtHalfResolution) {
-            rayEffectsDesc.extent.width = std::max(1u, (renderExtent.width + 1u) / 2u);
-            rayEffectsDesc.extent.height = std::max(1u, (renderExtent.height + 1u) / 2u);
+            rayEffectsDesc.extent.width = std::max(1u, (rasterRenderExtent.width + 1u) / 2u);
+            rayEffectsDesc.extent.height = std::max(1u, (rasterRenderExtent.height + 1u) / 2u);
         }
         resources.rayEffects = graph.CreateTexture("RayEffects", rayEffectsDesc);
     }
     if (useDeferredPass) {
-        resources.deferredLighting = graph.CreateTexture("DeferredLighting", storageDesc);
-        resources.deferredLightingDebug = graph.CreateTexture("DeferredLighting.DebugAOV", storageDesc);
+        resources.deferredLighting = graph.CreateTexture("DeferredLighting", rasterStorageDesc);
+        resources.deferredLightingDebug = graph.CreateTexture("DeferredLighting.DebugAOV", rasterStorageDesc);
     }
     if (useTemporalAAPass) {
         resources.temporalLighting = graph.CreateTexture("TemporalLighting", storageDesc);

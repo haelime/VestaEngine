@@ -1303,6 +1303,14 @@ void VestaEngine::init_renderer()
         settings.taaFeedback = std::clamp(*_launchOptions.startupTaaFeedback, 0.0f, 0.98f);
         resetAccumulation = true;
     }
+    if (_launchOptions.startupTemporalUpscalerEnabled.has_value()) {
+        settings.enableTemporalUpscaler = *_launchOptions.startupTemporalUpscalerEnabled;
+        resetAccumulation = true;
+    }
+    if (_launchOptions.startupTemporalUpscalerScale.has_value()) {
+        settings.temporalUpscalerScale = std::clamp(*_launchOptions.startupTemporalUpscalerScale, 0.25f, 1.0f);
+        resetAccumulation = true;
+    }
     if (_launchOptions.startupSsrEnabled.has_value()) {
         settings.enableSsr = *_launchOptions.startupSsrEnabled;
         resetAccumulation = true;
@@ -5893,9 +5901,9 @@ void VestaEngine::draw_rasterizer_debug_panel()
     if (ImGui::Button("Jitter")) { settings.debugView = vesta::render::RendererDebugView::TemporalJitter; }
 
     ImGui::SeparatorText("Temporal Upscaler");
-    ImGui::BeginDisabled(true);
-    ImGui::Checkbox("Enable Temporal Upscaler", &settings.enableTemporalUpscaler);
-    ImGui::EndDisabled();
+    if (ImGui::Checkbox("Enable Temporal Upscaler", &settings.enableTemporalUpscaler)) {
+        _renderer.ResetAccumulation();
+    }
     ImGui::Checkbox("Show Upscaler Debug", &settings.showTemporalUpscalerDebug);
     if (ImGui::SliderFloat("Upscaler Input Scale", &settings.temporalUpscalerScale, 0.25f, 1.0f, "%.2fx")) {
         settings.temporalUpscalerScale = std::clamp(settings.temporalUpscalerScale, 0.25f, 1.0f);
@@ -5912,7 +5920,10 @@ void VestaEngine::draw_rasterizer_debug_panel()
         temporalUpscalerStats.motionVectorsAvailable ? "ready" : "missing",
         temporalUpscalerStats.depthAvailable ? "ready" : "missing",
         temporalUpscalerStats.reactiveMaskAvailable ? "ready" : "staged");
-    ImGui::TextDisabled("Backend is staged; current temporal path provides TAA history, motion vectors, depth and debug AOVs.");
+    ImGui::Text("Backend %s", temporalUpscalerStats.backendAvailable ? "TAAU raster path" : "staged or blocked");
+    if (!temporalUpscalerStats.backendAvailable) {
+        ImGui::TextDisabled("TAAU is active for raster/deferred frames without Gaussian depth-composition inputs.");
+    }
 }
 
 void VestaEngine::draw_path_tracing_debug_panel()

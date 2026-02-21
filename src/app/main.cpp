@@ -30,6 +30,8 @@ void PrintUsage()
         << "  --ssao-intensity <value>      SSAO darkening strength.\n"
         << "  --taa <on|off>                Toggle raster temporal anti-aliasing.\n"
         << "  --taa-feedback <0.0-0.98>     TAA history blend feedback.\n"
+        << "  --temporal-upscaler <on|off>  Toggle raster temporal upscaling.\n"
+        << "  --upscaler-scale <0.25-1.0>   Internal raster input scale for temporal upscaling.\n"
         << "  --ssr <on|off>                Toggle raster screen-space reflections.\n"
         << "  --ssr-distance <value>        SSR max ray distance.\n"
         << "  --ssr-thickness <value>       SSR depth thickness.\n"
@@ -508,6 +510,31 @@ int main(int argc, char* argv[])
                 return 1;
             }
             options.startupTaaFeedback = feedback;
+            continue;
+        }
+        if (argument == "--temporal-upscaler") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            options.startupTemporalUpscalerEnabled = ParseToggle(value);
+            if (!options.startupTemporalUpscalerEnabled.has_value()) {
+                std::cerr << "Invalid temporal upscaler toggle: " << value << "\n";
+                return 1;
+            }
+            continue;
+        }
+        if (argument == "--upscaler-scale") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            float scale = 1.0f;
+            if (!TryParseFloat(value, scale) || scale < 0.25f || scale > 1.0f) {
+                std::cerr << "Invalid temporal upscaler scale: " << value << "\n";
+                return 1;
+            }
+            options.startupTemporalUpscalerScale = scale;
             continue;
         }
         if (argument == "--ssr") {

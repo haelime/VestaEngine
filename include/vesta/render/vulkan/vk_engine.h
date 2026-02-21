@@ -40,6 +40,8 @@ struct EngineLaunchOptions {
     std::optional<float> startupSsaoIntensity;
     std::optional<bool> startupTaaEnabled;
     std::optional<float> startupTaaFeedback;
+    std::optional<bool> startupTemporalUpscalerEnabled;
+    std::optional<float> startupTemporalUpscalerScale;
     std::optional<bool> startupSsrEnabled;
     std::optional<float> startupSsrMaxDistance;
     std::optional<float> startupSsrThickness;
