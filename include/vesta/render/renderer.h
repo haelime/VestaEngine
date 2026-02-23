@@ -268,9 +268,12 @@ struct DdgiStats {
     uint64_t estimatedVisibilityBytes{ 0 };
     float probeSpacing{ 0.0f };
     float hysteresis{ 0.0f };
+    float intensity{ 0.0f };
     bool requested{ false };
     bool backendAvailable{ false };
     bool probeStorageAvailable{ false };
+    bool probeCompositeAvailable{ false };
+    bool rayUpdateAvailable{ false };
     bool overlayEnabled{ false };
 };
 
@@ -403,6 +406,7 @@ struct RendererSettings {
     uint32_t ddgiProbeCountZ{ 8 };
     float ddgiProbeSpacing{ 2.0f };
     float ddgiHysteresis{ 0.95f };
+    float ddgiIntensity{ 0.28f };
     uint32_t ddgiRaysPerProbe{ 128 };
     bool showGiIndirectOnly{ false };
     ToneMappingMode toneMappingMode{ ToneMappingMode::ACES };

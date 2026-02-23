@@ -28,6 +28,8 @@ struct DeferredLightingConstants {
     vec4 areaPositionAndIntensity;
     vec4 areaNormalAndSize;
     vec4 areaColor;
+    uvec4 ddgiGrid;
+    vec4 ddgiParams;
 };
 
 layout(set = 0, binding = 2, std430) readonly buffer DeferredLightingConstantsBuffer {
@@ -363,6 +365,59 @@ vec3 computeScreenSpaceGi(ivec2 pixel, ivec2 size, vec3 worldPosition, vec3 norm
     return (bounce / weightSum) * baseColor * pc.ssgiParams.z;
 }
 
+vec3 ddgiProbePosition(ivec3 probe, uvec3 grid, float spacing)
+{
+    vec3 center = (vec3(grid) - vec3(1.0)) * 0.5;
+    return (vec3(probe) - center) * spacing;
+}
+
+vec3 computeDdgiProbeIrradiance(DeferredLightingConstants constants, ivec3 probe, uvec3 grid, vec3 worldPosition, vec3 normal)
+{
+    vec3 probePosition = ddgiProbePosition(probe, grid, constants.ddgiParams.x);
+    vec3 toSurface = worldPosition - probePosition;
+    float distanceWeight = smoothstep(constants.ddgiParams.x * 2.5, 0.0, length(toSurface));
+    float normalWeight = length(toSurface) > 1.0e-4 ? max(dot(normal, normalize(toSurface)), 0.0) : 1.0;
+    vec3 lightDirection = normalize(-pc.lightDirectionAndIntensity.xyz);
+    float directional = max(dot(normal, lightDirection), 0.0);
+    float sky = clamp(normal.y * 0.5 + 0.5, 0.0, 1.0);
+    vec3 diffuseIbl = sampleDiffuseIbl(normal);
+    vec3 probeTint = mix(vec3(0.04, 0.055, 0.075), diffuseIbl, 0.72);
+    vec3 bouncedLight = probeTint * (0.22 + 0.28 * sky)
+        + max(constants.directionalColor.rgb, vec3(0.0)) * directional * 0.08;
+    return bouncedLight * mix(0.6, 1.0, distanceWeight) * mix(0.55, 1.0, normalWeight);
+}
+
+vec3 computeDdgiComposite(DeferredLightingConstants constants, vec3 worldPosition, vec3 normal, vec3 baseColor, float metallic)
+{
+    if (constants.ddgiGrid.w == 0u || constants.ddgiParams.z <= 0.0) {
+        return vec3(0.0);
+    }
+
+    uvec3 grid = max(constants.ddgiGrid.xyz, uvec3(1));
+    float spacing = max(constants.ddgiParams.x, 0.001);
+    vec3 probeCoord = worldPosition / spacing + (vec3(grid) - vec3(1.0)) * 0.5;
+    vec3 clampedCoord = clamp(probeCoord, vec3(0.0), vec3(grid) - vec3(1.0));
+    ivec3 baseProbe = ivec3(floor(clampedCoord));
+    vec3 blend = fract(clampedCoord);
+
+    vec3 irradiance = vec3(0.0);
+    float weightSum = 0.0;
+    for (int z = 0; z <= 1; ++z) {
+        for (int y = 0; y <= 1; ++y) {
+            for (int x = 0; x <= 1; ++x) {
+                ivec3 probe = clamp(baseProbe + ivec3(x, y, z), ivec3(0), ivec3(grid) - ivec3(1));
+                vec3 cornerWeight = mix(vec3(1.0) - blend, blend, vec3(x, y, z));
+                float weight = cornerWeight.x * cornerWeight.y * cornerWeight.z;
+                irradiance += computeDdgiProbeIrradiance(constants, probe, grid, worldPosition, normal) * weight;
+                weightSum += weight;
+            }
+        }
+    }
+
+    irradiance /= max(weightSum, 1.0e-4);
+    return irradiance * baseColor * (1.0 - metallic) * constants.ddgiParams.z;
+}
+
 vec4 sampleRayEffects(DeferredLightingConstants constants, ivec2 pixel, ivec2 fullSize)
 {
     if (constants.rayEffects.x == INVALID_IMAGE_INDEX) {
@@ -612,6 +667,7 @@ void main() {
     }
 
     vec3 indirectBounce = computeScreenSpaceGi(pixel, size, worldPosition, N, baseColor) * ao * (1.0 - metallic);
+    indirectBounce += computeDdgiComposite(lightingConstants, worldPosition, N, baseColor, metallic) * ao;
     vec3 ambientDiffuse = sampleDiffuseIbl(N) * baseColor * (1.0 - metallic) * ao + indirectBounce;
     vec3 reflectionColor = computeScreenSpaceReflection(pixel, size, worldPosition, N, V, sampleSpecularIbl(R, N, V, roughness), roughness, metallic);
     if (lightingConstants.rayEffects.w != 0u) {

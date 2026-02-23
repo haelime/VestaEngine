@@ -809,6 +809,13 @@ void ConfigureDeferredLightingPass(Renderer& renderer, IRenderPass& pass, const 
         settings.enableSsr, settings.ssrMaxDistance, settings.ssrThickness, settings.ssrIntensity);
     lightingPass.SetScreenSpaceGlobalIllumination(
         settings.enableSsgi, settings.ssgiRadius, settings.ssgiIntensity, settings.ssgiSampleCount);
+    lightingPass.SetDdgi(settings.enableDdgi,
+        settings.ddgiProbeCountX,
+        settings.ddgiProbeCountY,
+        settings.ddgiProbeCountZ,
+        settings.ddgiProbeSpacing,
+        settings.ddgiHysteresis,
+        settings.ddgiIntensity);
     lightingPass.SetContactShadows(
         settings.enableContactShadows, settings.contactShadowLength, settings.contactShadowIntensity);
     if (resources.shadowMap && renderer.GetScene().HasRasterGeometry()) {
@@ -2445,11 +2452,14 @@ DdgiStats Renderer::GetDdgiStats() const
     stats.estimatedVisibilityBytes = static_cast<uint64_t>(stats.totalProbeCount) * kVisibilityTexelsPerProbe * kRg16fBytesPerTexel;
     stats.probeSpacing = std::clamp(_settings.ddgiProbeSpacing, 0.25f, 10.0f);
     stats.hysteresis = std::clamp(_settings.ddgiHysteresis, 0.0f, 1.0f);
+    stats.intensity = std::clamp(_settings.ddgiIntensity, 0.0f, 2.0f);
     stats.requested = _settings.enableDdgi;
     stats.probeStorageAvailable = _ddgiIrradianceBuffer && _ddgiVisibilityBuffer
         && _ddgiIrradianceBufferBytes >= stats.estimatedIrradianceBytes
         && _ddgiVisibilityBufferBytes >= stats.estimatedVisibilityBytes;
-    stats.backendAvailable = stats.requested && stats.probeStorageAvailable;
+    stats.probeCompositeAvailable = stats.requested && NeedsDeferredPass(_settings);
+    stats.rayUpdateAvailable = false;
+    stats.backendAvailable = stats.requested && stats.probeStorageAvailable && stats.probeCompositeAvailable;
     stats.overlayEnabled = _settings.showGiProbeOverlay;
     return stats;
 }

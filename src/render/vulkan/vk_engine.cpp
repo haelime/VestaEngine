@@ -1906,7 +1906,7 @@ void VestaEngine::finish_benchmark()
                << "rt_hybrid_backend,rt_hybrid_ray_query,rt_hybrid_tlas,rt_hybrid_resolution,rt_shadow_rays,rt_ao_rays,rt_reflection_rays,rt_gi_rays,rt_denoiser,rt_temporal,"
                << "ssr,ssr_max_distance,ssr_thickness,ssr_intensity,"
                << "ssgi,ssgi_radius,ssgi_intensity,ssgi_samples,"
-               << "ddgi,ddgi_backend,ddgi_probes,ddgi_rays_per_update,ddgi_memory_mb,ddgi_probe_spacing,ddgi_hysteresis,ddgi_overlay,"
+               << "ddgi,ddgi_backend,ddgi_probes,ddgi_rays_per_update,ddgi_memory_mb,ddgi_probe_spacing,ddgi_hysteresis,ddgi_intensity,ddgi_overlay,ddgi_composite,ddgi_ray_update,"
                << "shadow_map,shadow_map_size,shadow_cascades,shadow_cascade_lambda,shadow_bias,shadow_normal_bias,shadow_strength,shadow_pcss,shadow_filter_radius,contact_shadows,contact_shadow_length,contact_shadow_intensity,"
                << "pt_nee,pt_rr,pt_rr_depth,pt_firefly_clamp,"
                << "pt_denoiser,pt_denoiser_strength,pt_denoiser_temporal,pt_denoiser_iterations,"
@@ -2048,13 +2048,16 @@ void VestaEngine::finish_benchmark()
            << settings.ssgiIntensity << ','
            << settings.ssgiSampleCount << ','
            << (ddgiStats.requested ? "true" : "false") << ','
-           << (ddgiStats.backendAvailable ? "ProbeStorage" : "Staged") << ','
+           << (ddgiStats.backendAvailable ? "ProbeComposite" : "Staged") << ','
            << CsvEscape(fmt::format("{}x{}x{}", ddgiStats.probeCountX, ddgiStats.probeCountY, ddgiStats.probeCountZ)) << ','
            << ddgiStats.raysPerUpdate << ','
            << MiB(ddgiStats.estimatedIrradianceBytes + ddgiStats.estimatedVisibilityBytes) << ','
            << ddgiStats.probeSpacing << ','
            << ddgiStats.hysteresis << ','
+           << ddgiStats.intensity << ','
            << (ddgiStats.overlayEnabled ? "true" : "false") << ','
+           << (ddgiStats.probeCompositeAvailable ? "true" : "false") << ','
+           << (ddgiStats.rayUpdateAvailable ? "true" : "false") << ','
            << (settings.enableShadowMap ? "true" : "false") << ','
            << settings.shadowMapSize << ','
            << settings.shadowCascadeCount << ','
@@ -2317,7 +2320,10 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "    \"estimated_visibility_bytes\": " << ddgiStats.estimatedVisibilityBytes << ",\n"
            << "    \"probe_spacing\": " << ddgiStats.probeSpacing << ",\n"
            << "    \"hysteresis\": " << ddgiStats.hysteresis << ",\n"
-           << "    \"overlay_enabled\": " << (ddgiStats.overlayEnabled ? "true" : "false") << "\n"
+           << "    \"intensity\": " << ddgiStats.intensity << ",\n"
+           << "    \"overlay_enabled\": " << (ddgiStats.overlayEnabled ? "true" : "false") << ",\n"
+           << "    \"probe_composite_available\": " << (ddgiStats.probeCompositeAvailable ? "true" : "false") << ",\n"
+           << "    \"ray_update_available\": " << (ddgiStats.rayUpdateAvailable ? "true" : "false") << "\n"
            << "  },\n"
            << "  \"shadow_map\": " << (settings.enableShadowMap ? "true" : "false") << ",\n"
            << "  \"shadow_map_size\": " << settings.shadowMapSize << ",\n"
@@ -6306,6 +6312,7 @@ void VestaEngine::draw_global_illumination_panel()
     }
     resetHistory |= ImGui::SliderFloat("Probe Spacing", &settings.ddgiProbeSpacing, 0.25f, 10.0f, "%.2f");
     resetHistory |= ImGui::SliderFloat("Hysteresis", &settings.ddgiHysteresis, 0.0f, 1.0f, "%.2f");
+    resetHistory |= ImGui::SliderFloat("Probe Composite Intensity", &settings.ddgiIntensity, 0.0f, 2.0f, "%.2f");
     const auto ddgiStats = _renderer.GetDdgiStats();
     ImGui::Text("Probes %u (%ux%ux%u)  Rays/update %llu",
         ddgiStats.totalProbeCount,
@@ -6322,8 +6329,11 @@ void VestaEngine::draw_global_illumination_panel()
         ddgiStats.overlayEnabled ? "on" : "off");
     ImGui::Text("Storage %s  Backend %s",
         ddgiStats.probeStorageAvailable ? "allocated" : "staged",
-        ddgiStats.backendAvailable ? "ProbeStorage" : "Staged");
-    ImGui::TextDisabled("DDGI probe storage is live when enabled; ray update, visibility moments, and irradiance composite remain staged.");
+        ddgiStats.backendAvailable ? "ProbeComposite" : "Staged");
+    ImGui::Text("Composite %s  Ray Update %s",
+        ddgiStats.probeCompositeAvailable ? "live" : "staged",
+        ddgiStats.rayUpdateAvailable ? "live" : "staged");
+    ImGui::TextDisabled("DDGI probe storage and basic irradiance composite are live when enabled; probe ray update and visibility moments remain staged.");
 
     ImGui::SeparatorText("Advanced GI");
     ImGui::BeginDisabled(true);

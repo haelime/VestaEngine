@@ -65,6 +65,8 @@ struct DeferredLightingConstants {
     glm::vec4 areaPositionAndIntensity{ 0.0f, 3.2f, 0.0f, 0.0f };
     glm::vec4 areaNormalAndSize{ 0.0f, -1.0f, 0.0f, 2.0f };
     glm::vec4 areaColor{ 0.86f, 0.92f, 1.0f, 0.0f };
+    glm::uvec4 ddgiGrid{ 8u, 4u, 8u, 0u };
+    glm::vec4 ddgiParams{ 2.0f, 0.95f, 0.28f, 0.0f };
 };
 } // namespace
 
@@ -201,6 +203,21 @@ void DeferredLightingPass::SetScreenSpaceGlobalIllumination(bool enabled, float 
         std::clamp(radius, 0.05f, 8.0f),
         std::clamp(intensity, 0.0f, 2.0f),
         static_cast<float>(std::clamp(sampleCount, 4u, 16u)));
+}
+
+void DeferredLightingPass::SetDdgi(
+    bool enabled, uint32_t probeCountX, uint32_t probeCountY, uint32_t probeCountZ, float spacing, float hysteresis, float intensity)
+{
+    _ddgiGrid = glm::uvec4(
+        std::clamp(probeCountX, 1u, 32u),
+        std::clamp(probeCountY, 1u, 16u),
+        std::clamp(probeCountZ, 1u, 32u),
+        enabled ? 1u : 0u);
+    _ddgiParams = glm::vec4(
+        std::clamp(spacing, 0.25f, 10.0f),
+        std::clamp(hysteresis, 0.0f, 1.0f),
+        std::clamp(intensity, 0.0f, 2.0f),
+        0.0f);
 }
 
 void DeferredLightingPass::SetContactShadows(bool enabled, float length, float intensity)
@@ -346,6 +363,8 @@ void DeferredLightingPass::Execute(const RenderGraphContext& context)
             .areaPositionAndIntensity = _areaLightPositionAndIntensity,
             .areaNormalAndSize = _areaLightNormalAndSize,
             .areaColor = _areaLightColor,
+            .ddgiGrid = _ddgiGrid,
+            .ddgiParams = _ddgiParams,
         };
         std::memcpy(lightingConstantsBuffer.allocationInfo.pMappedData, &constants, sizeof(constants));
         context.GetDevice().FlushBuffer(_lightingConstantsBuffer, 0, sizeof(constants));
