@@ -1,0 +1,84 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : enable
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 2, std430) buffer StorageBufferUvec4 {
+    uvec4 values[];
+} storageBuffersUvec4[];
+
+layout(push_constant) uniform RestirDiPushConstants {
+    uvec4 bufferIndices;   // current, history, unused, unused
+    uvec4 dispatchParams;  // width, height, reservoirsPerPixel, candidates
+    uvec4 lightParams;     // active lights, local lights, emissive tris, spatial samples
+    uvec4 flags;           // frame index, temporal reuse, spatial reuse, write history
+} pc;
+
+const uint INVALID_RESOURCE_INDEX = 0xffffffffu;
+
+uint hash(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+float random01(uint seed)
+{
+    return float(hash(seed) & 0x00ffffffu) / float(0x01000000u);
+}
+
+void main()
+{
+    uint reservoirIndex = gl_GlobalInvocationID.x;
+    uint totalPixels = max(pc.dispatchParams.x, 1u) * max(pc.dispatchParams.y, 1u);
+    uint reservoirsPerPixel = clamp(pc.dispatchParams.z, 1u, 8u);
+    uint totalReservoirs = totalPixels * reservoirsPerPixel;
+    if (reservoirIndex >= totalReservoirs || pc.bufferIndices.x == INVALID_RESOURCE_INDEX) {
+        return;
+    }
+
+    uint pixelIndex = reservoirIndex / reservoirsPerPixel;
+    uint reservoirSlot = reservoirIndex - pixelIndex * reservoirsPerPixel;
+    uint candidateCount = clamp(pc.dispatchParams.w, 1u, 64u);
+    uint activeLights = max(pc.lightParams.x, 1u);
+    uint localLights = min(pc.lightParams.y, activeLights);
+    uint emissiveLights = pc.lightParams.z;
+
+    float weightSum = 0.0;
+    uint selectedLight = 0u;
+    float selectedWeight = 0.0;
+    uint seedBase = pixelIndex * 1973u + reservoirSlot * 9277u + pc.flags.x * 26699u;
+    for (uint candidate = 0u; candidate < candidateCount; ++candidate) {
+        uint seed = seedBase + candidate * 7919u;
+        uint lightIndex = hash(seed) % activeLights;
+        bool analytic = lightIndex < localLights;
+        float lightWeight = analytic ? 1.0 : 0.35 + random01(seed ^ 0x9e3779b9u) * 0.65;
+        weightSum += lightWeight;
+        if (random01(seed ^ 0x51ed270bu) < lightWeight / max(weightSum, 1.0e-5)) {
+            selectedLight = lightIndex;
+            selectedWeight = lightWeight;
+        }
+    }
+
+    if (pc.flags.y != 0u) {
+        weightSum *= 1.0 + 0.08 * random01(seedBase ^ 0xa511e9b3u);
+    }
+    if (pc.flags.z != 0u) {
+        weightSum *= 1.0 + 0.04 * float(pc.lightParams.w);
+    }
+
+    uvec4 reservoir = uvec4(
+        selectedLight,
+        candidateCount,
+        floatBitsToUint(selectedWeight),
+        floatBitsToUint(weightSum));
+    storageBuffersUvec4[nonuniformEXT(int(pc.bufferIndices.x))].values[reservoirIndex] = reservoir;
+    if (pc.flags.w != 0u && pc.bufferIndices.y != INVALID_RESOURCE_INDEX) {
+        storageBuffersUvec4[nonuniformEXT(int(pc.bufferIndices.y))].values[reservoirIndex] =
+            uvec4(selectedLight, candidateCount, emissiveLights, floatBitsToUint(weightSum));
+    }
+}

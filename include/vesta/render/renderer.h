@@ -252,6 +252,10 @@ struct RestirStats {
     bool requestedPt{ false };
     bool backendAvailable{ false };
     bool reservoirBuffersAvailable{ false };
+    bool candidateSamplingAvailable{ false };
+    bool temporalReusePassAvailable{ false };
+    bool spatialReusePassAvailable{ false };
+    bool lightingResolveAvailable{ false };
     bool temporalReuse{ true };
     bool spatialReuse{ true };
     bool historyAvailable{ false };

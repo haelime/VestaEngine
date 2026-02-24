@@ -32,6 +32,7 @@
 #include <vesta/render/passes/path_denoise_pass.h>
 #include <vesta/render/passes/path_tracer_pass.h>
 #include <vesta/render/passes/ray_effects_pass.h>
+#include <vesta/render/passes/restir_di_pass.h>
 #include <vesta/render/passes/shadow_map_pass.h>
 #include <vesta/render/passes/temporal_aa_pass.h>
 #include <vesta/render/vulkan/vk_images.h>
@@ -284,12 +285,17 @@ bool IsRayEffectsRequested(const RendererSettings& settings)
         || settings.enableRtGlobalIllumination;
 }
 
+bool IsRestirRequested(const RendererSettings& settings)
+{
+    return settings.enableRestirDi || settings.enableRestirGi || settings.enableRestirPt;
+}
+
 struct RuntimeShaderSource {
     std::string_view sourceName;
     bool requiresVulkan13{ false };
 };
 
-constexpr std::array<RuntimeShaderSource, 31> kRuntimeShaderSources{
+constexpr std::array<RuntimeShaderSource, 32> kRuntimeShaderSources{
     RuntimeShaderSource{ "gradient.comp" },
     RuntimeShaderSource{ "gradient_color.comp" },
     RuntimeShaderSource{ "hardcoded_triangle.frag" },
@@ -315,6 +321,7 @@ constexpr std::array<RuntimeShaderSource, 31> kRuntimeShaderSources{
     RuntimeShaderSource{ "overdraw.frag" },
     RuntimeShaderSource{ "overdraw.vert" },
     RuntimeShaderSource{ "ray_effects.comp", true },
+    RuntimeShaderSource{ "restir_di.comp" },
     RuntimeShaderSource{ "pathtrace.comp" },
     RuntimeShaderSource{ "path_denoise.comp" },
     RuntimeShaderSource{ "temporal_aa.comp" },
@@ -870,6 +877,26 @@ void ConfigureRayEffectsPass(Renderer& renderer, IRenderPass& pass, const Render
         settings.rtMaxRayDistance,
         settings.rtAoRadius,
         settings.rtReflectionRoughnessCutoff);
+}
+
+void ConfigureRestirDiPass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources&)
+{
+    auto& restirPass = static_cast<RestirDiPass&>(pass);
+    const auto& settings = renderer.GetSettings();
+    const auto stats = renderer.GetRestirStats();
+    const auto extent = renderer.GetRenderDevice().GetSwapchainExtent();
+    restirPass.SetReservoirBuffers(renderer.GetRestirReservoirBuffer(), renderer.GetRestirHistoryReservoirBuffer());
+    restirPass.SetControls(renderer.GetPathTraceFrameIndex(),
+        extent.width,
+        extent.height,
+        stats.candidateLightCount,
+        stats.reservoirCount,
+        settings.restirSpatialSamples,
+        stats.activeLightCount,
+        stats.localLightCount,
+        stats.emissiveTriangleCount,
+        stats.temporalReuse,
+        stats.spatialReuse);
 }
 
 void ConfigureGaussianPass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
@@ -2430,7 +2457,13 @@ RestirStats Renderer::GetRestirStats() const
         && (!stats.temporalReuse
             || (_restirHistoryReservoirBuffer && _restirHistoryReservoirBufferBytes >= reservoirBufferBytes));
     stats.historyAvailable = stats.temporalReuse && _restirHistoryReservoirBuffer && _restirHistoryReservoirBufferBytes >= reservoirBufferBytes;
-    stats.backendAvailable = requested && stats.reservoirBuffersAvailable;
+    const auto* restirPass = FindPass<RestirDiPass>("restir-di");
+    stats.candidateSamplingAvailable = requested && stats.reservoirBuffersAvailable
+        && restirPass != nullptr && restirPass->IsBackendAvailable();
+    stats.temporalReusePassAvailable = stats.candidateSamplingAvailable && stats.temporalReuse && stats.historyAvailable;
+    stats.spatialReusePassAvailable = stats.candidateSamplingAvailable && stats.spatialReuse && _settings.restirSpatialSamples > 0u;
+    stats.lightingResolveAvailable = false;
+    stats.backendAvailable = requested && stats.reservoirBuffersAvailable && stats.candidateSamplingAvailable;
     return stats;
 }
 
@@ -2758,6 +2791,10 @@ std::vector<RenderPassDebugInfo> Renderer::GetRenderPassDebugInfo() const
             info.specularRayCount =
                 _settings.enableRtReflections ? rayPixels * std::clamp(_settings.rtReflectionSamples, 1u, 8u) : 0ull;
             info.rayCount = info.shadowRayCount + info.diffuseRayCount + info.specularRayCount;
+        } else if (entry.id == "restir-di") {
+            const RestirStats restirStats = GetRestirStats();
+            info.dispatchCount = IsRestirRequested(_settings) ? 1u : 0u;
+            info.rayCount = restirStats.reservoirPixels * restirStats.candidateLightCount;
         } else if (entry.id == "gaussian-splat") {
             info.drawCount = _scene.HasGaussianSplats() ? 1u : 0u;
             info.splatCount = _scene.GetGaussianCount();
@@ -2973,6 +3010,15 @@ void Renderer::InitializeDefaultPasses()
             ConfigureRayEffectsPass(*this, pass, resources);
         },
         .order = 18,
+        .enabled = true,
+    });
+    RegisterPass(RenderPassRegistrationDesc{
+        .id = "restir-di",
+        .pass = std::make_unique<RestirDiPass>(),
+        .configure = [this](IRenderPass& pass, const RendererGraphResources& resources) {
+            ConfigureRestirDiPass(*this, pass, resources);
+        },
+        .order = 19,
         .enabled = true,
     });
     RegisterPass(RenderPassRegistrationDesc{
@@ -3918,6 +3964,7 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
     const bool useDeferredPass = NeedsDeferredPass(_settings);
     const bool useRayEffectsPass = useDeferredPass && IsRayEffectsRequested(_settings)
         && _device.GetRayTracingSupport().rayQueryFeatures.rayQuery == VK_TRUE && _scene.HasRayTracingScene();
+    const bool useRestirPass = IsRestirRequested(_settings) && _restirReservoirBuffer;
     const bool useGaussianPass = NeedsGaussianPass(_settings);
     const bool usePathTracePass = NeedsPathTracePass(_settings);
     const bool usePathDenoisePass = NeedsPathDenoisePass(_settings);
@@ -4027,6 +4074,9 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
             continue;
         }
         if (id == "ray-effects" && !useRayEffectsPass) {
+            continue;
+        }
+        if (id == "restir-di" && !useRestirPass) {
             continue;
         }
         if (id == "deferred-lighting" && !useDeferredPass) {

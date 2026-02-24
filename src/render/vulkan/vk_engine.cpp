@@ -1902,7 +1902,7 @@ void VestaEngine::finish_benchmark()
                << "debug_view,path_trace_debug_view,gaussian_debug_view,compare_mode,compare_split,compare_difference_scale,"
                << "ssao,ssao_radius,ssao_intensity,"
                << "taa,taa_feedback,temporal_upscaler,temporal_upscaler_backend,temporal_upscaler_input,temporal_upscaler_output,temporal_upscaler_scale,temporal_upscaler_sharpness,temporal_upscaler_history,temporal_upscaler_reactive_mask,"
-               << "restir_di,restir_gi,restir_pt,restir_backend,restir_reservoir_storage,restir_lights,restir_emissive_lights,restir_candidates,restir_reservoirs,restir_reservoir_mb,restir_temporal_reuse,restir_spatial_reuse,restir_history,"
+               << "restir_di,restir_gi,restir_pt,restir_backend,restir_reservoir_storage,restir_lights,restir_emissive_lights,restir_candidates,restir_reservoirs,restir_reservoir_mb,restir_temporal_reuse,restir_spatial_reuse,restir_history,restir_candidate_pass,restir_temporal_pass,restir_spatial_pass,restir_resolve,"
                << "rt_hybrid_backend,rt_hybrid_ray_query,rt_hybrid_tlas,rt_hybrid_resolution,rt_shadow_rays,rt_ao_rays,rt_reflection_rays,rt_gi_rays,rt_denoiser,rt_temporal,"
                << "ssr,ssr_max_distance,ssr_thickness,ssr_intensity,"
                << "ssgi,ssgi_radius,ssgi_intensity,ssgi_samples,"
@@ -2019,7 +2019,7 @@ void VestaEngine::finish_benchmark()
            << (restirStats.requestedDi ? "true" : "false") << ','
            << (restirStats.requestedGi ? "true" : "false") << ','
            << (restirStats.requestedPt ? "true" : "false") << ','
-           << (restirStats.backendAvailable ? "ReservoirStorage" : "Staged") << ','
+           << (restirStats.backendAvailable ? "CandidateReservoirPass" : "Staged") << ','
            << (restirStats.reservoirBuffersAvailable ? "true" : "false") << ','
            << restirStats.activeLightCount << ','
            << restirStats.emissiveTriangleCount << ','
@@ -2029,6 +2029,10 @@ void VestaEngine::finish_benchmark()
            << (restirStats.temporalReuse ? "true" : "false") << ','
            << (restirStats.spatialReuse ? "true" : "false") << ','
            << (restirStats.historyAvailable ? "true" : "false") << ','
+           << (restirStats.candidateSamplingAvailable ? "true" : "false") << ','
+           << (restirStats.temporalReusePassAvailable ? "true" : "false") << ','
+           << (restirStats.spatialReusePassAvailable ? "true" : "false") << ','
+           << (restirStats.lightingResolveAvailable ? "true" : "false") << ','
            << (rayEffectsStats.backendAvailable ? "RayQueryPass" : "Staged") << ','
            << (rayEffectsStats.rayQueryAvailable ? "true" : "false") << ','
            << (rayEffectsStats.tlasAvailable ? "true" : "false") << ','
@@ -2296,7 +2300,11 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "    \"estimated_reservoir_bytes\": " << restirStats.estimatedReservoirBytes << ",\n"
            << "    \"temporal_reuse\": " << (restirStats.temporalReuse ? "true" : "false") << ",\n"
            << "    \"spatial_reuse\": " << (restirStats.spatialReuse ? "true" : "false") << ",\n"
-           << "    \"history_available\": " << (restirStats.historyAvailable ? "true" : "false") << "\n"
+           << "    \"history_available\": " << (restirStats.historyAvailable ? "true" : "false") << ",\n"
+           << "    \"candidate_sampling_available\": " << (restirStats.candidateSamplingAvailable ? "true" : "false") << ",\n"
+           << "    \"temporal_reuse_pass_available\": " << (restirStats.temporalReusePassAvailable ? "true" : "false") << ",\n"
+           << "    \"spatial_reuse_pass_available\": " << (restirStats.spatialReusePassAvailable ? "true" : "false") << ",\n"
+           << "    \"lighting_resolve_available\": " << (restirStats.lightingResolveAvailable ? "true" : "false") << "\n"
            << "  },\n"
            << "  \"ssr\": " << (settings.enableSsr ? "true" : "false") << ",\n"
            << "  \"ssr_max_distance\": " << settings.ssrMaxDistance << ",\n"
@@ -6435,8 +6443,13 @@ void VestaEngine::draw_advanced_portfolio_panel()
         restirStats.spatialReuse ? "on" : "off");
     ImGui::Text("Storage %s  Backend %s",
         restirStats.reservoirBuffersAvailable ? "allocated" : "staged",
-        restirStats.backendAvailable ? "ReservoirStorage" : "Staged");
-    ImGui::TextDisabled("Reservoir storage is live when enabled; candidate sampling, temporal/spatial reuse passes, and lighting resolve remain staged.");
+        restirStats.backendAvailable ? "CandidateReservoirPass" : "Staged");
+    ImGui::Text("Passes Candidate %s  Temporal %s  Spatial %s  Resolve %s",
+        restirStats.candidateSamplingAvailable ? "live" : "staged",
+        restirStats.temporalReusePassAvailable ? "live" : "staged",
+        restirStats.spatialReusePassAvailable ? "live" : "staged",
+        restirStats.lightingResolveAvailable ? "live" : "staged");
+    ImGui::TextDisabled("DI candidate sampling writes current/history reservoirs; final lighting resolve and GI/PT reservoirs remain staged.");
 
     ImGui::SeparatorText("GPU-driven Rendering");
     ImGui::Checkbox("Indirect Draw", &settings.useIndirectDraw);
