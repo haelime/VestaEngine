@@ -2424,7 +2424,8 @@ TemporalUpscalerStats Renderer::GetTemporalUpscalerStats() const
     stats.taaHistoryAvailable = _settings.enableTaa || _settings.enableTemporalUpscaler || IsTemporalDebugView(_settings.debugView);
     stats.motionVectorsAvailable = true;
     stats.depthAvailable = true;
-    stats.reactiveMaskAvailable = false;
+    stats.reactiveMaskAvailable =
+        stats.backendAvailable && stats.taaHistoryAvailable && stats.motionVectorsAvailable && stats.depthAvailable;
     return stats;
 }
 

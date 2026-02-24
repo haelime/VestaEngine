@@ -80,6 +80,11 @@ vec3 heatmap(float value)
     return mix(yellow, red, (value - 0.66) / 0.34);
 }
 
+float luminance(vec3 color)
+{
+    return dot(color, vec3(0.2126, 0.7152, 0.0722));
+}
+
 vec3 jitterDebugColor(vec2 uv)
 {
     vec2 jitter = vec2(halton((pc.frameIndex & 1023u) + 1u, 2u), halton((pc.frameIndex & 1023u) + 1u, 3u)) - 0.5;
@@ -134,6 +139,7 @@ void main()
     bool validHistory = false;
     vec4 history = vec4(currentColor, currentDepth);
     float confidence = 0.0;
+    float reactiveMask = 1.0;
     bool wantsHistory = pc.enabled != 0u || (pc.debugView >= DEBUG_TEMPORAL_HISTORY_COLOR && pc.debugView <= DEBUG_TEMPORAL_JITTER);
     if (wantsHistory && pc.frameIndex > 0u && currentDepth < 0.99999) {
         vec2 motion = imageLoad(storageImages[nonuniformEXT(int(pc.motionImageIndex))], motionPixel).xy;
@@ -149,10 +155,17 @@ void main()
         history = imageLoad(storageImages[nonuniformEXT(int(pc.historyImageIndex))], historyPixel);
         vec3 historyColor = clampHistoryToNeighborhood(inputPixel, inputSize, history.rgb);
         float historyDepth = history.a;
-        float depthAgreement = smoothstep(0.025, 0.001, abs(currentDepth - historyDepth));
+        float depthDelta = abs(currentDepth - historyDepth);
+        float depthAgreement = smoothstep(0.025, 0.001, depthDelta);
         float normalConfidence = smoothstep(0.72, 0.98, max(currentNormal.z * currentNormal.z, 0.0));
         confidence = (validHistory ? 1.0 : 0.0) * depthAgreement * mix(0.55, 1.0, normalConfidence);
-        float blend = clamp(pc.feedback * confidence, 0.0, 0.98);
+        float currentLuma = luminance(currentColor);
+        float historyLuma = luminance(historyColor);
+        float luminanceReactive = smoothstep(0.08, 0.45, abs(currentLuma - historyLuma));
+        float motionReactive = smoothstep(0.004, 0.065, length(motion));
+        float depthReactive = 1.0 - depthAgreement;
+        reactiveMask = clamp(max(max(luminanceReactive, depthReactive), motionReactive * 0.6), 0.0, 1.0);
+        float blend = clamp(pc.feedback * confidence * (1.0 - reactiveMask * 0.85), 0.0, 0.98);
         temporalColor = mix(currentColor, historyColor, blend);
     }
 
@@ -168,7 +181,7 @@ void main()
     } else if (pc.debugView == DEBUG_TEMPORAL_REPROJECTION) {
         outputColor = vec3(clamp(previousUv, vec2(0.0), vec2(1.0)), validHistory ? 1.0 : 0.0);
     } else if (pc.debugView == DEBUG_TEMPORAL_DISOCCLUSION) {
-        outputColor = heatmap(1.0 - confidence);
+        outputColor = heatmap(max(1.0 - confidence, reactiveMask));
     } else if (pc.debugView == DEBUG_TEMPORAL_JITTER) {
         outputColor = jitterDebugColor(uv);
     }
