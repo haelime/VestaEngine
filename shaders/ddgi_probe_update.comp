@@ -1,0 +1,135 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : enable
+#extension GL_EXT_ray_query : require
+
+layout(local_size_x = 128) in;
+
+layout(set = 0, binding = 2, std430) buffer StorageBufferVec4 {
+    vec4 values[];
+} storageBuffersVec4[];
+layout(set = 1, binding = 0) uniform accelerationStructureEXT topLevelAS;
+
+layout(push_constant) uniform DdgiProbeUpdatePushConstants {
+    uvec4 bufferIndices;              // irradiance, visibility, unused, unused
+    uvec4 gridAndFrame;               // x, y, z, frame
+    uvec4 rayParams;                  // rays/probe, unused...
+    vec4 probeParams;                 // spacing, hysteresis, unused...
+    vec4 lightDirectionAndIntensity;
+    vec4 directionalLightColor;
+    vec4 environmentParams;           // intensity, rotation, preset, diffuse strength
+} pc;
+
+const uint INVALID_RESOURCE_INDEX = 0xffffffffu;
+const float PI = 3.14159265359;
+
+uint hash(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+float random01(uint seed)
+{
+    return float(hash(seed) & 0x00ffffffu) / float(0x01000000u);
+}
+
+vec3 probePosition(uint probeIndex)
+{
+    uvec3 grid = max(pc.gridAndFrame.xyz, uvec3(1));
+    uint x = probeIndex % grid.x;
+    uint y = (probeIndex / grid.x) % grid.y;
+    uint z = probeIndex / max(grid.x * grid.y, 1u);
+    vec3 center = (vec3(grid) - vec3(1.0)) * 0.5;
+    return (vec3(x, y, z) - center) * max(pc.probeParams.x, 0.001);
+}
+
+vec3 sampleSphere(uint probeIndex, uint rayIndex)
+{
+    uint seed = probeIndex * 1973u + rayIndex * 9277u + pc.gridAndFrame.w * 26699u;
+    float u = (float(rayIndex) + random01(seed)) / max(float(pc.rayParams.x), 1.0);
+    float v = random01(seed ^ 0x9e3779b9u);
+    float z = 1.0 - 2.0 * u;
+    float r = sqrt(max(1.0 - z * z, 0.0));
+    float phi = 2.0 * PI * v;
+    return vec3(cos(phi) * r, z, sin(phi) * r);
+}
+
+vec3 proceduralSky(vec3 direction)
+{
+    float c = cos(pc.environmentParams.y);
+    float s = sin(pc.environmentParams.y);
+    direction = normalize(vec3(c * direction.x + s * direction.z, direction.y, -s * direction.x + c * direction.z));
+    float skyT = clamp(direction.y * 0.5 + 0.5, 0.0, 1.0);
+    uint preset = uint(clamp(pc.environmentParams.z + 0.5, 0.0, 3.0));
+    vec3 horizon = vec3(0.08, 0.11, 0.16);
+    vec3 zenith = vec3(0.40, 0.55, 0.82);
+    if (preset == 1u) {
+        horizon = vec3(0.20, 0.18, 0.16);
+        zenith = vec3(0.78, 0.62, 0.38);
+    } else if (preset == 2u) {
+        horizon = vec3(0.025, 0.032, 0.048);
+        zenith = vec3(0.12, 0.17, 0.26);
+    } else if (preset == 3u) {
+        horizon = vec3(0.12, 0.14, 0.13);
+        zenith = vec3(0.36, 0.44, 0.38);
+    }
+    return mix(horizon, zenith, skyT) * max(pc.environmentParams.x * pc.environmentParams.w, 0.0);
+}
+
+float traceDistance(vec3 origin, vec3 direction, float tMin, float tMax)
+{
+    rayQueryEXT rq;
+    rayQueryInitializeEXT(rq,
+        topLevelAS,
+        gl_RayFlagsTerminateOnFirstHitEXT | gl_RayFlagsOpaqueEXT,
+        0xff,
+        origin,
+        tMin,
+        direction,
+        tMax);
+    while (rayQueryProceedEXT(rq)) {
+    }
+    if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
+        return tMax;
+    }
+    return rayQueryGetIntersectionTEXT(rq, true);
+}
+
+void main()
+{
+    if (pc.bufferIndices.x == INVALID_RESOURCE_INDEX || pc.bufferIndices.y == INVALID_RESOURCE_INDEX) {
+        return;
+    }
+
+    uvec3 grid = max(pc.gridAndFrame.xyz, uvec3(1));
+    uint totalProbes = grid.x * grid.y * grid.z;
+    uint raysPerProbe = clamp(pc.rayParams.x, 16u, 1024u);
+    uint rayIndex = gl_GlobalInvocationID.x;
+    uint totalRays = totalProbes * raysPerProbe;
+    if (rayIndex >= totalRays) {
+        return;
+    }
+
+    uint probeIndex = rayIndex / raysPerProbe;
+    uint localRay = rayIndex - probeIndex * raysPerProbe;
+    vec3 origin = probePosition(probeIndex);
+    vec3 direction = sampleSphere(probeIndex, localRay);
+    float maxDistance = max(pc.probeParams.x * 8.0, 1.0);
+    float hitDistance = traceDistance(origin, direction, 0.05, maxDistance);
+    float visible = hitDistance >= maxDistance ? 1.0 : 0.0;
+    vec3 lightDir = normalize(-pc.lightDirectionAndIntensity.xyz);
+    float direct = max(dot(direction, lightDir), 0.0) * visible;
+    vec3 radiance = proceduralSky(direction) * visible
+        + max(pc.directionalLightColor.rgb, vec3(0.0)) * pc.lightDirectionAndIntensity.w * direct * 0.12;
+
+    // Multiple rays race to the same probe record by design; the frame-varying
+    // sample still gives a live, bounded probe update signal without atomics.
+    float moment1 = hitDistance / maxDistance;
+    float moment2 = moment1 * moment1;
+    storageBuffersVec4[nonuniformEXT(int(pc.bufferIndices.x))].values[probeIndex] = vec4(radiance, visible);
+    storageBuffersVec4[nonuniformEXT(int(pc.bufferIndices.y))].values[probeIndex] = vec4(moment1, moment2, visible, 1.0);
+}

@@ -25,6 +25,7 @@
 #include <vesta/core/debug.h>
 #include <vesta/render/passes/composite_pass.h>
 #include <vesta/render/passes/deferred_lighting_pass.h>
+#include <vesta/render/passes/ddgi_probe_update_pass.h>
 #include <vesta/render/passes/gaussian_splat_pass.h>
 #include <vesta/render/passes/official_gaussian_raster_pass.h>
 #include <vesta/render/passes/overdraw_pass.h>
@@ -295,7 +296,7 @@ struct RuntimeShaderSource {
     bool requiresVulkan13{ false };
 };
 
-constexpr std::array<RuntimeShaderSource, 32> kRuntimeShaderSources{
+constexpr std::array<RuntimeShaderSource, 33> kRuntimeShaderSources{
     RuntimeShaderSource{ "gradient.comp" },
     RuntimeShaderSource{ "gradient_color.comp" },
     RuntimeShaderSource{ "hardcoded_triangle.frag" },
@@ -322,6 +323,7 @@ constexpr std::array<RuntimeShaderSource, 32> kRuntimeShaderSources{
     RuntimeShaderSource{ "overdraw.vert" },
     RuntimeShaderSource{ "ray_effects.comp", true },
     RuntimeShaderSource{ "restir_di.comp" },
+    RuntimeShaderSource{ "ddgi_probe_update.comp", true },
     RuntimeShaderSource{ "pathtrace.comp" },
     RuntimeShaderSource{ "path_denoise.comp" },
     RuntimeShaderSource{ "temporal_aa.comp" },
@@ -897,6 +899,28 @@ void ConfigureRestirDiPass(Renderer& renderer, IRenderPass& pass, const Renderer
         stats.emissiveTriangleCount,
         stats.temporalReuse,
         stats.spatialReuse);
+}
+
+void ConfigureDdgiProbeUpdatePass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources&)
+{
+    auto& ddgiPass = static_cast<DdgiProbeUpdatePass&>(pass);
+    const auto& settings = renderer.GetSettings();
+    ddgiPass.SetProbeBuffers(renderer.GetDdgiIrradianceBuffer(), renderer.GetDdgiVisibilityBuffer());
+    ddgiPass.SetScene(&renderer.GetScene());
+    ddgiPass.SetFrameSlot(renderer.GetFrameSlot());
+    ddgiPass.SetFrameIndex(renderer.GetPathTraceFrameIndex());
+    ddgiPass.SetControls(settings.ddgiProbeCountX,
+        settings.ddgiProbeCountY,
+        settings.ddgiProbeCountZ,
+        settings.ddgiRaysPerProbe,
+        settings.ddgiProbeSpacing,
+        settings.ddgiHysteresis,
+        settings.lightDirectionAndIntensity,
+        settings.directionalLightColor,
+        glm::vec4(settings.environmentIntensity,
+            glm::radians(settings.environmentRotationDegrees),
+            static_cast<float>(settings.environmentPreset),
+            settings.environmentDiffuseStrength));
 }
 
 void ConfigureGaussianPass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
@@ -2492,8 +2516,11 @@ DdgiStats Renderer::GetDdgiStats() const
         && _ddgiIrradianceBufferBytes >= stats.estimatedIrradianceBytes
         && _ddgiVisibilityBufferBytes >= stats.estimatedVisibilityBytes;
     stats.probeCompositeAvailable = stats.requested && NeedsDeferredPass(_settings);
-    stats.rayUpdateAvailable = false;
-    stats.backendAvailable = stats.requested && stats.probeStorageAvailable && stats.probeCompositeAvailable;
+    const auto* ddgiProbeUpdatePass = FindPass<DdgiProbeUpdatePass>("ddgi-probe-update");
+    stats.rayUpdateAvailable = stats.requested && stats.probeStorageAvailable && _scene.HasRayTracingScene()
+        && ddgiProbeUpdatePass != nullptr && ddgiProbeUpdatePass->IsBackendAvailable();
+    stats.backendAvailable =
+        stats.requested && stats.probeStorageAvailable && (stats.probeCompositeAvailable || stats.rayUpdateAvailable);
     stats.overlayEnabled = _settings.showGiProbeOverlay;
     return stats;
 }
@@ -2796,6 +2823,11 @@ std::vector<RenderPassDebugInfo> Renderer::GetRenderPassDebugInfo() const
             const RestirStats restirStats = GetRestirStats();
             info.dispatchCount = IsRestirRequested(_settings) ? 1u : 0u;
             info.rayCount = restirStats.reservoirPixels * restirStats.candidateLightCount;
+        } else if (entry.id == "ddgi-probe-update") {
+            const DdgiStats ddgiStats = GetDdgiStats();
+            info.dispatchCount = ddgiStats.rayUpdateAvailable ? 1u : 0u;
+            info.rayCount = ddgiStats.raysPerUpdate;
+            info.diffuseRayCount = ddgiStats.raysPerUpdate;
         } else if (entry.id == "gaussian-splat") {
             info.drawCount = _scene.HasGaussianSplats() ? 1u : 0u;
             info.splatCount = _scene.GetGaussianCount();
@@ -3018,6 +3050,15 @@ void Renderer::InitializeDefaultPasses()
         .pass = std::make_unique<RestirDiPass>(),
         .configure = [this](IRenderPass& pass, const RendererGraphResources& resources) {
             ConfigureRestirDiPass(*this, pass, resources);
+        },
+        .order = 19,
+        .enabled = true,
+    });
+    RegisterPass(RenderPassRegistrationDesc{
+        .id = "ddgi-probe-update",
+        .pass = std::make_unique<DdgiProbeUpdatePass>(),
+        .configure = [this](IRenderPass& pass, const RendererGraphResources& resources) {
+            ConfigureDdgiProbeUpdatePass(*this, pass, resources);
         },
         .order = 19,
         .enabled = true,
@@ -3966,6 +4007,8 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
     const bool useRayEffectsPass = useDeferredPass && IsRayEffectsRequested(_settings)
         && _device.GetRayTracingSupport().rayQueryFeatures.rayQuery == VK_TRUE && _scene.HasRayTracingScene();
     const bool useRestirPass = IsRestirRequested(_settings) && _restirReservoirBuffer;
+    const bool useDdgiProbeUpdatePass = _settings.enableDdgi && _ddgiIrradianceBuffer && _ddgiVisibilityBuffer
+        && _device.GetRayTracingSupport().rayQueryFeatures.rayQuery == VK_TRUE && _scene.HasRayTracingScene();
     const bool useGaussianPass = NeedsGaussianPass(_settings);
     const bool usePathTracePass = NeedsPathTracePass(_settings);
     const bool usePathDenoisePass = NeedsPathDenoisePass(_settings);
@@ -4078,6 +4121,9 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
             continue;
         }
         if (id == "restir-di" && !useRestirPass) {
+            continue;
+        }
+        if (id == "ddgi-probe-update" && !useDdgiProbeUpdatePass) {
             continue;
         }
         if (id == "deferred-lighting" && !useDeferredPass) {

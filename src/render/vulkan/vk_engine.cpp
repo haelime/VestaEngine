@@ -48,11 +48,12 @@ VestaEngine& VestaEngine::Get() { return *loadedEngine; }
 
 namespace {
 constexpr size_t kMaxRecentScenePaths = 5;
-constexpr std::array<std::string_view, 11> kBenchmarkPassNames{
+constexpr std::array<std::string_view, 12> kBenchmarkPassNames{
     "GeometryRasterPass",
     "ShadowMapPass",
     "OverdrawPass",
     "RayEffectsPass",
+    "DDGI Probe UpdatePass",
     "DeferredLightingPass",
     "GaussianSplatPass",
     "OfficialGaussianRasterPass",
@@ -1929,7 +1930,7 @@ void VestaEngine::finish_benchmark()
                << "gaussian_projected,gaussian_duplicates,gaussian_padded_duplicates,gaussian_tiles,gaussian_avg_tiles_touched,gaussian_rebuilds,"
                << "gaussian_preprocess_ms,gaussian_scan_ms,gaussian_duplicate_ms,gaussian_sort_ms,gaussian_range_ms,"
                << "gaussian_raster_ms,gaussian_total_build_ms,"
-               << "geometry_pass_gpu_ms,shadow_pass_gpu_ms,overdraw_pass_gpu_ms,ray_effects_pass_gpu_ms,deferred_pass_gpu_ms,legacy_gaussian_pass_gpu_ms,official_gaussian_pass_gpu_ms,"
+               << "geometry_pass_gpu_ms,shadow_pass_gpu_ms,overdraw_pass_gpu_ms,ray_effects_pass_gpu_ms,ddgi_probe_update_pass_gpu_ms,deferred_pass_gpu_ms,legacy_gaussian_pass_gpu_ms,official_gaussian_pass_gpu_ms,"
                << "path_trace_pass_gpu_ms,path_denoise_pass_gpu_ms,temporal_aa_pass_gpu_ms,composite_pass_gpu_ms\n";
     }
 
@@ -2052,7 +2053,11 @@ void VestaEngine::finish_benchmark()
            << settings.ssgiIntensity << ','
            << settings.ssgiSampleCount << ','
            << (ddgiStats.requested ? "true" : "false") << ','
-           << (ddgiStats.backendAvailable ? "ProbeComposite" : "Staged") << ','
+           << CsvEscape(ddgiStats.probeCompositeAvailable && ddgiStats.rayUpdateAvailable ? "ProbeComposite+RayUpdate"
+                   : ddgiStats.probeCompositeAvailable                             ? "ProbeComposite"
+                   : ddgiStats.rayUpdateAvailable                                  ? "RayUpdate"
+                                                                                   : "Staged")
+           << ','
            << CsvEscape(fmt::format("{}x{}x{}", ddgiStats.probeCountX, ddgiStats.probeCountY, ddgiStats.probeCountZ)) << ','
            << ddgiStats.raysPerUpdate << ','
            << MiB(ddgiStats.estimatedIrradianceBytes + ddgiStats.estimatedVisibilityBytes) << ','
@@ -2198,7 +2203,8 @@ void VestaEngine::finish_benchmark()
            << averagePassGpuMs(7) << ','
            << averagePassGpuMs(8) << ','
            << averagePassGpuMs(9) << ','
-           << averagePassGpuMs(10) << '\n';
+           << averagePassGpuMs(10) << ','
+           << averagePassGpuMs(11) << '\n';
 
     fmt::println("Benchmark written to {}", outputPath.string());
 }
@@ -6335,13 +6341,16 @@ void VestaEngine::draw_global_illumination_panel()
         ddgiStats.probeSpacing,
         ddgiStats.hysteresis,
         ddgiStats.overlayEnabled ? "on" : "off");
-    ImGui::Text("Storage %s  Backend %s",
-        ddgiStats.probeStorageAvailable ? "allocated" : "staged",
-        ddgiStats.backendAvailable ? "ProbeComposite" : "Staged");
+    const char* ddgiBackendLabel = ddgiStats.probeCompositeAvailable && ddgiStats.rayUpdateAvailable ? "ProbeComposite + RayUpdate"
+        : ddgiStats.probeCompositeAvailable                                                        ? "ProbeComposite"
+        : ddgiStats.rayUpdateAvailable                                                             ? "RayUpdate"
+                                                                                                     : "Staged";
+    ImGui::Text("Storage %s  Backend %s", ddgiStats.probeStorageAvailable ? "allocated" : "staged", ddgiBackendLabel);
     ImGui::Text("Composite %s  Ray Update %s",
         ddgiStats.probeCompositeAvailable ? "live" : "staged",
         ddgiStats.rayUpdateAvailable ? "live" : "staged");
-    ImGui::TextDisabled("DDGI probe storage and basic irradiance composite are live when enabled; probe ray update and visibility moments remain staged.");
+    ImGui::TextDisabled(
+        "DDGI probe storage, basic irradiance composite, and ray-query probe update are live when TLAS/ray query are available; production filtering remains staged.");
 
     ImGui::SeparatorText("Advanced GI");
     ImGui::BeginDisabled(true);
