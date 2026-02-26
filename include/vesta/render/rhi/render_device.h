@@ -1,7 +1,9 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -19,7 +21,7 @@ public:
     static constexpr uint32_t kMaxStorageImages = 1024;
     static constexpr uint32_t kMaxStorageBuffers = 1024;
 
-    void Initialize(VkDevice device);
+    void Initialize(VkDevice device, VkSampler defaultSampler);
     void Shutdown(VkDevice device);
 
     [[nodiscard]] uint32_t RegisterSampledImage(VkDevice device, VkImageView view, VkImageLayout layout);
@@ -33,6 +35,7 @@ private:
     VkDescriptorPool _pool{ VK_NULL_HANDLE };
     VkDescriptorSetLayout _layout{ VK_NULL_HANDLE };
     VkDescriptorSet _set{ VK_NULL_HANDLE };
+    VkSampler _defaultSampler{ VK_NULL_HANDLE };
     uint32_t _nextSampledImage{ 0 };
     uint32_t _nextStorageImage{ 0 };
     uint32_t _nextStorageBuffer{ 0 };
@@ -126,6 +129,14 @@ struct RayTracingFunctions {
     PFN_vkCmdTraceRaysKHR vkCmdTraceRaysKHR{ nullptr };
 };
 
+struct UploadBatchStats {
+    VkDeviceSize stagingCapacity{ 0 };
+    VkDeviceSize pendingBytes{ 0 };
+    VkDeviceSize lastSubmittedBytes{ 0 };
+    VkDeviceSize totalSubmittedBytes{ 0 };
+    uint32_t pendingCopies{ 0 };
+};
+
 class RenderDevice {
 public:
     // RenderDevice owns the long-lived Vulkan objects: instance, device,
@@ -140,7 +151,11 @@ public:
     [[nodiscard]] ImageHandle CreateImage(const ImageDesc& desc);
     void DestroyBuffer(BufferHandle handle);
     void DestroyImage(ImageHandle handle);
-    void ImmediateSubmit(const std::function<void(VkCommandBuffer)>& recorder) const;
+    void ImmediateSubmit(const std::function<void(VkCommandBuffer)>& recorder);
+    void UploadBufferData(BufferHandle destination, VkDeviceSize destinationOffset, std::span<const std::byte> data);
+    void UploadImageData(ImageHandle destination, std::span<const std::byte> data);
+    void FlushUploadBatch();
+    void SetDebugWaitContext(std::string_view context);
 
     [[nodiscard]] VkBuffer GetBuffer(BufferHandle handle) const;
     [[nodiscard]] VkImage GetImage(ImageHandle handle) const;
@@ -157,6 +172,8 @@ public:
     [[nodiscard]] const RayTracingFunctions& GetRayTracingFunctions() const { return _rayTracingFunctions; }
     [[nodiscard]] const std::string& GetGpuName() const { return _gpuName; }
     [[nodiscard]] uint32_t GetDedicatedVideoMemoryMiB() const { return _dedicatedVideoMemoryMiB; }
+    [[nodiscard]] const UploadBatchStats& GetUploadBatchStats() const { return _uploadBatchStats; }
+    [[nodiscard]] bool HasTransferQueue() const { return _transferQueue != VK_NULL_HANDLE; }
 
     [[nodiscard]] VkInstance GetInstance() const { return _instance; }
     [[nodiscard]] VkPhysicalDevice GetPhysicalDevice() const { return _physicalDevice; }
@@ -166,6 +183,11 @@ public:
     [[nodiscard]] VkQueue GetPresentQueue() const { return _presentQueue; }
     [[nodiscard]] uint32_t GetGraphicsQueueFamily() const { return _graphicsQueueFamily; }
     [[nodiscard]] uint32_t GetPresentQueueFamily() const { return _presentQueueFamily; }
+    [[nodiscard]] VkQueue GetTransferQueue() const { return _transferQueue != VK_NULL_HANDLE ? _transferQueue : _graphicsQueue; }
+    [[nodiscard]] uint32_t GetTransferQueueFamily() const
+    {
+        return _transferQueue != VK_NULL_HANDLE ? _transferQueueFamily : _graphicsQueueFamily;
+    }
     [[nodiscard]] VkSwapchainKHR GetSwapchain() const { return _swapchain; }
     [[nodiscard]] VkFormat GetSwapchainFormat() const { return _swapchainImageFormat; }
     [[nodiscard]] VkExtent2D GetSwapchainExtent() const { return _swapchainExtent; }
@@ -179,9 +201,32 @@ private:
     void CreateSwapchain(VkExtent2D extent);
     void DestroySwapchain();
     void CleanupResourceStorage();
+    void InitializeImmediateContext();
+    void ShutdownImmediateContext();
+    void EnsureUploadCapacity(VkDeviceSize requiredBytes);
+    void BeginUploadBatchRecording();
+    void WaitForFenceOrAssert(VkFence fence, std::string_view waitLabel);
 
     [[nodiscard]] BufferHandle AllocateBufferSlot();
     [[nodiscard]] ImageHandle AllocateImageSlot();
+
+    struct ImmediateContext {
+        VkCommandPool commandPool{ VK_NULL_HANDLE };
+        VkCommandBuffer commandBuffer{ VK_NULL_HANDLE };
+        VkFence fence{ VK_NULL_HANDLE };
+    };
+
+    struct UploadContext {
+        VkCommandPool commandPool{ VK_NULL_HANDLE };
+        VkCommandBuffer commandBuffer{ VK_NULL_HANDLE };
+        VkFence fence{ VK_NULL_HANDLE };
+        BufferHandle stagingBuffer{};
+        void* mappedData{ nullptr };
+        VkDeviceSize capacity{ 0 };
+        VkDeviceSize offset{ 0 };
+        bool recording{ false };
+        uint32_t pendingCopies{ 0 };
+    };
 
     SDL_Window* _window{ nullptr };
 
@@ -195,8 +240,11 @@ private:
     uint32_t _graphicsQueueFamily{ 0 };
     VkQueue _presentQueue{ VK_NULL_HANDLE };
     uint32_t _presentQueueFamily{ 0 };
+    VkQueue _transferQueue{ VK_NULL_HANDLE };
+    uint32_t _transferQueueFamily{ 0 };
 
     VmaAllocator _allocator{ VK_NULL_HANDLE };
+    VkSampler _defaultSampler{ VK_NULL_HANDLE };
 
     VkSwapchainKHR _swapchain{ VK_NULL_HANDLE };
     VkFormat _swapchainImageFormat{ VK_FORMAT_UNDEFINED };
@@ -211,6 +259,10 @@ private:
     BindlessDescriptorManager _bindless;
     RayTracingSupport _rayTracingSupport;
     RayTracingFunctions _rayTracingFunctions;
+    mutable ImmediateContext _immediateContext;
+    UploadContext _uploadContext;
+    UploadBatchStats _uploadBatchStats;
+    std::string _debugWaitContext;
     std::string _gpuName;
     uint32_t _dedicatedVideoMemoryMiB{ 0 };
 };

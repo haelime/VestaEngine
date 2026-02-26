@@ -10,7 +10,10 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
+
+#include <glm/glm.hpp>
 
 #include <vesta/core/job_system.h>
 #include <vesta/render/path_trace_backend.h>
@@ -41,9 +44,14 @@ enum class RendererPreset : uint32_t {
 enum class SceneLoadState : uint32_t {
     Idle = 0,
     Parsing = 1,
-    Uploading = 2,
-    Ready = 3,
-    Failed = 4,
+    Preparing = 2,
+    UploadingGeometry = 3,
+    UploadingTextures = 4,
+    BuildingBLAS = 5,
+    BuildingTLAS = 6,
+    ReadyToSwap = 7,
+    Ready = 8,
+    Failed = 9,
 };
 
 enum class SceneUploadMode : uint32_t {
@@ -52,42 +60,107 @@ enum class SceneUploadMode : uint32_t {
     Streaming = 2,
 };
 
+enum class SceneUploadContinuation : uint32_t {
+    UploadTextures = 0,
+    BuildBLAS = 1,
+    ReadyToSwap = 2,
+};
+
+[[nodiscard]] constexpr bool IsValidSceneLoadTransition(SceneLoadState from, SceneLoadState to)
+{
+    if (from == to || to == SceneLoadState::Failed) {
+        return true;
+    }
+
+    switch (from) {
+    case SceneLoadState::Idle:
+        return to == SceneLoadState::Parsing;
+    case SceneLoadState::Parsing:
+        return to == SceneLoadState::Preparing || to == SceneLoadState::UploadingGeometry;
+    case SceneLoadState::Preparing:
+        return to == SceneLoadState::UploadingGeometry;
+    case SceneLoadState::UploadingGeometry:
+        return to == SceneLoadState::UploadingTextures || to == SceneLoadState::BuildingBLAS
+            || to == SceneLoadState::ReadyToSwap;
+    case SceneLoadState::UploadingTextures:
+        return to == SceneLoadState::BuildingBLAS || to == SceneLoadState::ReadyToSwap;
+    case SceneLoadState::BuildingBLAS:
+        return to == SceneLoadState::BuildingTLAS;
+    case SceneLoadState::BuildingTLAS:
+        return to == SceneLoadState::ReadyToSwap;
+    case SceneLoadState::ReadyToSwap:
+        return to == SceneLoadState::Ready;
+    case SceneLoadState::Ready:
+    case SceneLoadState::Failed:
+    default:
+        return to == SceneLoadState::Parsing;
+    }
+}
+
+[[nodiscard]] constexpr SceneUploadContinuation DecideSceneUploadContinuation(
+    bool textureStreamingEnabled, bool hasTextures, bool buildRayTracingStructuresOnLoad, bool rayTracingSupported, bool hasIndices)
+{
+    if (textureStreamingEnabled && hasTextures) {
+        return SceneUploadContinuation::UploadTextures;
+    }
+    if (buildRayTracingStructuresOnLoad && rayTracingSupported && hasIndices) {
+        return SceneUploadContinuation::BuildBLAS;
+    }
+    return SceneUploadContinuation::ReadyToSwap;
+}
+
 struct SceneLoadStatus {
     SceneLoadState state{ SceneLoadState::Idle };
     std::filesystem::path path;
     std::string message;
+    std::string uploadStage;
+    std::string lastBlockingWait;
     float parseMs{ 0.0f };
-    float uploadMs{ 0.0f };
+    float prepareMs{ 0.0f };
+    float geometryUploadMs{ 0.0f };
+    float textureUploadMs{ 0.0f };
     float blasMs{ 0.0f };
     float tlasMs{ 0.0f };
+    uint64_t pendingUploadBytes{ 0 };
+    uint32_t pendingUploadCopies{ 0 };
 };
 
 struct SceneUploadOptions {
     bool useDeviceLocalSceneBuffers{ true };
     bool buildRayTracingStructuresOnLoad{ true };
+    bool textureStreamingEnabled{ true };
+    bool useDeviceLocalTextures{ true };
 };
 
 // RendererSettings collects the knobs that can safely change at runtime.
 // When one of these changes in a way that affects history, accumulation resets.
 struct RendererSettings {
-    RendererDisplayMode displayMode{ RendererDisplayMode::Composite };
+    RendererDisplayMode displayMode{ RendererDisplayMode::DeferredLighting };
+    bool enableRaster{ true };
     bool enableGaussian{ true };
     bool enablePathTracing{ true };
     bool optimizeInactivePasses{ true };
     bool preferAsyncSceneLoading{ true };
     bool useDeviceLocalSceneBuffers{ true };
     bool buildRayTracingStructuresOnLoad{ true };
+    bool textureStreamingEnabled{ true };
+    bool useDeviceLocalTextures{ true };
     bool deferOldSceneDestruction{ true };
     bool autoFocusSceneOnLoad{ true };
     bool frameTimingCapture{ false };
     bool benchmarkOverlay{ false };
     bool enableFrustumCulling{ true };
+    bool enableDistanceCulling{ true };
+    bool useIndirectDraw{ false };
     SceneUploadMode sceneUploadMode{ SceneUploadMode::AsyncParseSyncUpload };
     uint32_t maxUploadBytesPerFrame{ 4u * 1024u * 1024u };
+    uint32_t maxTextureUploadBytesPerFrame{ 8u * 1024u * 1024u };
+    float distanceCullScale{ 6.0f };
     float gaussianPointSize{ 8.0f };
     float gaussianOpacity{ 0.35f };
     float gaussianMix{ 0.28f };
     float pathTraceResolutionScale{ 0.5f };
+    glm::vec4 lightDirectionAndIntensity{ -0.4f, -1.0f, -0.3f, 2.0f };
     PathTraceBackend pathTraceBackend{ PathTraceBackend::Auto };
 };
 
@@ -107,10 +180,31 @@ struct RendererGraphResources {
     GraphTextureHandle swapchainTarget{};
     GraphTextureHandle gbufferAlbedo{};
     GraphTextureHandle gbufferNormal{};
+    GraphTextureHandle gbufferMaterial{};
     GraphTextureHandle sceneDepth{};
     GraphTextureHandle deferredLighting{};
     GraphTextureHandle pathTraceOutput{};
     GraphTextureHandle gaussianOutput{};
+};
+
+struct VisibleSet {
+    std::shared_ptr<const vesta::scene::PreparedScene> scene;
+    std::vector<uint32_t> surfaceIndices;
+};
+
+struct FrameSnapshot {
+    VisibleSet visibleSet;
+};
+
+enum class SelectionKind : uint32_t {
+    None = 0,
+    Object = 1,
+    DirectionalLight = 2,
+};
+
+struct EditorSelection {
+    SelectionKind kind{ SelectionKind::None };
+    uint32_t objectIndex{ 0 };
 };
 
 using RenderPassConfigureFn = std::function<void(IRenderPass&, const RendererGraphResources&)>;
@@ -191,6 +285,8 @@ public:
     [[nodiscard]] uint32_t GetVisibleSurfaceCount() const { return static_cast<uint32_t>(_visibleSurfaceIndices.size()); }
     [[nodiscard]] const std::vector<uint32_t>& GetVisibleSurfaceIndices() const { return _visibleSurfaceIndices; }
     [[nodiscard]] bool HasValidVisibilitySet() const { return _visibleSceneToken != nullptr && _visibleSceneToken == _scene.GetPreparedScene(); }
+    [[nodiscard]] uint32_t GetResidentTextureCount() const { return static_cast<uint32_t>(_scene.GetResidentTextureCount()); }
+    [[nodiscard]] size_t GetRetiredSceneCount() const { return _retiredScenes.size(); }
     [[nodiscard]] uint32_t GetWorkerThreadCount() const { return _jobs.GetWorkerCount(); }
     [[nodiscard]] size_t GetPendingJobCount() const { return _jobs.GetPendingJobCount(); }
     [[nodiscard]] RenderDevice& GetRenderDevice() { return _device; }
@@ -200,12 +296,20 @@ public:
     [[nodiscard]] bool IsSceneLoadInProgress() const { return _sceneLoadInProgress; }
     [[nodiscard]] const std::filesystem::path& GetPendingScenePath() const { return _sceneLoadStatus.path; }
     [[nodiscard]] const std::string& GetSceneLoadStatusMessage() const { return _sceneLoadStatus.message; }
+    [[nodiscard]] bool IsStartupSafeModeActive() const { return _startupSafeModeActive; }
+    [[nodiscard]] vesta::scene::SceneKind GetRecommendedSceneKind() const;
+    [[nodiscard]] RendererDisplayMode GetRecommendedDisplayModeForScene() const;
+    [[nodiscard]] const EditorSelection& GetSelection() const { return _selection; }
+    [[nodiscard]] std::string GetSelectionLabel() const;
 
     void ResetAccumulation() { _pathTraceFrameIndex = 0; }
     void ApplyPreset(RendererPreset preset);
     bool LoadScene(const std::filesystem::path& path);
     bool LoadSceneAsync(const std::filesystem::path& path);
     bool ReloadSceneAsync();
+    void SetStartupSafeModeActive(bool active) { _startupSafeModeActive = active; }
+    void SelectDirectionalLight();
+    void ClearSelection();
     void SetOverlayCallbacks(OverlayDrawFn drawFn, OverlaySwapchainCallback swapchainCallback = {});
     void ClearOverlayCallbacks();
 
@@ -242,6 +346,7 @@ private:
         vesta::scene::Scene scene;
         std::string errorMessage;
         float parseMs{ 0.0f };
+        float prepareMs{ 0.0f };
         bool success{ false };
     };
 
@@ -259,22 +364,28 @@ private:
         Idle = 0,
         AllocateBuffers = 1,
         UploadVertices = 2,
-        UploadIndices = 3,
-        UploadTriangles = 4,
-        BuildBLAS = 5,
-        BuildTLAS = 6,
-        SwapScene = 7,
+        UploadMaterials = 3,
+        UploadIndices = 4,
+        UploadTriangles = 5,
+        UploadTextures = 6,
+        BuildBLAS = 7,
+        BuildTLAS = 8,
+        SwapScene = 9,
     };
 
     struct PendingSceneUpload {
         vesta::scene::Scene scene;
         std::filesystem::path path;
         float parseMs{ 0.0f };
+        float prepareMs{ 0.0f };
         float uploadMs{ 0.0f };
+        float textureUploadMs{ 0.0f };
         PendingSceneUploadStage stage{ PendingSceneUploadStage::Idle };
         size_t vertexOffsetBytes{ 0 };
+        size_t materialOffsetBytes{ 0 };
         size_t indexOffsetBytes{ 0 };
         size_t triangleOffsetBytes{ 0 };
+        size_t textureIndex{ 0 };
         bool active{ false };
     };
 
@@ -292,9 +403,14 @@ private:
     void PumpVisibilityResults();
     void DispatchVisibilityCullIfNeeded();
     void ReleaseRetiredScenes();
+    void OnSceneEdited(bool rebuildRayTracing);
+    void UpdateSceneEditDrag(const glm::vec2& mousePosition);
+    void EndSceneEditDrag();
+    [[nodiscard]] std::pair<glm::vec3, glm::vec3> ComputeMouseRay(glm::vec2 mousePosition) const;
+    [[nodiscard]] EditorSelection PickSelection(glm::vec2 mousePosition) const;
     [[nodiscard]] SceneUploadOptions GetSceneUploadOptions() const;
     bool LoadSceneResolved(const std::filesystem::path& resolvedPath);
-    void StartPendingSceneUpload(vesta::scene::Scene&& scene, float parseMs);
+    void StartPendingSceneUpload(vesta::scene::Scene&& scene, float parseMs, float prepareMs);
     void ApplyLoadedScene(vesta::scene::Scene&& scene);
     [[nodiscard]] RendererFrameContext& GetCurrentFrame();
     [[nodiscard]] RenderGraph BuildFrameGraph(uint32_t swapchainImageIndex);
@@ -326,13 +442,20 @@ private:
     PendingSceneUpload _pendingSceneUpload;
     std::deque<RetiredSceneEntry> _retiredScenes;
     std::vector<uint32_t> _visibleSurfaceIndices;
+    FrameSnapshot _frameSnapshot;
     std::shared_ptr<const vesta::scene::PreparedScene> _visibleSceneToken;
     bool _sceneLoadInProgress{ false };
     bool _visibilityCullInProgress{ false };
     bool _visibilityDirty{ true };
     OverlayDrawFn _overlayDrawFn;
     OverlaySwapchainCallback _overlaySwapchainCallback;
-
-    void LoadDefaultScene();
+    bool _startupSafeModeActive{ false };
+    EditorSelection _selection{};
+    bool _selectionDragging{ false };
+    bool _selectionEditedSinceDragStart{ false };
+    glm::vec2 _lastDragMousePosition{ 0.0f };
+    glm::vec3 _dragPlaneOrigin{ 0.0f };
+    glm::vec3 _dragPlaneNormal{ 0.0f, 1.0f, 0.0f };
+    glm::vec3 _dragGrabOffset{ 0.0f };
 };
 } // namespace vesta::render
