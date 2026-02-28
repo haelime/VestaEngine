@@ -48,11 +48,12 @@ VestaEngine& VestaEngine::Get() { return *loadedEngine; }
 
 namespace {
 constexpr size_t kMaxRecentScenePaths = 5;
-constexpr std::array<std::string_view, 13> kBenchmarkPassNames{
+constexpr std::array<std::string_view, 14> kBenchmarkPassNames{
     "GeometryRasterPass",
     "ShadowMapPass",
     "OverdrawPass",
     "RayEffectsPass",
+    "ReSTIR DI CandidatePass",
     "ReSTIR DI ResolvePass",
     "DDGI Probe UpdatePass",
     "DeferredLightingPass",
@@ -1931,7 +1932,7 @@ void VestaEngine::finish_benchmark()
                << "gaussian_projected,gaussian_duplicates,gaussian_padded_duplicates,gaussian_tiles,gaussian_avg_tiles_touched,gaussian_rebuilds,"
                << "gaussian_preprocess_ms,gaussian_scan_ms,gaussian_duplicate_ms,gaussian_sort_ms,gaussian_range_ms,"
                << "gaussian_raster_ms,gaussian_total_build_ms,"
-               << "geometry_pass_gpu_ms,shadow_pass_gpu_ms,overdraw_pass_gpu_ms,ray_effects_pass_gpu_ms,restir_resolve_pass_gpu_ms,ddgi_probe_update_pass_gpu_ms,deferred_pass_gpu_ms,legacy_gaussian_pass_gpu_ms,official_gaussian_pass_gpu_ms,"
+               << "geometry_pass_gpu_ms,shadow_pass_gpu_ms,overdraw_pass_gpu_ms,ray_effects_pass_gpu_ms,restir_candidate_pass_gpu_ms,restir_resolve_pass_gpu_ms,ddgi_probe_update_pass_gpu_ms,deferred_pass_gpu_ms,legacy_gaussian_pass_gpu_ms,official_gaussian_pass_gpu_ms,"
                << "path_trace_pass_gpu_ms,path_denoise_pass_gpu_ms,temporal_aa_pass_gpu_ms,composite_pass_gpu_ms\n";
     }
 
@@ -2208,7 +2209,8 @@ void VestaEngine::finish_benchmark()
            << averagePassGpuMs(9) << ','
            << averagePassGpuMs(10) << ','
            << averagePassGpuMs(11) << ','
-           << averagePassGpuMs(12) << '\n';
+           << averagePassGpuMs(12) << ','
+           << averagePassGpuMs(13) << '\n';
 
     fmt::println("Benchmark written to {}", outputPath.string());
 }
