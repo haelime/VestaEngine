@@ -127,6 +127,16 @@ void RestirDiPass::Execute(const RenderGraphContext& context)
 
     const uint64_t totalReservoirs = static_cast<uint64_t>(_width) * _height * _reservoirCount;
     vkCmdDispatch(commandBuffer, static_cast<uint32_t>((totalReservoirs + 255u) / 256u), 1, 1);
+
+    VkMemoryBarrier2 barrier{ VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
+    barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+    barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+    VkDependencyInfo dependencyInfo{ VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
+    dependencyInfo.memoryBarrierCount = 1;
+    dependencyInfo.pMemoryBarriers = &barrier;
+    vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
 }
 
 void RestirDiPass::Shutdown(RenderDevice& device)

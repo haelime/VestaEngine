@@ -48,11 +48,12 @@ VestaEngine& VestaEngine::Get() { return *loadedEngine; }
 
 namespace {
 constexpr size_t kMaxRecentScenePaths = 5;
-constexpr std::array<std::string_view, 12> kBenchmarkPassNames{
+constexpr std::array<std::string_view, 13> kBenchmarkPassNames{
     "GeometryRasterPass",
     "ShadowMapPass",
     "OverdrawPass",
     "RayEffectsPass",
+    "ReSTIR DI ResolvePass",
     "DDGI Probe UpdatePass",
     "DeferredLightingPass",
     "GaussianSplatPass",
@@ -1930,7 +1931,7 @@ void VestaEngine::finish_benchmark()
                << "gaussian_projected,gaussian_duplicates,gaussian_padded_duplicates,gaussian_tiles,gaussian_avg_tiles_touched,gaussian_rebuilds,"
                << "gaussian_preprocess_ms,gaussian_scan_ms,gaussian_duplicate_ms,gaussian_sort_ms,gaussian_range_ms,"
                << "gaussian_raster_ms,gaussian_total_build_ms,"
-               << "geometry_pass_gpu_ms,shadow_pass_gpu_ms,overdraw_pass_gpu_ms,ray_effects_pass_gpu_ms,ddgi_probe_update_pass_gpu_ms,deferred_pass_gpu_ms,legacy_gaussian_pass_gpu_ms,official_gaussian_pass_gpu_ms,"
+               << "geometry_pass_gpu_ms,shadow_pass_gpu_ms,overdraw_pass_gpu_ms,ray_effects_pass_gpu_ms,restir_resolve_pass_gpu_ms,ddgi_probe_update_pass_gpu_ms,deferred_pass_gpu_ms,legacy_gaussian_pass_gpu_ms,official_gaussian_pass_gpu_ms,"
                << "path_trace_pass_gpu_ms,path_denoise_pass_gpu_ms,temporal_aa_pass_gpu_ms,composite_pass_gpu_ms\n";
     }
 
@@ -2020,7 +2021,9 @@ void VestaEngine::finish_benchmark()
            << (restirStats.requestedDi ? "true" : "false") << ','
            << (restirStats.requestedGi ? "true" : "false") << ','
            << (restirStats.requestedPt ? "true" : "false") << ','
-           << (restirStats.backendAvailable ? "CandidateReservoirPass" : "Staged") << ','
+           << (restirStats.lightingResolveAvailable ? "CandidateReservoir+LightingResolve"
+                                                     : (restirStats.backendAvailable ? "CandidateReservoirPass" : "Staged"))
+           << ','
            << (restirStats.reservoirBuffersAvailable ? "true" : "false") << ','
            << restirStats.activeLightCount << ','
            << restirStats.emissiveTriangleCount << ','
@@ -2204,7 +2207,8 @@ void VestaEngine::finish_benchmark()
            << averagePassGpuMs(8) << ','
            << averagePassGpuMs(9) << ','
            << averagePassGpuMs(10) << ','
-           << averagePassGpuMs(11) << '\n';
+           << averagePassGpuMs(11) << ','
+           << averagePassGpuMs(12) << '\n';
 
     fmt::println("Benchmark written to {}", outputPath.string());
 }
@@ -6433,6 +6437,7 @@ void VestaEngine::draw_advanced_portfolio_panel()
     if (ImGui::SliderInt("Spatial Reuse Samples", &spatialSamples, 0, 16)) {
         settings.restirSpatialSamples = static_cast<uint32_t>(std::clamp(spatialSamples, 0, 16));
     }
+    ImGui::SliderFloat("Resolve Intensity", &settings.restirDirectLightingIntensity, 0.0f, 2.0f, "%.2f");
     ImGui::Checkbox("Temporal Reuse", &settings.restirTemporalReuse);
     ImGui::Checkbox("Spatial Reuse", &settings.restirSpatialReuse);
     ImGui::Checkbox("Show Reservoir Debug", &settings.restirShowReservoirs);
@@ -6452,13 +6457,14 @@ void VestaEngine::draw_advanced_portfolio_panel()
         restirStats.spatialReuse ? "on" : "off");
     ImGui::Text("Storage %s  Backend %s",
         restirStats.reservoirBuffersAvailable ? "allocated" : "staged",
-        restirStats.backendAvailable ? "CandidateReservoirPass" : "Staged");
+        restirStats.lightingResolveAvailable ? "CandidateReservoir+LightingResolve"
+                                             : (restirStats.backendAvailable ? "CandidateReservoirPass" : "Staged"));
     ImGui::Text("Passes Candidate %s  Temporal %s  Spatial %s  Resolve %s",
         restirStats.candidateSamplingAvailable ? "live" : "staged",
         restirStats.temporalReusePassAvailable ? "live" : "staged",
         restirStats.spatialReusePassAvailable ? "live" : "staged",
         restirStats.lightingResolveAvailable ? "live" : "staged");
-    ImGui::TextDisabled("DI candidate sampling writes current/history reservoirs; final lighting resolve and GI/PT reservoirs remain staged.");
+    ImGui::TextDisabled("DI candidate sampling and first lighting resolve are live; exact spatial reuse and GI/PT reservoirs remain staged.");
 
     ImGui::SeparatorText("GPU-driven Rendering");
     ImGui::Checkbox("Indirect Draw", &settings.useIndirectDraw);

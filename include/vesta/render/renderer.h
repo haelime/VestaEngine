@@ -430,6 +430,7 @@ struct RendererSettings {
     uint32_t restirCandidateLights{ 8 };
     uint32_t restirReservoirCount{ 1 };
     uint32_t restirSpatialSamples{ 4 };
+    float restirDirectLightingIntensity{ 0.18f };
     bool restirTemporalReuse{ true };
     bool restirSpatialReuse{ true };
     bool restirShowReservoirs{ false };
@@ -537,6 +538,7 @@ struct RendererGraphResources {
     GraphTextureHandle shadowMap{};
     GraphTextureHandle overdraw{};
     GraphTextureHandle rayEffects{};
+    GraphTextureHandle restirDirectLighting{};
     GraphTextureHandle deferredLighting{};
     GraphTextureHandle deferredLightingDebug{};
     GraphTextureHandle temporalLighting{};

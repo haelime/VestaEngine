@@ -19,6 +19,7 @@ struct DeferredLightingConstants {
     uvec4 shadowIndices;
     uvec4 iblIndices;
     uvec4 rayEffects;
+    uvec4 restirDi;
     vec4 directionalColor;
     vec4 pointPositionAndIntensity;
     vec4 pointColor;
@@ -428,6 +429,16 @@ vec4 sampleRayEffects(DeferredLightingConstants constants, ivec2 pixel, ivec2 fu
     return imageLoad(storageImages[nonuniformEXT(int(constants.rayEffects.x))], rtPixel);
 }
 
+vec3 sampleRestirDirectLighting(DeferredLightingConstants constants, ivec2 pixel, ivec2 fullSize)
+{
+    if (constants.restirDi.x == INVALID_IMAGE_INDEX || constants.restirDi.y == 0u) {
+        return vec3(0.0);
+    }
+    ivec2 rtSize = imageSize(storageImages[nonuniformEXT(int(constants.restirDi.x))]);
+    ivec2 rtPixel = clamp(ivec2((vec2(pixel) + 0.5) * vec2(rtSize) / vec2(fullSize)), ivec2(0), rtSize - ivec2(1));
+    return max(imageLoad(storageImages[nonuniformEXT(int(constants.restirDi.x))], rtPixel).rgb, vec3(0.0));
+}
+
 float computeDirectionalShadow(vec3 worldPosition, vec3 normal, vec3 lightDirection)
 {
     if (pc.lightingConstantsBufferIndex == INVALID_BUFFER_INDEX) {
@@ -649,6 +660,7 @@ void main() {
     float contactShadow = computeContactShadow(lightingConstants, pixel, size, worldPosition, N, L, depth);
     direct *= shadowFactor * contactShadow * rtShadowFactor;
     direct += evaluateLocalLights(lightingConstants, baseColor, metallic, roughness, worldPosition, N, V);
+    direct += sampleRestirDirectLighting(lightingConstants, pixel, size);
     float pointIntensity = lightingConstants.pointPositionAndIntensity.w;
     if (pointIntensity > 0.0) {
         vec3 pointPosition = lightingConstants.pointPositionAndIntensity.xyz;

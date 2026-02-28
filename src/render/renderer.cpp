@@ -34,6 +34,7 @@
 #include <vesta/render/passes/path_tracer_pass.h>
 #include <vesta/render/passes/ray_effects_pass.h>
 #include <vesta/render/passes/restir_di_pass.h>
+#include <vesta/render/passes/restir_di_resolve_pass.h>
 #include <vesta/render/passes/shadow_map_pass.h>
 #include <vesta/render/passes/temporal_aa_pass.h>
 #include <vesta/render/vulkan/vk_images.h>
@@ -296,7 +297,7 @@ struct RuntimeShaderSource {
     bool requiresVulkan13{ false };
 };
 
-constexpr std::array<RuntimeShaderSource, 33> kRuntimeShaderSources{
+constexpr std::array<RuntimeShaderSource, 34> kRuntimeShaderSources{
     RuntimeShaderSource{ "gradient.comp" },
     RuntimeShaderSource{ "gradient_color.comp" },
     RuntimeShaderSource{ "hardcoded_triangle.frag" },
@@ -323,6 +324,7 @@ constexpr std::array<RuntimeShaderSource, 33> kRuntimeShaderSources{
     RuntimeShaderSource{ "overdraw.vert" },
     RuntimeShaderSource{ "ray_effects.comp", true },
     RuntimeShaderSource{ "restir_di.comp" },
+    RuntimeShaderSource{ "restir_di_resolve.comp" },
     RuntimeShaderSource{ "ddgi_probe_update.comp", true },
     RuntimeShaderSource{ "pathtrace.comp" },
     RuntimeShaderSource{ "path_denoise.comp" },
@@ -813,6 +815,7 @@ void ConfigureDeferredLightingPass(Renderer& renderer, IRenderPass& pass, const 
     lightingPass.SetEnvironmentSpecularStrength(settings.environmentSpecularStrength);
     lightingPass.SetRayEffects(
         resources.rayEffects, settings.enableRtShadows, settings.enableRtAmbientOcclusion, settings.enableRtReflections);
+    lightingPass.SetRestirDiResolve(resources.restirDirectLighting, settings.enableRestirDi);
     lightingPass.SetAmbientOcclusion(settings.enableSsao, settings.ssaoRadius, settings.ssaoIntensity);
     lightingPass.SetScreenSpaceReflections(
         settings.enableSsr, settings.ssrMaxDistance, settings.ssrThickness, settings.ssrIntensity);
@@ -899,6 +902,32 @@ void ConfigureRestirDiPass(Renderer& renderer, IRenderPass& pass, const Renderer
         stats.emissiveTriangleCount,
         stats.temporalReuse,
         stats.spatialReuse);
+}
+
+void ConfigureRestirDiResolvePass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
+{
+    auto& resolvePass = static_cast<RestirDiResolvePass&>(pass);
+    const auto& settings = renderer.GetSettings();
+    const auto stats = renderer.GetRestirStats();
+    resolvePass.SetInputs(resources.gbufferAlbedo, resources.gbufferNormal, resources.gbufferMaterial, resources.sceneDepth);
+    resolvePass.SetOutput(resources.restirDirectLighting);
+    resolvePass.SetReservoirBuffer(renderer.GetRestirReservoirBuffer());
+    resolvePass.SetCamera(&renderer.GetCamera());
+    resolvePass.SetLight(settings.lightDirectionAndIntensity);
+    resolvePass.SetLightColors(
+        settings.directionalLightColor, settings.pointLightColor, settings.spotLightColor, settings.areaLightColor);
+    resolvePass.SetPointLight(settings.enablePointLight, settings.pointLightPositionAndIntensity);
+    resolvePass.SetSpotLight(settings.enableSpotLight, settings.spotLightPositionAndIntensity, settings.spotLightDirectionAndAngle);
+    resolvePass.SetAreaLight(settings.enableAreaLight, settings.areaLightPositionAndIntensity, settings.areaLightNormalAndSize);
+    resolvePass.SetControls(renderer.GetPathTraceFrameIndex(),
+        stats.reservoirCount,
+        stats.candidateLightCount,
+        stats.activeLightCount,
+        stats.localLightCount,
+        stats.emissiveTriangleCount,
+        settings.restirDirectLightingIntensity,
+        settings.restirShowReservoirs,
+        settings.restirShowSelectedLight);
 }
 
 void ConfigureDdgiProbeUpdatePass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources&)
@@ -2483,11 +2512,13 @@ RestirStats Renderer::GetRestirStats() const
             || (_restirHistoryReservoirBuffer && _restirHistoryReservoirBufferBytes >= reservoirBufferBytes));
     stats.historyAvailable = stats.temporalReuse && _restirHistoryReservoirBuffer && _restirHistoryReservoirBufferBytes >= reservoirBufferBytes;
     const auto* restirPass = FindPass<RestirDiPass>("restir-di");
+    const auto* restirResolvePass = FindPass<RestirDiResolvePass>("restir-di-resolve");
     stats.candidateSamplingAvailable = requested && stats.reservoirBuffersAvailable
         && restirPass != nullptr && restirPass->IsBackendAvailable();
     stats.temporalReusePassAvailable = stats.candidateSamplingAvailable && stats.temporalReuse && stats.historyAvailable;
     stats.spatialReusePassAvailable = stats.candidateSamplingAvailable && stats.spatialReuse && _settings.restirSpatialSamples > 0u;
-    stats.lightingResolveAvailable = false;
+    stats.lightingResolveAvailable = stats.requestedDi && stats.candidateSamplingAvailable
+        && NeedsDeferredPass(_settings) && restirResolvePass != nullptr && restirResolvePass->IsBackendAvailable();
     stats.backendAvailable = requested && stats.reservoirBuffersAvailable && stats.candidateSamplingAvailable;
     return stats;
 }
@@ -2823,6 +2854,10 @@ std::vector<RenderPassDebugInfo> Renderer::GetRenderPassDebugInfo() const
             const RestirStats restirStats = GetRestirStats();
             info.dispatchCount = IsRestirRequested(_settings) ? 1u : 0u;
             info.rayCount = restirStats.reservoirPixels * restirStats.candidateLightCount;
+        } else if (entry.id == "restir-di-resolve") {
+            const RestirStats restirStats = GetRestirStats();
+            info.dispatchCount = restirStats.lightingResolveAvailable ? 1u : 0u;
+            info.rayCount = restirStats.reservoirPixels;
         } else if (entry.id == "ddgi-probe-update") {
             const DdgiStats ddgiStats = GetDdgiStats();
             info.dispatchCount = ddgiStats.rayUpdateAvailable ? 1u : 0u;
@@ -3050,6 +3085,15 @@ void Renderer::InitializeDefaultPasses()
         .pass = std::make_unique<RestirDiPass>(),
         .configure = [this](IRenderPass& pass, const RendererGraphResources& resources) {
             ConfigureRestirDiPass(*this, pass, resources);
+        },
+        .order = 19,
+        .enabled = true,
+    });
+    RegisterPass(RenderPassRegistrationDesc{
+        .id = "restir-di-resolve",
+        .pass = std::make_unique<RestirDiResolvePass>(),
+        .configure = [this](IRenderPass& pass, const RendererGraphResources& resources) {
+            ConfigureRestirDiResolvePass(*this, pass, resources);
         },
         .order = 19,
         .enabled = true,
@@ -4007,6 +4051,7 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
     const bool useRayEffectsPass = useDeferredPass && IsRayEffectsRequested(_settings)
         && _device.GetRayTracingSupport().rayQueryFeatures.rayQuery == VK_TRUE && _scene.HasRayTracingScene();
     const bool useRestirPass = IsRestirRequested(_settings) && _restirReservoirBuffer;
+    const bool useRestirResolvePass = useDeferredPass && _settings.enableRestirDi && useRestirPass;
     const bool useDdgiProbeUpdatePass = _settings.enableDdgi && _ddgiIrradianceBuffer && _ddgiVisibilityBuffer
         && _device.GetRayTracingSupport().rayQueryFeatures.rayQuery == VK_TRUE && _scene.HasRayTracingScene();
     const bool useGaussianPass = NeedsGaussianPass(_settings);
@@ -4083,6 +4128,11 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
         }
         resources.rayEffects = graph.CreateTexture("RayEffects", rayEffectsDesc);
     }
+    if (useRestirResolvePass) {
+        ImageDesc restirResolveDesc = rasterStorageDesc;
+        restirResolveDesc.debugName = "RestirDI.Resolve";
+        resources.restirDirectLighting = graph.CreateTexture("RestirDI.Resolve", restirResolveDesc);
+    }
     if (useDeferredPass) {
         resources.deferredLighting = graph.CreateTexture("DeferredLighting", rasterStorageDesc);
         resources.deferredLightingDebug = graph.CreateTexture("DeferredLighting.DebugAOV", rasterStorageDesc);
@@ -4121,6 +4171,9 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
             continue;
         }
         if (id == "restir-di" && !useRestirPass) {
+            continue;
+        }
+        if (id == "restir-di-resolve" && !useRestirResolvePass) {
             continue;
         }
         if (id == "ddgi-probe-update" && !useDdgiProbeUpdatePass) {
