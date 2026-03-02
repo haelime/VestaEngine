@@ -14,6 +14,7 @@ layout(push_constant) uniform RestirDiResolvePushConstants {
     uvec4 outputIndices;   // output image, reservoir buffer, constants buffer, frame index
     uvec4 dispatchParams;  // width, height, reservoirs per pixel, candidate lights
     uvec4 lightParams;     // active lights, local lights, emissive tris, enabled local flags
+    uvec4 reuseParams;     // spatial samples, spatial reuse, unused, unused
 } pc;
 
 const uint INVALID_RESOURCE_INDEX = 0xffffffffu;
@@ -179,6 +180,30 @@ vec3 evaluateSelectedLight(uint selectedLight, vec3 baseColor, float metallic, f
     return baseColor * emissiveTint * (0.08 + 0.18 * horizon);
 }
 
+vec3 evaluateReservoirContribution(uvec4 reservoir,
+    vec3 baseColor,
+    float metallic,
+    float roughness,
+    vec3 worldPosition,
+    vec3 normal,
+    vec3 viewDirection,
+    float intensity)
+{
+    float selectedWeight = uintBitsToFloat(reservoir.z);
+    float weightSum = uintBitsToFloat(reservoir.w);
+    float candidateCount = float(max(reservoir.y, 1u));
+    float normalizedWeight = clamp(weightSum / candidateCount, 0.0, 4.0) * clamp(selectedWeight, 0.0, 4.0);
+    return evaluateSelectedLight(reservoir.x, baseColor, metallic, roughness, worldPosition, normal, viewDirection)
+        * normalizedWeight * intensity;
+}
+
+uvec4 loadReservoir(ivec2 reservoirPixel, ivec2 size, uint reservoirsPerPixel)
+{
+    ivec2 clampedPixel = clamp(reservoirPixel, ivec2(0), size - ivec2(1));
+    uint pixelIndex = uint(clampedPixel.y) * uint(size.x) + uint(clampedPixel.x);
+    return storageBuffersUvec4[nonuniformEXT(int(pc.outputIndices.y))].values[pixelIndex * reservoirsPerPixel];
+}
+
 void main()
 {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
@@ -206,22 +231,35 @@ void main()
     vec3 viewDirection = normalize(cameraPosition - worldPosition);
 
     uint reservoirsPerPixel = clamp(pc.dispatchParams.z, 1u, 8u);
-    uint pixelIndex = uint(pixel.y) * uint(size.x) + uint(pixel.x);
-    uint reservoirIndex = pixelIndex * reservoirsPerPixel;
-    uvec4 reservoir = storageBuffersUvec4[nonuniformEXT(int(pc.outputIndices.y))].values[reservoirIndex];
-    uint selectedLight = reservoir.x;
-    float selectedWeight = uintBitsToFloat(reservoir.z);
+    uvec4 reservoir = loadReservoir(pixel, size, reservoirsPerPixel);
     float weightSum = uintBitsToFloat(reservoir.w);
-    float candidateCount = float(max(reservoir.y, 1u));
     vec4 resolveParams = unpackConstant(15u);
-    float normalizedWeight = clamp(weightSum / candidateCount, 0.0, 4.0) * clamp(selectedWeight, 0.0, 4.0);
 
-    vec3 contribution = evaluateSelectedLight(selectedLight, baseColor, metallic, roughness, worldPosition, normal, viewDirection)
-        * normalizedWeight * resolveParams.x;
+    vec3 contribution = evaluateReservoirContribution(
+        reservoir, baseColor, metallic, roughness, worldPosition, normal, viewDirection, resolveParams.x);
+    if (pc.reuseParams.y != 0u && pc.reuseParams.x > 0u && resolveParams.y <= 0.5 && resolveParams.z <= 0.5) {
+        const ivec2 offsets[16] = ivec2[](
+            ivec2(1, 0), ivec2(-1, 0), ivec2(0, 1), ivec2(0, -1),
+            ivec2(1, 1), ivec2(-1, 1), ivec2(1, -1), ivec2(-1, -1),
+            ivec2(2, 0), ivec2(-2, 0), ivec2(0, 2), ivec2(0, -2),
+            ivec2(2, 1), ivec2(-2, 1), ivec2(1, 2), ivec2(-1, -2));
+        uint sampleCount = min(pc.reuseParams.x, 16u);
+        float contributionWeight = 1.0;
+        for (uint sampleIndex = 0u; sampleIndex < sampleCount; ++sampleIndex) {
+            ivec2 neighborPixel = pixel + offsets[sampleIndex];
+            uvec4 neighborReservoir = loadReservoir(neighborPixel, size, reservoirsPerPixel);
+            float neighborWeight = 1.0 - 0.035 * float(sampleIndex);
+            contribution += evaluateReservoirContribution(
+                neighborReservoir, baseColor, metallic, roughness, worldPosition, normal, viewDirection, resolveParams.x)
+                * neighborWeight;
+            contributionWeight += neighborWeight;
+        }
+        contribution /= max(contributionWeight, 1.0e-4);
+    }
     if (resolveParams.y > 0.5) {
         contribution = vec3(clamp(weightSum / max(float(pc.dispatchParams.w), 1.0), 0.0, 1.0));
     } else if (resolveParams.z > 0.5) {
-        contribution = idColor(selectedLight);
+        contribution = idColor(reservoir.x);
     }
 
     imageStore(storageImages[nonuniformEXT(int(pc.outputIndices.x))], pixel, vec4(contribution, 1.0));

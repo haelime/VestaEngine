@@ -925,7 +925,9 @@ void ConfigureRestirDiResolvePass(Renderer& renderer, IRenderPass& pass, const R
         stats.activeLightCount,
         stats.localLightCount,
         stats.emissiveTriangleCount,
+        settings.restirSpatialSamples,
         settings.restirDirectLightingIntensity,
+        settings.restirSpatialReuse,
         settings.restirShowReservoirs,
         settings.restirShowSelectedLight);
 }
@@ -2516,9 +2518,10 @@ RestirStats Renderer::GetRestirStats() const
     stats.candidateSamplingAvailable = requested && stats.reservoirBuffersAvailable
         && restirPass != nullptr && restirPass->IsBackendAvailable();
     stats.temporalReusePassAvailable = stats.candidateSamplingAvailable && stats.temporalReuse && stats.historyAvailable;
-    stats.spatialReusePassAvailable = stats.candidateSamplingAvailable && stats.spatialReuse && _settings.restirSpatialSamples > 0u;
     stats.lightingResolveAvailable = stats.requestedDi && stats.candidateSamplingAvailable
         && NeedsDeferredPass(_settings) && restirResolvePass != nullptr && restirResolvePass->IsBackendAvailable();
+    stats.spatialReusePassAvailable =
+        stats.lightingResolveAvailable && stats.spatialReuse && _settings.restirSpatialSamples > 0u;
     stats.backendAvailable = requested && stats.reservoirBuffersAvailable && stats.candidateSamplingAvailable;
     return stats;
 }

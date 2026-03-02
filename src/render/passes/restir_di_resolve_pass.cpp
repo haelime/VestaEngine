@@ -18,6 +18,7 @@ struct RestirDiResolvePushConstants {
     glm::uvec4 outputIndices{ kInvalidResourceIndex, kInvalidResourceIndex, kInvalidResourceIndex, 0u };
     glm::uvec4 dispatchParams{ 1u, 1u, 1u, 1u };
     glm::uvec4 lightParams{ 1u, 1u, 0u, 0u };
+    glm::uvec4 reuseParams{ 0u, 1u, 0u, 0u };
 };
 
 static_assert(sizeof(RestirDiResolvePushConstants) <= 128, "ReSTIR resolve push constants must stay compact.");
@@ -127,7 +128,9 @@ void RestirDiResolvePass::SetControls(uint32_t frameIndex,
     uint32_t activeLightCount,
     uint32_t localLightCount,
     uint32_t emissiveTriangleCount,
+    uint32_t spatialSamples,
     float intensity,
+    bool spatialReuse,
     bool showReservoirs,
     bool showSelectedLight)
 {
@@ -137,7 +140,9 @@ void RestirDiResolvePass::SetControls(uint32_t frameIndex,
     _activeLightCount = std::max(1u, activeLightCount);
     _localLightCount = std::min(std::max(1u, localLightCount), _activeLightCount);
     _emissiveTriangleCount = emissiveTriangleCount;
+    _spatialSamples = std::clamp(spatialSamples, 0u, 16u);
     _intensity = std::clamp(intensity, 0.0f, 2.0f);
+    _spatialReuse = spatialReuse;
     _showReservoirs = showReservoirs;
     _showSelectedLight = showSelectedLight;
 }
@@ -246,6 +251,7 @@ void RestirDiResolvePass::Execute(const RenderGraphContext& context)
             _localLightCount,
             _emissiveTriangleCount,
             (_pointLightEnabled ? 1u : 0u) | (_spotLightEnabled ? 2u : 0u) | (_areaLightEnabled ? 4u : 0u)),
+        .reuseParams = glm::uvec4(_spatialSamples, _spatialReuse ? 1u : 0u, 0u, 0u),
     };
 
     VkCommandBuffer commandBuffer = context.GetCommandBuffer();

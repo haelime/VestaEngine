@@ -26,7 +26,9 @@ public:
         uint32_t activeLightCount,
         uint32_t localLightCount,
         uint32_t emissiveTriangleCount,
+        uint32_t spatialSamples,
         float intensity,
+        bool spatialReuse,
         bool showReservoirs,
         bool showSelectedLight);
     [[nodiscard]] bool IsBackendAvailable() const { return _backendAvailable; }
@@ -52,7 +54,9 @@ private:
     uint32_t _activeLightCount{ 1 };
     uint32_t _localLightCount{ 1 };
     uint32_t _emissiveTriangleCount{ 0 };
+    uint32_t _spatialSamples{ 0 };
     float _intensity{ 0.18f };
+    bool _spatialReuse{ true };
     bool _showReservoirs{ false };
     bool _showSelectedLight{ false };
     bool _pointLightEnabled{ false };
