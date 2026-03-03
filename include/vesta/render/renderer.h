@@ -237,6 +237,8 @@ struct TemporalUpscalerStats {
     bool motionVectorsAvailable{ true };
     bool depthAvailable{ true };
     bool reactiveMaskAvailable{ false };
+    bool materialReactiveMaskAvailable{ false };
+    float reactiveMaskStrength{ 0.0f };
 };
 
 struct RestirStats {
@@ -443,6 +445,8 @@ struct RendererSettings {
     bool showTemporalUpscalerDebug{ false };
     float temporalUpscalerScale{ 0.67f };
     float temporalUpscalerSharpness{ 0.25f };
+    bool temporalMaterialReactiveMask{ true };
+    float temporalReactiveMaskStrength{ 0.65f };
     bool enablePathTraceDenoiser{ true };
     float pathTraceDenoiserStrength{ 0.65f };
     float pathTraceDenoiserTemporalBlend{ 0.88f };

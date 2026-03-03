@@ -10,6 +10,7 @@ layout(push_constant) uniform TemporalAAPushConstants {
     uint inputImageIndex;
     uint outputImageIndex;
     uint normalImageIndex;
+    uint materialImageIndex;
     uint depthImageIndex;
     uint motionImageIndex;
     uint historyImageIndex;
@@ -18,6 +19,10 @@ layout(push_constant) uniform TemporalAAPushConstants {
     uint enabled;
     uint debugView;
     float sharpness;
+    uint materialReactiveMask;
+    float reactiveMaskStrength;
+    float reactiveMetallicThreshold;
+    float reactiveEmissiveThreshold;
     uint reserved2;
     mat4 inverseViewProjection;
     mat4 previousViewProjection;
@@ -28,6 +33,7 @@ const uint DEBUG_TEMPORAL_HISTORY_DEPTH = 23u;
 const uint DEBUG_TEMPORAL_REPROJECTION = 24u;
 const uint DEBUG_TEMPORAL_DISOCCLUSION = 25u;
 const uint DEBUG_TEMPORAL_JITTER = 26u;
+const uint INVALID_RESOURCE_INDEX = 0xffffffffu;
 
 vec3 clampHistoryToNeighborhood(ivec2 pixel, ivec2 size, vec3 historyColor)
 {
@@ -132,6 +138,9 @@ void main()
 
     vec3 currentColor = loadInputColor(inputPixel, inputSize);
     vec4 normalRoughness = imageLoad(storageImages[nonuniformEXT(int(pc.normalImageIndex))], normalPixel);
+    vec4 materialSignal = pc.materialImageIndex != INVALID_RESOURCE_INDEX
+        ? imageLoad(storageImages[nonuniformEXT(int(pc.materialImageIndex))], normalPixel)
+        : vec4(0.0);
     vec3 currentNormal = normalize(normalRoughness.xyz * 2.0 - 1.0);
     float currentDepth = texture(sampledImages[nonuniformEXT(int(pc.depthImageIndex))], uv).r;
     vec3 temporalColor = currentColor;
@@ -164,7 +173,16 @@ void main()
         float luminanceReactive = smoothstep(0.08, 0.45, abs(currentLuma - historyLuma));
         float motionReactive = smoothstep(0.004, 0.065, length(motion));
         float depthReactive = 1.0 - depthAgreement;
+        float materialReactive = 0.0;
+        if (pc.materialReactiveMask != 0u) {
+            float metallicReactive = smoothstep(pc.reactiveMetallicThreshold, 1.0, materialSignal.a)
+                * (1.0 - smoothstep(0.18, 0.75, normalRoughness.w));
+            float emissiveReactive = smoothstep(pc.reactiveEmissiveThreshold, pc.reactiveEmissiveThreshold * 8.0 + 1.0e-4,
+                luminance(max(materialSignal.rgb, vec3(0.0))));
+            materialReactive = max(metallicReactive, emissiveReactive) * clamp(pc.reactiveMaskStrength, 0.0, 1.0);
+        }
         reactiveMask = clamp(max(max(luminanceReactive, depthReactive), motionReactive * 0.6), 0.0, 1.0);
+        reactiveMask = max(reactiveMask, materialReactive);
         float blend = clamp(pc.feedback * confidence * (1.0 - reactiveMask * 0.85), 0.0, 0.98);
         temporalColor = mix(currentColor, historyColor, blend);
     }

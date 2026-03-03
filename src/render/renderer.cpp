@@ -1039,11 +1039,14 @@ void ConfigurePathDenoisePass(Renderer& renderer, IRenderPass& pass, const Rende
 void ConfigureTemporalAAPass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
 {
     auto& temporalPass = static_cast<TemporalAAPass&>(pass);
-    temporalPass.SetInputs(resources.deferredLighting, resources.gbufferNormal, resources.gbufferMotion, resources.sceneDepth);
+    temporalPass.SetInputs(
+        resources.deferredLighting, resources.gbufferNormal, resources.gbufferMaterial, resources.gbufferMotion, resources.sceneDepth);
     temporalPass.SetOutput(resources.temporalLighting);
     temporalPass.SetEnabled(renderer.GetSettings().enableTaa || renderer.GetSettings().enableTemporalUpscaler);
     temporalPass.SetFeedback(renderer.GetSettings().taaFeedback);
     temporalPass.SetUpscalerSharpness(renderer.GetSettings().enableTemporalUpscaler ? renderer.GetSettings().temporalUpscalerSharpness : 0.0f);
+    temporalPass.SetReactiveMask(
+        renderer.GetSettings().temporalMaterialReactiveMask, renderer.GetSettings().temporalReactiveMaskStrength);
     temporalPass.SetFrameIndex(renderer.GetPathTraceFrameIndex());
     temporalPass.SetCameraMatrices(renderer.GetCamera().GetViewProjection(), renderer.GetCamera().GetInverseViewProjection());
     temporalPass.SetDebugView(renderer.GetSettings().debugView);
@@ -2479,6 +2482,8 @@ TemporalUpscalerStats Renderer::GetTemporalUpscalerStats() const
     stats.taaHistoryAvailable = _settings.enableTaa || _settings.enableTemporalUpscaler || IsTemporalDebugView(_settings.debugView);
     stats.motionVectorsAvailable = true;
     stats.depthAvailable = true;
+    stats.materialReactiveMaskAvailable = stats.backendAvailable && _settings.temporalMaterialReactiveMask;
+    stats.reactiveMaskStrength = std::clamp(_settings.temporalReactiveMaskStrength, 0.0f, 1.0f);
     stats.reactiveMaskAvailable =
         stats.backendAvailable && stats.taaHistoryAvailable && stats.motionVectorsAvailable && stats.depthAvailable;
     return stats;
