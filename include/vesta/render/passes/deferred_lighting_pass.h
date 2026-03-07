@@ -27,7 +27,11 @@ public:
     void SetIblBrdfLutImage(uint32_t sampledImageIndex);
     void SetIblSpecularPrefilterImage(uint32_t sampledImageIndex);
     void SetEnvironmentSpecularStrength(float strength);
-    void SetRayEffects(GraphTextureHandle rayEffects, bool shadowsEnabled, bool ambientOcclusionEnabled, bool reflectionsEnabled);
+    void SetRayEffects(GraphTextureHandle rayEffects,
+        GraphTextureHandle rayReflection,
+        bool shadowsEnabled,
+        bool ambientOcclusionEnabled,
+        bool reflectionsEnabled);
     void SetRestirDiResolve(GraphTextureHandle restirDirectLighting, bool enabled);
     void SetAmbientOcclusion(bool enabled, float radius, float intensity);
     void SetScreenSpaceReflections(bool enabled, float maxDistance, float thickness, float intensity);
@@ -57,6 +61,7 @@ private:
     GraphTextureHandle _depth{};
     GraphTextureHandle _shadowMap{};
     GraphTextureHandle _rayEffects{};
+    GraphTextureHandle _rayReflection{};
     GraphTextureHandle _restirDirectLighting{};
     GraphTextureHandle _output{};
     GraphTextureHandle _debugOutput{};

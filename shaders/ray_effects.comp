@@ -6,13 +6,37 @@ layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(set = 0, binding = 0) uniform sampler2D sampledImages[];
 layout(rgba16f, set = 0, binding = 1) uniform image2D storageImages[];
+struct Triangle {
+    vec4 p0;
+    vec4 p1;
+    vec4 p2;
+    vec4 n0;
+    vec4 n1;
+    vec4 n2;
+    vec4 uv0;
+    vec4 uv1;
+    vec4 uv2;
+    vec4 baseColorFactor;
+    vec4 emissiveFactor;
+    vec4 materialParams;
+    uvec4 textureIndices0;
+    uvec4 textureIndices1;
+};
+
+layout(set = 0, binding = 2, std430) readonly buffer TriangleBuffer {
+    Triangle triangles[];
+} triangleBuffers[];
 layout(set = 1, binding = 0) uniform accelerationStructureEXT topLevelAS;
 
 layout(push_constant) uniform RayEffectsPushConstants {
     uint normalImageIndex;
     uint depthImageIndex;
     uint outputImageIndex;
+    uint reflectionOutputImageIndex;
     uint frameIndex;
+    uint triangleBufferIndex;
+    uint triangleCount;
+    uint reserved0;
     mat4 inverseViewProjection;
     vec4 cameraPosition;
     vec4 lightDirectionAndIntensity;
@@ -22,6 +46,7 @@ layout(push_constant) uniform RayEffectsPushConstants {
 } pc;
 
 const uint INVALID_IMAGE_INDEX = 0xffffffffu;
+const uint INVALID_RESOURCE_INDEX = 0xffffffffu;
 
 vec3 reconstructWorldPosition(vec2 uv, float depth)
 {
@@ -44,6 +69,31 @@ float traceVisibility(vec3 origin, vec3 direction, float tMin, float tMax)
     while (rayQueryProceedEXT(rq)) {
     }
     return rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT ? 1.0 : 0.0;
+}
+
+vec4 traceClosestTriangle(vec3 origin, vec3 direction, float tMin, float tMax, out uint primitiveIndex, out vec2 barycentrics)
+{
+    primitiveIndex = INVALID_RESOURCE_INDEX;
+    barycentrics = vec2(0.0);
+
+    rayQueryEXT rq;
+    rayQueryInitializeEXT(rq,
+        topLevelAS,
+        gl_RayFlagsOpaqueEXT,
+        0xff,
+        origin,
+        tMin,
+        direction,
+        tMax);
+    while (rayQueryProceedEXT(rq)) {
+    }
+    if (rayQueryGetIntersectionTypeEXT(rq, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
+        return vec4(0.0);
+    }
+
+    primitiveIndex = rayQueryGetIntersectionPrimitiveIndexEXT(rq, true);
+    barycentrics = rayQueryGetIntersectionBarycentricsEXT(rq, true);
+    return vec4(1.0);
 }
 
 uint hash(uint x)
@@ -76,6 +126,55 @@ vec3 sampleHemisphere(vec3 normal, uint sampleIndex, uint sampleCount, ivec2 pix
     return normalize(tangent * local.x + bitangent * local.y + normal * local.z);
 }
 
+vec4 sampleOptional(uint textureIndex, vec2 uv, vec4 fallback)
+{
+    if (textureIndex == INVALID_RESOURCE_INDEX) {
+        return fallback;
+    }
+    return fallback * texture(sampledImages[nonuniformEXT(int(textureIndex))], uv);
+}
+
+vec3 shadeHitTriangle(uint primitiveIndex, vec2 barycentrics, vec3 rayDirection)
+{
+    if (pc.triangleBufferIndex == INVALID_RESOURCE_INDEX || primitiveIndex >= pc.triangleCount) {
+        return vec3(0.0);
+    }
+
+    Triangle tri = triangleBuffers[nonuniformEXT(int(pc.triangleBufferIndex))].triangles[primitiveIndex];
+    float u = barycentrics.x;
+    float v = barycentrics.y;
+    float w = 1.0 - u - v;
+    vec2 uv = tri.uv0.xy * w + tri.uv1.xy * u + tri.uv2.xy * v;
+    vec3 normal = normalize(tri.n0.xyz * w + tri.n1.xyz * u + tri.n2.xyz * v);
+    if (dot(normal, -rayDirection) < 0.0) {
+        normal = -normal;
+    }
+
+    vec4 baseColorSample = sampleOptional(tri.textureIndices0.x, uv, tri.baseColorFactor);
+    vec4 metallicRoughnessSample = tri.textureIndices0.y != INVALID_RESOURCE_INDEX
+        ? texture(sampledImages[nonuniformEXT(int(tri.textureIndices0.y))], uv)
+        : vec4(1.0);
+    vec4 emissiveSample = sampleOptional(tri.textureIndices1.x, uv, tri.emissiveFactor);
+    vec3 baseColor = max(baseColorSample.rgb, vec3(0.0));
+    float metallic = clamp(tri.materialParams.x * metallicRoughnessSample.b, 0.0, 1.0);
+    float roughness = clamp(tri.materialParams.y * metallicRoughnessSample.g, 0.045, 1.0);
+    vec3 emissive = max(emissiveSample.rgb, vec3(0.0));
+
+    vec3 viewDirection = normalize(-rayDirection);
+    vec3 lightDirection = normalize(-pc.lightDirectionAndIntensity.xyz);
+    vec3 halfVector = normalize(viewDirection + lightDirection);
+    float nDotL = max(dot(normal, lightDirection), 0.0);
+    float nDotV = max(dot(normal, viewDirection), 0.0);
+    vec3 f0 = mix(vec3(0.04), baseColor, metallic);
+    vec3 fresnel = f0 + (1.0 - f0) * pow(1.0 - max(dot(halfVector, viewDirection), 0.0), 5.0);
+    vec3 diffuse = baseColor * (1.0 - metallic) * 0.31830988618;
+    float specPower = mix(48.0, 4.0, roughness);
+    vec3 specular = fresnel * pow(max(dot(normal, halfVector), 0.0), specPower) * mix(0.35, 1.0, metallic);
+    vec3 direct = (diffuse + specular) * nDotL * pc.lightDirectionAndIntensity.w;
+    vec3 ambient = baseColor * mix(0.04, 0.16, clamp(normal.y * 0.5 + 0.5, 0.0, 1.0)) * (1.0 - metallic * 0.35);
+    return emissive + direct + ambient;
+}
+
 void main()
 {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
@@ -88,6 +187,9 @@ void main()
     float depth = texture(sampledImages[nonuniformEXT(int(pc.depthImageIndex))], uv).r;
     if (depth >= 0.99999) {
         imageStore(storageImages[nonuniformEXT(int(pc.outputImageIndex))], pixel, vec4(1.0, 1.0, 0.0, 1.0));
+        if (pc.reflectionOutputImageIndex != INVALID_IMAGE_INDEX) {
+            imageStore(storageImages[nonuniformEXT(int(pc.reflectionOutputImageIndex))], pixel, vec4(0.0));
+        }
         return;
     }
 
@@ -117,6 +219,8 @@ void main()
     }
 
     float reflectionMissVisibility = 1.0;
+    vec3 reflectionHitColor = vec3(0.0);
+    float reflectionHitWeight = 0.0;
     if (pc.flags.z != 0u && roughness <= pc.rayParams.z) {
         vec3 viewDirection = normalize(pc.cameraPosition.xyz - worldPosition);
         vec3 reflectionDirection = normalize(reflect(-viewDirection, normal));
@@ -126,7 +230,15 @@ void main()
             for (uint sampleIndex = 0u; sampleIndex < sampleCount; ++sampleIndex) {
                 vec3 coneDirection = sampleHemisphere(reflectionDirection, sampleIndex, sampleCount, pixel);
                 vec3 rayDirection = normalize(mix(reflectionDirection, coneDirection, clamp(roughness * 0.35, 0.0, 0.35)));
-                missSum += traceVisibility(rayOrigin, rayDirection, 0.03, max(pc.rayParams.x, 0.1));
+                uint primitiveIndex = INVALID_RESOURCE_INDEX;
+                vec2 barycentrics = vec2(0.0);
+                vec4 hit = traceClosestTriangle(rayOrigin, rayDirection, 0.03, max(pc.rayParams.x, 0.1), primitiveIndex, barycentrics);
+                float miss = 1.0 - hit.x;
+                missSum += miss;
+                if (hit.x > 0.0) {
+                    reflectionHitColor += shadeHitTriangle(primitiveIndex, barycentrics, rayDirection);
+                    reflectionHitWeight += 1.0;
+                }
             }
             reflectionMissVisibility = clamp(missSum / float(sampleCount), 0.0, 1.0);
         }
@@ -135,4 +247,9 @@ void main()
     imageStore(storageImages[nonuniformEXT(int(pc.outputImageIndex))],
         pixel,
         vec4(shadowVisibility, aoVisibility, reflectionMissVisibility, 1.0));
+    if (pc.reflectionOutputImageIndex != INVALID_IMAGE_INDEX) {
+        vec3 hitColor = reflectionHitWeight > 0.0 ? reflectionHitColor / reflectionHitWeight : vec3(0.0);
+        float hitBlend = clamp(reflectionHitWeight / max(float(pc.sampleCounts.z), 1.0), 0.0, 1.0);
+        imageStore(storageImages[nonuniformEXT(int(pc.reflectionOutputImageIndex))], pixel, vec4(hitColor, hitBlend));
+    }
 }

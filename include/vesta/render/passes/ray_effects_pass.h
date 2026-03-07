@@ -14,13 +14,12 @@ class Scene;
 
 namespace vesta::render {
 // Optional ray-query pass for hybrid raster + RT effects. It writes a compact
-// visibility buffer consumed by deferred lighting:
-// R = directional shadow visibility, G = ambient occlusion visibility,
-// B = reflection miss visibility for masking IBL/SSR reflections.
+// visibility buffer plus a material-colored reflection hit buffer consumed by
+// deferred lighting.
 class RayEffectsPass final : public IRenderPass {
 public:
     void SetInputs(GraphTextureHandle normal, GraphTextureHandle depth);
-    void SetOutput(GraphTextureHandle output);
+    void SetOutputs(GraphTextureHandle visibilityOutput, GraphTextureHandle reflectionOutput);
     void SetScene(const vesta::scene::Scene* scene);
     void SetCamera(const Camera* camera);
     void SetFrameSlot(uint32_t frameSlot);
@@ -48,7 +47,8 @@ public:
 private:
     GraphTextureHandle _normal{};
     GraphTextureHandle _depth{};
-    GraphTextureHandle _output{};
+    GraphTextureHandle _visibilityOutput{};
+    GraphTextureHandle _reflectionOutput{};
     const vesta::scene::Scene* _scene{ nullptr };
     const Camera* _camera{ nullptr };
     uint32_t _frameSlot{ 0 };

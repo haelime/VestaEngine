@@ -813,8 +813,11 @@ void ConfigureDeferredLightingPass(Renderer& renderer, IRenderPass& pass, const 
     lightingPass.SetIblBrdfLutImage(renderer.GetIblBrdfLutSampledImageIndex());
     lightingPass.SetIblSpecularPrefilterImage(renderer.GetIblSpecularPrefilterSampledImageIndex());
     lightingPass.SetEnvironmentSpecularStrength(settings.environmentSpecularStrength);
-    lightingPass.SetRayEffects(
-        resources.rayEffects, settings.enableRtShadows, settings.enableRtAmbientOcclusion, settings.enableRtReflections);
+    lightingPass.SetRayEffects(resources.rayEffects,
+        resources.rayReflection,
+        settings.enableRtShadows,
+        settings.enableRtAmbientOcclusion,
+        settings.enableRtReflections);
     lightingPass.SetRestirDiResolve(resources.restirDirectLighting, settings.enableRestirDi);
     lightingPass.SetAmbientOcclusion(settings.enableSsao, settings.ssaoRadius, settings.ssaoIntensity);
     lightingPass.SetScreenSpaceReflections(
@@ -865,7 +868,7 @@ void ConfigureRayEffectsPass(Renderer& renderer, IRenderPass& pass, const Render
     auto& rayEffectsPass = static_cast<RayEffectsPass&>(pass);
     const auto& settings = renderer.GetSettings();
     rayEffectsPass.SetInputs(resources.gbufferNormal, resources.sceneDepth);
-    rayEffectsPass.SetOutput(resources.rayEffects);
+    rayEffectsPass.SetOutputs(resources.rayEffects, resources.rayReflection);
     rayEffectsPass.SetScene(&renderer.GetScene());
     rayEffectsPass.SetCamera(&renderer.GetCamera());
     rayEffectsPass.SetFrameSlot(renderer.GetFrameSlot());
@@ -4135,6 +4138,11 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
             rayEffectsDesc.extent.height = std::max(1u, (rasterRenderExtent.height + 1u) / 2u);
         }
         resources.rayEffects = graph.CreateTexture("RayEffects", rayEffectsDesc);
+        if (_settings.enableRtReflections) {
+            ImageDesc rayReflectionDesc = rayEffectsDesc;
+            rayReflectionDesc.debugName = "RayEffects.Reflection";
+            resources.rayReflection = graph.CreateTexture("RayEffects.Reflection", rayReflectionDesc);
+        }
     }
     if (useRestirResolvePass) {
         ImageDesc restirResolveDesc = rasterStorageDesc;

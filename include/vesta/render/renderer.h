@@ -542,6 +542,7 @@ struct RendererGraphResources {
     GraphTextureHandle shadowMap{};
     GraphTextureHandle overdraw{};
     GraphTextureHandle rayEffects{};
+    GraphTextureHandle rayReflection{};
     GraphTextureHandle restirDirectLighting{};
     GraphTextureHandle deferredLighting{};
     GraphTextureHandle deferredLightingDebug{};

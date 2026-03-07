@@ -16,7 +16,11 @@ struct RayEffectsPushConstants {
     uint32_t normalImageIndex{ kInvalidResourceIndex };
     uint32_t depthImageIndex{ kInvalidResourceIndex };
     uint32_t outputImageIndex{ kInvalidResourceIndex };
+    uint32_t reflectionOutputImageIndex{ kInvalidResourceIndex };
     uint32_t frameIndex{ 0 };
+    uint32_t triangleBufferIndex{ kInvalidResourceIndex };
+    uint32_t triangleCount{ 0 };
+    uint32_t reserved0{ 0 };
     glm::mat4 inverseViewProjection{ 1.0f };
     glm::vec4 cameraPosition{ 0.0f };
     glm::vec4 lightDirectionAndIntensity{ -0.4f, -1.0f, -0.3f, 2.0f };
@@ -27,20 +31,29 @@ struct RayEffectsPushConstants {
 
 static_assert(sizeof(RayEffectsPushConstants) <= 256, "Ray effects push constants must fit common Vulkan limits.");
 
-void ClearRayEffectsOutput(const RenderGraphContext& context, GraphTextureHandle output)
+void ClearRayEffectsOutput(const RenderGraphContext& context, GraphTextureHandle visibilityOutput, GraphTextureHandle reflectionOutput)
 {
-    VkClearColorValue clearValue{};
-    clearValue.float32[0] = 1.0f;
-    clearValue.float32[1] = 1.0f;
-    clearValue.float32[2] = 0.0f;
-    clearValue.float32[3] = 1.0f;
     const VkImageSubresourceRange clearRange = vkutil::make_image_subresource_range(VK_IMAGE_ASPECT_COLOR_BIT);
+    VkClearColorValue visibilityClear{};
+    visibilityClear.float32[0] = 1.0f;
+    visibilityClear.float32[1] = 1.0f;
+    visibilityClear.float32[2] = 1.0f;
+    visibilityClear.float32[3] = 1.0f;
     vkCmdClearColorImage(context.GetCommandBuffer(),
-        context.GetDevice().GetImage(context.GetTextureHandle(output)),
+        context.GetDevice().GetImage(context.GetTextureHandle(visibilityOutput)),
         VK_IMAGE_LAYOUT_GENERAL,
-        &clearValue,
+        &visibilityClear,
         1,
         &clearRange);
+    if (reflectionOutput) {
+        VkClearColorValue reflectionClear{};
+        vkCmdClearColorImage(context.GetCommandBuffer(),
+            context.GetDevice().GetImage(context.GetTextureHandle(reflectionOutput)),
+            VK_IMAGE_LAYOUT_GENERAL,
+            &reflectionClear,
+            1,
+            &clearRange);
+    }
 }
 } // namespace
 
@@ -50,9 +63,10 @@ void RayEffectsPass::SetInputs(GraphTextureHandle normal, GraphTextureHandle dep
     _depth = depth;
 }
 
-void RayEffectsPass::SetOutput(GraphTextureHandle output)
+void RayEffectsPass::SetOutputs(GraphTextureHandle visibilityOutput, GraphTextureHandle reflectionOutput)
 {
-    _output = output;
+    _visibilityOutput = visibilityOutput;
+    _reflectionOutput = reflectionOutput;
 }
 
 void RayEffectsPass::SetScene(const vesta::scene::Scene* scene)
@@ -170,24 +184,36 @@ void RayEffectsPass::Setup(RenderGraphBuilder& builder)
 {
     builder.Read(_normal, ResourceUsage::StorageRead);
     builder.Read(_depth, ResourceUsage::SampledRead);
-    builder.Write(_output, ResourceUsage::StorageWrite);
+    builder.Write(_visibilityOutput, ResourceUsage::StorageWrite);
+    if (_reflectionOutput) {
+        builder.Write(_reflectionOutput, ResourceUsage::StorageWrite);
+    }
 }
 
 void RayEffectsPass::Execute(const RenderGraphContext& context)
 {
     if (_pipeline == VK_NULL_HANDLE || _scene == nullptr || _camera == nullptr || !_scene->HasRayTracingScene()) {
-        ClearRayEffectsOutput(context, _output);
+        ClearRayEffectsOutput(context, _visibilityOutput, _reflectionOutput);
         return;
     }
 
     const ImageHandle normalHandle = context.GetTextureHandle(_normal);
     const ImageHandle depthHandle = context.GetTextureHandle(_depth);
-    const ImageHandle outputHandle = context.GetTextureHandle(_output);
+    const ImageHandle outputHandle = context.GetTextureHandle(_visibilityOutput);
+    const uint32_t reflectionOutputImageIndex = _reflectionOutput
+        ? context.GetDevice().GetImageResource(context.GetTextureHandle(_reflectionOutput)).bindless.storageImage
+        : kInvalidResourceIndex;
+    const uint32_t triangleBufferIndex = _scene->GetTriangleBuffer()
+        ? context.GetDevice().GetBufferResource(_scene->GetTriangleBuffer()).bindless.storageBuffer
+        : kInvalidResourceIndex;
     const RayEffectsPushConstants pushConstants{
         .normalImageIndex = context.GetDevice().GetImageResource(normalHandle).bindless.storageImage,
         .depthImageIndex = context.GetDevice().GetImageResource(depthHandle).bindless.sampledImage,
         .outputImageIndex = context.GetDevice().GetImageResource(outputHandle).bindless.storageImage,
+        .reflectionOutputImageIndex = reflectionOutputImageIndex,
         .frameIndex = _frameIndex,
+        .triangleBufferIndex = triangleBufferIndex,
+        .triangleCount = static_cast<uint32_t>(_scene->GetTriangles().size()),
         .inverseViewProjection = _camera->GetInverseViewProjection(),
         .cameraPosition = glm::vec4(_camera->GetPosition(), 0.0f),
         .lightDirectionAndIntensity = _lightDirectionAndIntensity,
@@ -237,7 +263,7 @@ void RayEffectsPass::Execute(const RenderGraphContext& context)
         sizeof(RayEffectsPushConstants),
         &pushConstants);
 
-    const VkExtent3D outputExtent = context.GetTextureExtent(_output);
+    const VkExtent3D outputExtent = context.GetTextureExtent(_visibilityOutput);
     vkCmdDispatch(commandBuffer, (outputExtent.width + 7u) / 8u, (outputExtent.height + 7u) / 8u, 1);
 }
 

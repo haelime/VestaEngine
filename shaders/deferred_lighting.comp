@@ -19,6 +19,7 @@ struct DeferredLightingConstants {
     uvec4 shadowIndices;
     uvec4 iblIndices;
     uvec4 rayEffects;
+    uvec4 rayReflection;
     uvec4 restirDi;
     vec4 directionalColor;
     vec4 pointPositionAndIntensity;
@@ -429,6 +430,16 @@ vec4 sampleRayEffects(DeferredLightingConstants constants, ivec2 pixel, ivec2 fu
     return imageLoad(storageImages[nonuniformEXT(int(constants.rayEffects.x))], rtPixel);
 }
 
+vec4 sampleRayReflection(DeferredLightingConstants constants, ivec2 pixel, ivec2 fullSize)
+{
+    if (constants.rayReflection.x == INVALID_IMAGE_INDEX || constants.rayReflection.y == 0u) {
+        return vec4(0.0);
+    }
+    ivec2 rtSize = imageSize(storageImages[nonuniformEXT(int(constants.rayReflection.x))]);
+    ivec2 rtPixel = clamp(ivec2((vec2(pixel) + 0.5) * vec2(rtSize) / vec2(fullSize)), ivec2(0), rtSize - ivec2(1));
+    return imageLoad(storageImages[nonuniformEXT(int(constants.rayReflection.x))], rtPixel);
+}
+
 vec3 sampleRestirDirectLighting(DeferredLightingConstants constants, ivec2 pixel, ivec2 fullSize)
 {
     if (constants.restirDi.x == INVALID_IMAGE_INDEX || constants.restirDi.y == 0u) {
@@ -684,7 +695,9 @@ void main() {
     vec3 reflectionColor = computeScreenSpaceReflection(pixel, size, worldPosition, N, V, sampleSpecularIbl(R, N, V, roughness), roughness, metallic);
     if (lightingConstants.rayEffects.w != 0u) {
         float rtReflectionMiss = clamp(rayEffects.b, 0.0, 1.0);
+        vec4 rtReflection = sampleRayReflection(lightingConstants, pixel, size);
         reflectionColor *= rtReflectionMiss;
+        reflectionColor = mix(reflectionColor, max(rtReflection.rgb, vec3(0.0)), clamp(rtReflection.a, 0.0, 1.0));
     }
     vec3 ambientSpecular = reflectionColor * FresnelSchlick(max(dot(N, V), 0.0), F0) * mix(0.08, 0.45, metallic) * (1.0 - roughness * 0.65);
     vec3 lit = ambientDiffuse + ambientSpecular + direct + emissive;
