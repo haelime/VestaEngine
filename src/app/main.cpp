@@ -48,6 +48,7 @@ void PrintUsage()
         << "  --rt-shadows <on|off>         Toggle hybrid ray-query shadows.\n"
         << "  --rt-ao <on|off>              Toggle hybrid ray-query ambient occlusion.\n"
         << "  --rt-reflections <on|off>     Toggle hybrid ray-query reflection visibility.\n"
+        << "  --rt-gi <on|off>              Toggle hybrid ray-query diffuse GI.\n"
         << "  --rt-half <on|off>            Toggle half-resolution hybrid ray effects.\n"
         << "  --rt-distance <value>         Hybrid ray effects max ray distance.\n"
         << "  --rt-ao-radius <value>        Hybrid ray-query AO radius.\n"
@@ -733,6 +734,18 @@ int main(int argc, char* argv[])
             options.startupRtReflectionsEnabled = ParseToggle(value);
             if (!options.startupRtReflectionsEnabled.has_value()) {
                 std::cerr << "Invalid RT reflections toggle: " << value << "\n";
+                return 1;
+            }
+            continue;
+        }
+        if (argument == "--rt-gi") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            options.startupRtGiEnabled = ParseToggle(value);
+            if (!options.startupRtGiEnabled.has_value()) {
+                std::cerr << "Invalid RT GI toggle: " << value << "\n";
                 return 1;
             }
             continue;

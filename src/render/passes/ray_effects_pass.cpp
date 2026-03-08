@@ -17,6 +17,8 @@ struct RayEffectsPushConstants {
     uint32_t depthImageIndex{ kInvalidResourceIndex };
     uint32_t outputImageIndex{ kInvalidResourceIndex };
     uint32_t reflectionOutputImageIndex{ kInvalidResourceIndex };
+    uint32_t giOutputImageIndex{ kInvalidResourceIndex };
+    uint32_t reserved1{ 0 };
     uint32_t frameIndex{ 0 };
     uint32_t triangleBufferIndex{ kInvalidResourceIndex };
     uint32_t triangleCount{ 0 };
@@ -31,7 +33,10 @@ struct RayEffectsPushConstants {
 
 static_assert(sizeof(RayEffectsPushConstants) <= 256, "Ray effects push constants must fit common Vulkan limits.");
 
-void ClearRayEffectsOutput(const RenderGraphContext& context, GraphTextureHandle visibilityOutput, GraphTextureHandle reflectionOutput)
+void ClearRayEffectsOutput(const RenderGraphContext& context,
+    GraphTextureHandle visibilityOutput,
+    GraphTextureHandle reflectionOutput,
+    GraphTextureHandle globalIlluminationOutput)
 {
     const VkImageSubresourceRange clearRange = vkutil::make_image_subresource_range(VK_IMAGE_ASPECT_COLOR_BIT);
     VkClearColorValue visibilityClear{};
@@ -54,6 +59,15 @@ void ClearRayEffectsOutput(const RenderGraphContext& context, GraphTextureHandle
             1,
             &clearRange);
     }
+    if (globalIlluminationOutput) {
+        VkClearColorValue giClear{};
+        vkCmdClearColorImage(context.GetCommandBuffer(),
+            context.GetDevice().GetImage(context.GetTextureHandle(globalIlluminationOutput)),
+            VK_IMAGE_LAYOUT_GENERAL,
+            &giClear,
+            1,
+            &clearRange);
+    }
 }
 } // namespace
 
@@ -63,10 +77,12 @@ void RayEffectsPass::SetInputs(GraphTextureHandle normal, GraphTextureHandle dep
     _depth = depth;
 }
 
-void RayEffectsPass::SetOutputs(GraphTextureHandle visibilityOutput, GraphTextureHandle reflectionOutput)
+void RayEffectsPass::SetOutputs(
+    GraphTextureHandle visibilityOutput, GraphTextureHandle reflectionOutput, GraphTextureHandle globalIlluminationOutput)
 {
     _visibilityOutput = visibilityOutput;
     _reflectionOutput = reflectionOutput;
+    _globalIlluminationOutput = globalIlluminationOutput;
 }
 
 void RayEffectsPass::SetScene(const vesta::scene::Scene* scene)
@@ -188,12 +204,15 @@ void RayEffectsPass::Setup(RenderGraphBuilder& builder)
     if (_reflectionOutput) {
         builder.Write(_reflectionOutput, ResourceUsage::StorageWrite);
     }
+    if (_globalIlluminationOutput) {
+        builder.Write(_globalIlluminationOutput, ResourceUsage::StorageWrite);
+    }
 }
 
 void RayEffectsPass::Execute(const RenderGraphContext& context)
 {
     if (_pipeline == VK_NULL_HANDLE || _scene == nullptr || _camera == nullptr || !_scene->HasRayTracingScene()) {
-        ClearRayEffectsOutput(context, _visibilityOutput, _reflectionOutput);
+        ClearRayEffectsOutput(context, _visibilityOutput, _reflectionOutput, _globalIlluminationOutput);
         return;
     }
 
@@ -203,6 +222,9 @@ void RayEffectsPass::Execute(const RenderGraphContext& context)
     const uint32_t reflectionOutputImageIndex = _reflectionOutput
         ? context.GetDevice().GetImageResource(context.GetTextureHandle(_reflectionOutput)).bindless.storageImage
         : kInvalidResourceIndex;
+    const uint32_t giOutputImageIndex = _globalIlluminationOutput
+        ? context.GetDevice().GetImageResource(context.GetTextureHandle(_globalIlluminationOutput)).bindless.storageImage
+        : kInvalidResourceIndex;
     const uint32_t triangleBufferIndex = _scene->GetTriangleBuffer()
         ? context.GetDevice().GetBufferResource(_scene->GetTriangleBuffer()).bindless.storageBuffer
         : kInvalidResourceIndex;
@@ -211,6 +233,7 @@ void RayEffectsPass::Execute(const RenderGraphContext& context)
         .depthImageIndex = context.GetDevice().GetImageResource(depthHandle).bindless.sampledImage,
         .outputImageIndex = context.GetDevice().GetImageResource(outputHandle).bindless.storageImage,
         .reflectionOutputImageIndex = reflectionOutputImageIndex,
+        .giOutputImageIndex = giOutputImageIndex,
         .frameIndex = _frameIndex,
         .triangleBufferIndex = triangleBufferIndex,
         .triangleCount = static_cast<uint32_t>(_scene->GetTriangles().size()),

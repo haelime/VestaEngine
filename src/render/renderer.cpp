@@ -815,6 +815,7 @@ void ConfigureDeferredLightingPass(Renderer& renderer, IRenderPass& pass, const 
     lightingPass.SetEnvironmentSpecularStrength(settings.environmentSpecularStrength);
     lightingPass.SetRayEffects(resources.rayEffects,
         resources.rayReflection,
+        resources.rayGlobalIllumination,
         settings.enableRtShadows,
         settings.enableRtAmbientOcclusion,
         settings.enableRtReflections);
@@ -868,7 +869,7 @@ void ConfigureRayEffectsPass(Renderer& renderer, IRenderPass& pass, const Render
     auto& rayEffectsPass = static_cast<RayEffectsPass&>(pass);
     const auto& settings = renderer.GetSettings();
     rayEffectsPass.SetInputs(resources.gbufferNormal, resources.sceneDepth);
-    rayEffectsPass.SetOutputs(resources.rayEffects, resources.rayReflection);
+    rayEffectsPass.SetOutputs(resources.rayEffects, resources.rayReflection, resources.rayGlobalIllumination);
     rayEffectsPass.SetScene(&renderer.GetScene());
     rayEffectsPass.SetCamera(&renderer.GetCamera());
     rayEffectsPass.SetFrameSlot(renderer.GetFrameSlot());
@@ -4142,6 +4143,11 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
             ImageDesc rayReflectionDesc = rayEffectsDesc;
             rayReflectionDesc.debugName = "RayEffects.Reflection";
             resources.rayReflection = graph.CreateTexture("RayEffects.Reflection", rayReflectionDesc);
+        }
+        if (_settings.enableRtGlobalIllumination) {
+            ImageDesc rayGiDesc = rayEffectsDesc;
+            rayGiDesc.debugName = "RayEffects.GI";
+            resources.rayGlobalIllumination = graph.CreateTexture("RayEffects.GI", rayGiDesc);
         }
     }
     if (useRestirResolvePass) {

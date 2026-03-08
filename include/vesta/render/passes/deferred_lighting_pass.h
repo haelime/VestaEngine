@@ -29,6 +29,7 @@ public:
     void SetEnvironmentSpecularStrength(float strength);
     void SetRayEffects(GraphTextureHandle rayEffects,
         GraphTextureHandle rayReflection,
+        GraphTextureHandle rayGlobalIllumination,
         bool shadowsEnabled,
         bool ambientOcclusionEnabled,
         bool reflectionsEnabled);
@@ -62,6 +63,7 @@ private:
     GraphTextureHandle _shadowMap{};
     GraphTextureHandle _rayEffects{};
     GraphTextureHandle _rayReflection{};
+    GraphTextureHandle _rayGlobalIllumination{};
     GraphTextureHandle _restirDirectLighting{};
     GraphTextureHandle _output{};
     GraphTextureHandle _debugOutput{};

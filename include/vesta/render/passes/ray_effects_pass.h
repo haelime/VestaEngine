@@ -19,7 +19,7 @@ namespace vesta::render {
 class RayEffectsPass final : public IRenderPass {
 public:
     void SetInputs(GraphTextureHandle normal, GraphTextureHandle depth);
-    void SetOutputs(GraphTextureHandle visibilityOutput, GraphTextureHandle reflectionOutput);
+    void SetOutputs(GraphTextureHandle visibilityOutput, GraphTextureHandle reflectionOutput, GraphTextureHandle globalIlluminationOutput);
     void SetScene(const vesta::scene::Scene* scene);
     void SetCamera(const Camera* camera);
     void SetFrameSlot(uint32_t frameSlot);
@@ -49,6 +49,7 @@ private:
     GraphTextureHandle _depth{};
     GraphTextureHandle _visibilityOutput{};
     GraphTextureHandle _reflectionOutput{};
+    GraphTextureHandle _globalIlluminationOutput{};
     const vesta::scene::Scene* _scene{ nullptr };
     const Camera* _camera{ nullptr };
     uint32_t _frameSlot{ 0 };

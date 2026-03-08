@@ -33,6 +33,8 @@ layout(push_constant) uniform RayEffectsPushConstants {
     uint depthImageIndex;
     uint outputImageIndex;
     uint reflectionOutputImageIndex;
+    uint giOutputImageIndex;
+    uint reserved1;
     uint frameIndex;
     uint triangleBufferIndex;
     uint triangleCount;
@@ -190,6 +192,9 @@ void main()
         if (pc.reflectionOutputImageIndex != INVALID_IMAGE_INDEX) {
             imageStore(storageImages[nonuniformEXT(int(pc.reflectionOutputImageIndex))], pixel, vec4(0.0));
         }
+        if (pc.giOutputImageIndex != INVALID_IMAGE_INDEX) {
+            imageStore(storageImages[nonuniformEXT(int(pc.giOutputImageIndex))], pixel, vec4(0.0));
+        }
         return;
     }
 
@@ -251,5 +256,27 @@ void main()
         vec3 hitColor = reflectionHitWeight > 0.0 ? reflectionHitColor / reflectionHitWeight : vec3(0.0);
         float hitBlend = clamp(reflectionHitWeight / max(float(pc.sampleCounts.z), 1.0), 0.0, 1.0);
         imageStore(storageImages[nonuniformEXT(int(pc.reflectionOutputImageIndex))], pixel, vec4(hitColor, hitBlend));
+    }
+    if (pc.giOutputImageIndex != INVALID_IMAGE_INDEX) {
+        vec3 giColor = vec3(0.0);
+        float giWeight = 0.0;
+        if (pc.flags.w != 0u) {
+            uint sampleCount = clamp(pc.sampleCounts.w, 1u, 8u);
+            float giMaxDistance = max(min(pc.rayParams.x, pc.rayParams.y * 6.0), 0.1);
+            for (uint sampleIndex = 0u; sampleIndex < sampleCount; ++sampleIndex) {
+                vec3 giDirection = sampleHemisphere(normal, sampleIndex + 17u, sampleCount, pixel);
+                uint primitiveIndex = INVALID_RESOURCE_INDEX;
+                vec2 barycentrics = vec2(0.0);
+                vec4 hit = traceClosestTriangle(rayOrigin, giDirection, 0.03, giMaxDistance, primitiveIndex, barycentrics);
+                if (hit.x > 0.0) {
+                    giColor += shadeHitTriangle(primitiveIndex, barycentrics, giDirection);
+                    giWeight += 1.0;
+                }
+            }
+        }
+        float giBlend = clamp(giWeight / max(float(pc.sampleCounts.w), 1.0), 0.0, 1.0);
+        imageStore(storageImages[nonuniformEXT(int(pc.giOutputImageIndex))],
+            pixel,
+            vec4(giWeight > 0.0 ? giColor / giWeight : vec3(0.0), giBlend));
     }
 }

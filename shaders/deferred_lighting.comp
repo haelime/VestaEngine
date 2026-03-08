@@ -20,6 +20,7 @@ struct DeferredLightingConstants {
     uvec4 iblIndices;
     uvec4 rayEffects;
     uvec4 rayReflection;
+    uvec4 rayGlobalIllumination;
     uvec4 restirDi;
     vec4 directionalColor;
     vec4 pointPositionAndIntensity;
@@ -440,6 +441,16 @@ vec4 sampleRayReflection(DeferredLightingConstants constants, ivec2 pixel, ivec2
     return imageLoad(storageImages[nonuniformEXT(int(constants.rayReflection.x))], rtPixel);
 }
 
+vec4 sampleRayGlobalIllumination(DeferredLightingConstants constants, ivec2 pixel, ivec2 fullSize)
+{
+    if (constants.rayGlobalIllumination.x == INVALID_IMAGE_INDEX || constants.rayGlobalIllumination.y == 0u) {
+        return vec4(0.0);
+    }
+    ivec2 rtSize = imageSize(storageImages[nonuniformEXT(int(constants.rayGlobalIllumination.x))]);
+    ivec2 rtPixel = clamp(ivec2((vec2(pixel) + 0.5) * vec2(rtSize) / vec2(fullSize)), ivec2(0), rtSize - ivec2(1));
+    return imageLoad(storageImages[nonuniformEXT(int(constants.rayGlobalIllumination.x))], rtPixel);
+}
+
 vec3 sampleRestirDirectLighting(DeferredLightingConstants constants, ivec2 pixel, ivec2 fullSize)
 {
     if (constants.restirDi.x == INVALID_IMAGE_INDEX || constants.restirDi.y == 0u) {
@@ -691,6 +702,8 @@ void main() {
 
     vec3 indirectBounce = computeScreenSpaceGi(pixel, size, worldPosition, N, baseColor) * ao * (1.0 - metallic);
     indirectBounce += computeDdgiComposite(lightingConstants, worldPosition, N, baseColor, metallic) * ao;
+    vec4 rtGi = sampleRayGlobalIllumination(lightingConstants, pixel, size);
+    indirectBounce += max(rtGi.rgb, vec3(0.0)) * clamp(rtGi.a, 0.0, 1.0) * ao * (1.0 - metallic) * 0.35;
     vec3 ambientDiffuse = sampleDiffuseIbl(N) * baseColor * (1.0 - metallic) * ao + indirectBounce;
     vec3 reflectionColor = computeScreenSpaceReflection(pixel, size, worldPosition, N, V, sampleSpecularIbl(R, N, V, roughness), roughness, metallic);
     if (lightingConstants.rayEffects.w != 0u) {
