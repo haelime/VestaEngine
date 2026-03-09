@@ -15,6 +15,10 @@ public:
     VkExtent2D _windowExtent{ 1700, 900 };
 
     struct SDL_Window* _window{ nullptr };
+    struct ImGuiContext* _imguiContext{ nullptr };
+    bool _imguiInitialized{ false };
+    bool _showDebugUi{ true };
+    VkDescriptorPool _imguiDescriptorPool{ VK_NULL_HANDLE };
 
     static VestaEngine& Get();
 
@@ -34,4 +38,9 @@ private:
     vesta::render::Renderer _renderer;
 
     void init_renderer();
+    void init_imgui();
+    void shutdown_imgui();
+    void begin_imgui_frame(float deltaSeconds);
+    void build_debug_ui();
+    [[nodiscard]] bool should_forward_event_to_renderer(const union SDL_Event& event) const;
 };

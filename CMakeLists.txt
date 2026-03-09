@@ -26,10 +26,16 @@ if(NOT GLSL_VALIDATOR)
   message(FATAL_ERROR "glslangValidator not found. Install Vulkan SDK or set VULKAN_SDK.")
 endif()
 
-file(GLOB_RECURSE GLSL_SOURCE_FILES CONFIGURE_DEPENDS
+# Avoid CONFIGURE_DEPENDS here: in this environment Ninja/CMake can hang
+# indefinitely in "Re-checking globbed directories..." before compilation.
+# Re-run CMake manually when adding or removing shader files.
+file(GLOB_RECURSE GLSL_SOURCE_FILES
   "${PROJECT_SOURCE_DIR}/shaders/*.frag"
   "${PROJECT_SOURCE_DIR}/shaders/*.vert"
   "${PROJECT_SOURCE_DIR}/shaders/*.comp"
+  "${PROJECT_SOURCE_DIR}/shaders/*.rgen"
+  "${PROJECT_SOURCE_DIR}/shaders/*.rmiss"
+  "${PROJECT_SOURCE_DIR}/shaders/*.rchit"
 )
 
 set(SHADER_OUTPUT_DIR "${CMAKE_BINARY_DIR}/shaders")

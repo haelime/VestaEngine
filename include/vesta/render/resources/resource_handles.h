@@ -32,4 +32,11 @@ struct SamplerHandle {
     [[nodiscard]] explicit operator bool() const { return index != kInvalidResourceIndex; }
     [[nodiscard]] bool operator==(const SamplerHandle&) const = default;
 };
+
+struct AccelerationStructureHandle {
+    uint32_t index{ kInvalidResourceIndex };
+
+    [[nodiscard]] explicit operator bool() const { return index != kInvalidResourceIndex; }
+    [[nodiscard]] bool operator==(const AccelerationStructureHandle&) const = default;
+};
 } // namespace vesta::render
