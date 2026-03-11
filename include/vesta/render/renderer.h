@@ -73,6 +73,7 @@ enum class RendererDebugView : uint32_t {
     TemporalJitter = 26,
     ContactShadow = 27,
     ShadowCascade = 28,
+    RayTracedGlobalIllumination = 29,
 };
 
 enum class GaussianDebugView : uint32_t {

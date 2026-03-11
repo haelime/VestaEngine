@@ -64,6 +64,7 @@ const uint DEBUG_DIRECT_LIGHTING = 13u;
 const uint DEBUG_INDIRECT_LIGHTING = 14u;
 const uint DEBUG_REFLECTION = 15u;
 const uint DEBUG_CONTACT_SHADOW = 27u;
+const uint DEBUG_RAY_TRACED_GI = 29u;
 const uint INVALID_BUFFER_INDEX = 0xffffffffu;
 
 vec3 sampleEnvironmentMap(uint imageIndex, vec3 direction)
@@ -726,6 +727,8 @@ void main() {
             debugValue = ambientSpecular;
         } else if (pc.debugView == DEBUG_CONTACT_SHADOW) {
             debugValue = vec3(contactShadow);
+        } else if (pc.debugView == DEBUG_RAY_TRACED_GI) {
+            debugValue = max(rtGi.rgb, vec3(0.0)) * clamp(rtGi.a, 0.0, 1.0) * ao * (1.0 - metallic) * 0.35;
         }
         imageStore(storageImages[nonuniformEXT(int(pc.debugOutputImageIndex))], pixel, vec4(debugValue, 1.0));
     }

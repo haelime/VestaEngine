@@ -182,6 +182,7 @@ std::optional<vesta::render::RendererDebugView> ParseDebugView(std::string_view 
     if (value == "jitter" || value == "jitter-pattern" || value == "temporal-jitter") { return vesta::render::RendererDebugView::TemporalJitter; }
     if (value == "contact-shadow" || value == "contact-shadows") { return vesta::render::RendererDebugView::ContactShadow; }
     if (value == "shadow-cascade" || value == "shadow-cascades" || value == "cascade-index") { return vesta::render::RendererDebugView::ShadowCascade; }
+    if (value == "rt-gi" || value == "ray-traced-gi" || value == "raytraced-gi") { return vesta::render::RendererDebugView::RayTracedGlobalIllumination; }
     return std::nullopt;
 }
 

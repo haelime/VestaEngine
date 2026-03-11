@@ -274,6 +274,8 @@ const char* RendererDebugViewLabel(vesta::render::RendererDebugView view)
         return "Contact Shadow";
     case vesta::render::RendererDebugView::ShadowCascade:
         return "Shadow Cascade";
+    case vesta::render::RendererDebugView::RayTracedGlobalIllumination:
+        return "Ray-Traced GI";
     case vesta::render::RendererDebugView::FinalColor:
     default:
         return "Final Color";
@@ -3717,6 +3719,7 @@ void VestaEngine::build_debug_ui()
                 "Temporal Jitter",
                 "Contact Shadow",
                 "Shadow Cascade",
+                "Ray-Traced GI",
             };
             int commonView = static_cast<int>(settings.debugView);
             if (ImGui::Combo("Debug View", &commonView, commonViews, IM_ARRAYSIZE(commonViews))) {
