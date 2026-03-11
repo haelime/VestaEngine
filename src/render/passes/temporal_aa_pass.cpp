@@ -17,6 +17,7 @@ struct TemporalAAPushConstants {
     uint32_t materialImageIndex{ 0 };
     uint32_t depthImageIndex{ 0 };
     uint32_t motionImageIndex{ 0 };
+    uint32_t reactiveImageIndex{ kInvalidResourceIndex };
     uint32_t historyImageIndex{ 0 };
     uint32_t frameIndex{ 0 };
     float feedback{ 0.88f };
@@ -37,12 +38,14 @@ void TemporalAAPass::SetInputs(GraphTextureHandle input,
     GraphTextureHandle normalRoughness,
     GraphTextureHandle material,
     GraphTextureHandle motion,
+    GraphTextureHandle reactive,
     GraphTextureHandle depth)
 {
     _input = input;
     _normalRoughness = normalRoughness;
     _material = material;
     _motion = motion;
+    _reactive = reactive;
     _depth = depth;
 }
 
@@ -150,6 +153,9 @@ void TemporalAAPass::Setup(RenderGraphBuilder& builder)
     builder.Read(_normalRoughness, ResourceUsage::StorageRead);
     builder.Read(_material, ResourceUsage::StorageRead);
     builder.Read(_motion, ResourceUsage::StorageRead);
+    if (_reactive) {
+        builder.Read(_reactive, ResourceUsage::StorageRead);
+    }
     builder.Read(_depth, ResourceUsage::SampledRead);
     builder.Write(_output, ResourceUsage::StorageWrite);
 }
@@ -165,6 +171,7 @@ void TemporalAAPass::Execute(const RenderGraphContext& context)
     const ImageHandle normalHandle = context.GetTextureHandle(_normalRoughness);
     const ImageHandle materialHandle = context.GetTextureHandle(_material);
     const ImageHandle motionHandle = context.GetTextureHandle(_motion);
+    const ImageHandle reactiveHandle = _reactive ? context.GetTextureHandle(_reactive) : ImageHandle{};
     const ImageHandle depthHandle = context.GetTextureHandle(_depth);
     const VkExtent3D outputExtent = context.GetTextureExtent(_output);
     EnsureHistoryImage(context.GetDevice(), outputExtent);
@@ -188,6 +195,9 @@ void TemporalAAPass::Execute(const RenderGraphContext& context)
         .materialImageIndex = context.GetDevice().GetImageResource(materialHandle).bindless.storageImage,
         .depthImageIndex = context.GetDevice().GetImageResource(depthHandle).bindless.sampledImage,
         .motionImageIndex = context.GetDevice().GetImageResource(motionHandle).bindless.storageImage,
+        .reactiveImageIndex = _reactive
+            ? context.GetDevice().GetImageResource(reactiveHandle).bindless.storageImage
+            : kInvalidResourceIndex,
         .historyImageIndex = context.GetDevice().GetImageResource(_historyImage).bindless.storageImage,
         .frameIndex = _frameIndex,
         .feedback = _feedback,

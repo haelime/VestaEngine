@@ -765,6 +765,7 @@ void ConfigureGeometryRasterPass(Renderer& renderer, IRenderPass& pass, const Re
         resources.gbufferMaterial,
         resources.gbufferDebug,
         resources.gbufferMotion,
+        resources.gbufferReactive,
         resources.sceneDepth);
     rasterPass.SetScene(&renderer.GetScene());
     rasterPass.SetCamera(&renderer.GetCamera());
@@ -1044,7 +1045,12 @@ void ConfigureTemporalAAPass(Renderer& renderer, IRenderPass& pass, const Render
 {
     auto& temporalPass = static_cast<TemporalAAPass&>(pass);
     temporalPass.SetInputs(
-        resources.deferredLighting, resources.gbufferNormal, resources.gbufferMaterial, resources.gbufferMotion, resources.sceneDepth);
+        resources.deferredLighting,
+        resources.gbufferNormal,
+        resources.gbufferMaterial,
+        resources.gbufferMotion,
+        resources.gbufferReactive,
+        resources.sceneDepth);
     temporalPass.SetOutput(resources.temporalLighting);
     temporalPass.SetEnabled(renderer.GetSettings().enableTaa || renderer.GetSettings().enableTemporalUpscaler);
     temporalPass.SetFeedback(renderer.GetSettings().taaFeedback);
@@ -2487,6 +2493,7 @@ TemporalUpscalerStats Renderer::GetTemporalUpscalerStats() const
     stats.motionVectorsAvailable = true;
     stats.depthAvailable = true;
     stats.materialReactiveMaskAvailable = stats.backendAvailable && _settings.temporalMaterialReactiveMask;
+    stats.authoredAlphaReactiveMaskAvailable = stats.backendAvailable && _settings.temporalMaterialReactiveMask;
     stats.reactiveMaskStrength = std::clamp(_settings.temporalReactiveMaskStrength, 0.0f, 1.0f);
     stats.reactiveMaskAvailable =
         stats.backendAvailable && stats.taaHistoryAvailable && stats.motionVectorsAvailable && stats.depthAvailable;
@@ -4123,6 +4130,7 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
         resources.gbufferMaterial = graph.CreateTexture("GBuffer.Material", gbufferDesc);
         resources.gbufferDebug = graph.CreateTexture("GBuffer.Debug", gbufferDesc);
         resources.gbufferMotion = graph.CreateTexture("GBuffer.Motion", gbufferDesc);
+        resources.gbufferReactive = graph.CreateTexture("GBuffer.Reactive", gbufferDesc);
         resources.sceneDepth = graph.CreateTexture("SceneDepth", depthDesc);
     }
     if (useShadowMapPass) {

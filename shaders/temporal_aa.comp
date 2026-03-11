@@ -13,6 +13,7 @@ layout(push_constant) uniform TemporalAAPushConstants {
     uint materialImageIndex;
     uint depthImageIndex;
     uint motionImageIndex;
+    uint reactiveImageIndex;
     uint historyImageIndex;
     uint frameIndex;
     float feedback;
@@ -141,6 +142,9 @@ void main()
     vec4 materialSignal = pc.materialImageIndex != INVALID_RESOURCE_INDEX
         ? imageLoad(storageImages[nonuniformEXT(int(pc.materialImageIndex))], normalPixel)
         : vec4(0.0);
+    vec4 reactiveSignal = pc.reactiveImageIndex != INVALID_RESOURCE_INDEX
+        ? imageLoad(storageImages[nonuniformEXT(int(pc.reactiveImageIndex))], normalPixel)
+        : vec4(0.0);
     vec3 currentNormal = normalize(normalRoughness.xyz * 2.0 - 1.0);
     float currentDepth = texture(sampledImages[nonuniformEXT(int(pc.depthImageIndex))], uv).r;
     vec3 temporalColor = currentColor;
@@ -179,7 +183,8 @@ void main()
                 * (1.0 - smoothstep(0.18, 0.75, normalRoughness.w));
             float emissiveReactive = smoothstep(pc.reactiveEmissiveThreshold, pc.reactiveEmissiveThreshold * 8.0 + 1.0e-4,
                 luminance(max(materialSignal.rgb, vec3(0.0))));
-            materialReactive = max(metallicReactive, emissiveReactive) * clamp(pc.reactiveMaskStrength, 0.0, 1.0);
+            float authoredAlphaReactive = clamp(reactiveSignal.r, 0.0, 1.0);
+            materialReactive = max(max(metallicReactive, emissiveReactive), authoredAlphaReactive) * clamp(pc.reactiveMaskStrength, 0.0, 1.0);
         }
         reactiveMask = clamp(max(max(luminanceReactive, depthReactive), motionReactive * 0.6), 0.0, 1.0);
         reactiveMask = max(reactiveMask, materialReactive);

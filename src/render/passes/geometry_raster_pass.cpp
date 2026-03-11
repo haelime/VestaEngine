@@ -30,6 +30,7 @@ void GeometryRasterPass::SetTargets(
     GraphTextureHandle material,
     GraphTextureHandle debug,
     GraphTextureHandle motion,
+    GraphTextureHandle reactive,
     GraphTextureHandle depth)
 {
     _albedoTarget = albedo;
@@ -37,6 +38,7 @@ void GeometryRasterPass::SetTargets(
     _materialTarget = material;
     _debugTarget = debug;
     _motionTarget = motion;
+    _reactiveTarget = reactive;
     _depthTarget = depth;
 }
 
@@ -139,6 +141,7 @@ void GeometryRasterPass::Initialize(RenderDevice& device)
         VK_FORMAT_R16G16B16A16_SFLOAT,
         VK_FORMAT_R16G16B16A16_SFLOAT,
         VK_FORMAT_R16G16B16A16_SFLOAT,
+        VK_FORMAT_R16G16B16A16_SFLOAT,
     };
     pipelineDesc.depthFormat = VK_FORMAT_D32_SFLOAT;
     pipelineDesc.vertexShader = _vertexShader;
@@ -159,6 +162,7 @@ void GeometryRasterPass::Setup(RenderGraphBuilder& builder)
     builder.Write(_materialTarget, ResourceUsage::ColorAttachmentWrite);
     builder.Write(_debugTarget, ResourceUsage::ColorAttachmentWrite);
     builder.Write(_motionTarget, ResourceUsage::ColorAttachmentWrite);
+    builder.Write(_reactiveTarget, ResourceUsage::ColorAttachmentWrite);
     builder.Write(_depthTarget, ResourceUsage::DepthAttachmentWrite);
 }
 
@@ -178,8 +182,10 @@ void GeometryRasterPass::Execute(const RenderGraphContext& context)
     debugClear.color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
     VkClearValue motionClear{};
     motionClear.color = { { 0.0f, 0.0f, 0.0f, 0.0f } };
+    VkClearValue reactiveClear{};
+    reactiveClear.color = { { 0.0f, 1.0f, 0.0f, 0.0f } };
 
-    std::array<VkRenderingAttachmentInfo, 5> colorAttachments{};
+    std::array<VkRenderingAttachmentInfo, 6> colorAttachments{};
     colorAttachments[0].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
     colorAttachments[0].imageView = context.GetTextureView(_albedoTarget);
     colorAttachments[0].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -214,6 +220,13 @@ void GeometryRasterPass::Execute(const RenderGraphContext& context)
     colorAttachments[4].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     colorAttachments[4].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     colorAttachments[4].clearValue = motionClear;
+
+    colorAttachments[5].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    colorAttachments[5].imageView = context.GetTextureView(_reactiveTarget);
+    colorAttachments[5].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    colorAttachments[5].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAttachments[5].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachments[5].clearValue = reactiveClear;
 
     VkRenderingAttachmentInfo depthAttachment{};
     depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;

@@ -1910,7 +1910,7 @@ void VestaEngine::finish_benchmark()
         output << "timestamp,scene,scene_kind,gpu,resolution,vsync,present_mode,fps_limit_enabled,fps_limit,display_mode,"
                << "debug_view,path_trace_debug_view,gaussian_debug_view,compare_mode,compare_split,compare_difference_scale,"
                << "ssao,ssao_radius,ssao_intensity,"
-               << "taa,taa_feedback,temporal_upscaler,temporal_upscaler_backend,temporal_upscaler_input,temporal_upscaler_output,temporal_upscaler_scale,temporal_upscaler_sharpness,temporal_upscaler_history,temporal_upscaler_reactive_mask,temporal_upscaler_material_reactive_mask,temporal_upscaler_reactive_strength,"
+               << "taa,taa_feedback,temporal_upscaler,temporal_upscaler_backend,temporal_upscaler_input,temporal_upscaler_output,temporal_upscaler_scale,temporal_upscaler_sharpness,temporal_upscaler_history,temporal_upscaler_reactive_mask,temporal_upscaler_material_reactive_mask,temporal_upscaler_authored_alpha_reactive_mask,temporal_upscaler_reactive_strength,"
                << "restir_di,restir_gi,restir_pt,restir_backend,restir_reservoir_storage,restir_lights,restir_emissive_lights,restir_candidates,restir_reservoirs,restir_reservoir_mb,restir_temporal_reuse,restir_spatial_reuse,restir_history,restir_candidate_pass,restir_temporal_pass,restir_spatial_pass,restir_resolve,"
                << "rt_hybrid_backend,rt_hybrid_ray_query,rt_hybrid_tlas,rt_hybrid_resolution,rt_shadow_requested,rt_ao_requested,rt_reflection_requested,rt_gi_requested,rt_shadow_samples,rt_ao_samples,rt_reflection_samples,rt_gi_samples,rt_shadow_rays,rt_ao_rays,rt_reflection_rays,rt_gi_rays,rt_denoiser,rt_temporal,"
                << "ssr,ssr_max_distance,ssr_thickness,ssr_intensity,"
@@ -2026,6 +2026,7 @@ void VestaEngine::finish_benchmark()
            << (temporalUpscalerStats.taaHistoryAvailable ? "true" : "false") << ','
            << (temporalUpscalerStats.reactiveMaskAvailable ? "true" : "false") << ','
            << (temporalUpscalerStats.materialReactiveMaskAvailable ? "true" : "false") << ','
+           << (temporalUpscalerStats.authoredAlphaReactiveMaskAvailable ? "true" : "false") << ','
            << temporalUpscalerStats.reactiveMaskStrength << ','
            << (restirStats.requestedDi ? "true" : "false") << ','
            << (restirStats.requestedGi ? "true" : "false") << ','
@@ -2314,6 +2315,7 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "    \"depth_available\": " << (temporalUpscalerStats.depthAvailable ? "true" : "false") << ",\n"
            << "    \"reactive_mask_available\": " << (temporalUpscalerStats.reactiveMaskAvailable ? "true" : "false") << ",\n"
            << "    \"material_reactive_mask_available\": " << (temporalUpscalerStats.materialReactiveMaskAvailable ? "true" : "false") << ",\n"
+           << "    \"authored_alpha_reactive_mask_available\": " << (temporalUpscalerStats.authoredAlphaReactiveMaskAvailable ? "true" : "false") << ",\n"
            << "    \"reactive_mask_strength\": " << temporalUpscalerStats.reactiveMaskStrength << "\n"
            << "  },\n"
            << "  \"restir_stats\": {\n"
@@ -5991,8 +5993,9 @@ void VestaEngine::draw_rasterizer_debug_panel()
         temporalUpscalerStats.motionVectorsAvailable ? "ready" : "missing",
         temporalUpscalerStats.depthAvailable ? "ready" : "missing",
         temporalUpscalerStats.reactiveMaskAvailable ? "ready" : "staged");
-    ImGui::Text("Material Reactive %s  Strength %.2f",
+    ImGui::Text("Material Reactive %s  Authored Alpha %s  Strength %.2f",
         temporalUpscalerStats.materialReactiveMaskAvailable ? "ready" : "disabled",
+        temporalUpscalerStats.authoredAlphaReactiveMaskAvailable ? "ready" : "disabled",
         temporalUpscalerStats.reactiveMaskStrength);
     ImGui::Text("Backend %s", temporalUpscalerStats.backendAvailable ? "TAAU raster path" : "staged or blocked");
     if (!temporalUpscalerStats.backendAvailable) {

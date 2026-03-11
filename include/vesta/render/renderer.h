@@ -239,6 +239,7 @@ struct TemporalUpscalerStats {
     bool depthAvailable{ true };
     bool reactiveMaskAvailable{ false };
     bool materialReactiveMaskAvailable{ false };
+    bool authoredAlphaReactiveMaskAvailable{ false };
     float reactiveMaskStrength{ 0.0f };
 };
 
@@ -539,6 +540,7 @@ struct RendererGraphResources {
     GraphTextureHandle gbufferMaterial{};
     GraphTextureHandle gbufferDebug{};
     GraphTextureHandle gbufferMotion{};
+    GraphTextureHandle gbufferReactive{};
     GraphTextureHandle sceneDepth{};
     GraphTextureHandle shadowMap{};
     GraphTextureHandle overdraw{};

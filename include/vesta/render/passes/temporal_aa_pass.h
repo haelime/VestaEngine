@@ -15,6 +15,7 @@ public:
         GraphTextureHandle normalRoughness,
         GraphTextureHandle material,
         GraphTextureHandle motion,
+        GraphTextureHandle reactive,
         GraphTextureHandle depth);
     void SetOutput(GraphTextureHandle output);
     void SetEnabled(bool enabled);
@@ -36,6 +37,7 @@ private:
     GraphTextureHandle _normalRoughness{};
     GraphTextureHandle _material{};
     GraphTextureHandle _motion{};
+    GraphTextureHandle _reactive{};
     GraphTextureHandle _depth{};
     GraphTextureHandle _output{};
     bool _enabled{ true };

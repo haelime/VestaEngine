@@ -21,6 +21,7 @@ public:
         GraphTextureHandle material,
         GraphTextureHandle debug,
         GraphTextureHandle motion,
+        GraphTextureHandle reactive,
         GraphTextureHandle depth);
     void SetScene(const vesta::scene::Scene* scene);
     void SetCamera(const Camera* camera);
@@ -39,6 +40,7 @@ private:
     GraphTextureHandle _materialTarget{};
     GraphTextureHandle _debugTarget{};
     GraphTextureHandle _motionTarget{};
+    GraphTextureHandle _reactiveTarget{};
     GraphTextureHandle _depthTarget{};
     const vesta::scene::Scene* _scene{ nullptr };
     const Camera* _camera{ nullptr };

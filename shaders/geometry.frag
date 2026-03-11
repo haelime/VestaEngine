@@ -27,6 +27,7 @@ layout(set = 0, binding = 2, std430) readonly buffer MaterialBuffer {
 
 layout(push_constant) uniform GeometryPushConstants {
     mat4 viewProjection;
+    mat4 previousViewProjection;
     uint materialBufferIndex;
 } pc;
 
@@ -35,6 +36,7 @@ layout(location = 1) out vec4 outNormalRoughness;
 layout(location = 2) out vec4 outEmissiveMetallic;
 layout(location = 3) out vec4 outDebug;
 layout(location = 4) out vec4 outMotion;
+layout(location = 5) out vec4 outReactive;
 
 const uint kInvalidResourceIndex = 0xFFFFFFFFu;
 
@@ -65,6 +67,13 @@ void main() {
     if (material.textureIndices0.x != kInvalidResourceIndex) {
         baseColor *= texture(sampledImages[nonuniformEXT(material.textureIndices0.x)], inTexCoord);
     }
+    float alphaCutoff = material.emissiveFactor.w;
+    if (alphaCutoff > 0.0 && baseColor.a < alphaCutoff) {
+        discard;
+    }
+    float alphaReactive = alphaCutoff > 0.0
+        ? 1.0 - smoothstep(alphaCutoff, min(alphaCutoff + 0.25, 1.0), baseColor.a)
+        : 1.0 - clamp(baseColor.a, 0.0, 1.0);
 
     float metallic = clamp(material.materialParams.x, 0.0, 1.0);
     float roughness = clamp(material.materialParams.y, 0.045, 1.0);
@@ -95,4 +104,5 @@ void main() {
     vec2 currentNdc = inCurrentClip.xy / max(inCurrentClip.w, 1.0e-4);
     vec2 previousNdc = inPreviousClip.xy / max(inPreviousClip.w, 1.0e-4);
     outMotion = vec4((currentNdc - previousNdc) * 0.5, 0.0, 1.0);
+    outReactive = vec4(clamp(alphaReactive, 0.0, 1.0), clamp(baseColor.a, 0.0, 1.0), alphaCutoff > 0.0 ? 1.0 : 0.0, 1.0);
 }

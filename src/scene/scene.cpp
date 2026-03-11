@@ -2817,6 +2817,9 @@ bool Scene::ParseFromFile(const std::filesystem::path& path)
             material.pbrData.baseColorFactor[3]);
         sceneMaterial.emissiveFactor =
             glm::vec4(material.emissiveFactor[0], material.emissiveFactor[1], material.emissiveFactor[2], 0.0f);
+        if (material.alphaMode == fastgltf::AlphaMode::Mask) {
+            sceneMaterial.emissiveFactor.w = static_cast<float>(material.alphaCutoff);
+        }
         sceneMaterial.materialParams = glm::vec4(material.pbrData.metallicFactor,
             material.pbrData.roughnessFactor,
             material.occlusionTexture.has_value() ? material.occlusionTexture->strength : 1.0f,
