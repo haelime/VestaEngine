@@ -1915,7 +1915,7 @@ void VestaEngine::finish_benchmark()
                << "rt_hybrid_backend,rt_hybrid_ray_query,rt_hybrid_tlas,rt_hybrid_resolution,rt_shadow_requested,rt_ao_requested,rt_reflection_requested,rt_gi_requested,rt_shadow_samples,rt_ao_samples,rt_reflection_samples,rt_gi_samples,rt_shadow_rays,rt_ao_rays,rt_reflection_rays,rt_gi_rays,rt_denoiser,rt_temporal,"
                << "ssr,ssr_max_distance,ssr_thickness,ssr_intensity,"
                << "ssgi,ssgi_radius,ssgi_intensity,ssgi_samples,"
-               << "ddgi,ddgi_backend,ddgi_probes,ddgi_rays_per_update,ddgi_memory_mb,ddgi_probe_spacing,ddgi_hysteresis,ddgi_intensity,ddgi_overlay,ddgi_composite,ddgi_ray_update,"
+               << "ddgi,ddgi_backend,ddgi_probes,ddgi_rays_per_update,ddgi_memory_mb,ddgi_probe_spacing,ddgi_hysteresis,ddgi_intensity,ddgi_overlay,ddgi_composite,ddgi_ray_update,ddgi_temporal_blend,"
                << "shadow_map,shadow_map_size,shadow_cascades,shadow_cascade_lambda,shadow_bias,shadow_normal_bias,shadow_strength,shadow_pcss,shadow_filter_radius,contact_shadows,contact_shadow_length,contact_shadow_intensity,"
                << "pt_nee,pt_rr,pt_rr_depth,pt_firefly_clamp,"
                << "pt_denoiser,pt_denoiser_strength,pt_denoiser_temporal,pt_denoiser_iterations,"
@@ -2088,6 +2088,7 @@ void VestaEngine::finish_benchmark()
            << (ddgiStats.overlayEnabled ? "true" : "false") << ','
            << (ddgiStats.probeCompositeAvailable ? "true" : "false") << ','
            << (ddgiStats.rayUpdateAvailable ? "true" : "false") << ','
+           << (ddgiStats.temporalBlendAvailable ? "true" : "false") << ','
            << (settings.enableShadowMap ? "true" : "false") << ','
            << settings.shadowMapSize << ','
            << settings.shadowCascadeCount << ','
@@ -2363,7 +2364,8 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "    \"intensity\": " << ddgiStats.intensity << ",\n"
            << "    \"overlay_enabled\": " << (ddgiStats.overlayEnabled ? "true" : "false") << ",\n"
            << "    \"probe_composite_available\": " << (ddgiStats.probeCompositeAvailable ? "true" : "false") << ",\n"
-           << "    \"ray_update_available\": " << (ddgiStats.rayUpdateAvailable ? "true" : "false") << "\n"
+           << "    \"ray_update_available\": " << (ddgiStats.rayUpdateAvailable ? "true" : "false") << ",\n"
+           << "    \"temporal_blend_available\": " << (ddgiStats.temporalBlendAvailable ? "true" : "false") << "\n"
            << "  },\n"
            << "  \"shadow_map\": " << (settings.enableShadowMap ? "true" : "false") << ",\n"
            << "  \"shadow_map_size\": " << settings.shadowMapSize << ",\n"
@@ -6398,11 +6400,12 @@ void VestaEngine::draw_global_illumination_panel()
         : ddgiStats.rayUpdateAvailable                                                             ? "RayUpdate"
                                                                                                      : "Staged";
     ImGui::Text("Storage %s  Backend %s", ddgiStats.probeStorageAvailable ? "allocated" : "staged", ddgiBackendLabel);
-    ImGui::Text("Composite %s  Ray Update %s",
+    ImGui::Text("Composite %s  Ray Update %s  Temporal Blend %s",
         ddgiStats.probeCompositeAvailable ? "live" : "staged",
-        ddgiStats.rayUpdateAvailable ? "live" : "staged");
+        ddgiStats.rayUpdateAvailable ? "live" : "staged",
+        ddgiStats.temporalBlendAvailable ? "live" : "staged");
     ImGui::TextDisabled(
-        "DDGI probe storage, basic irradiance composite, and ray-query probe update are live when TLAS/ray query are available; production filtering remains staged.");
+        "DDGI probe storage, irradiance composite, ray-query probe update, and temporal hysteresis blending are live when TLAS/ray query are available; production spatial filtering remains staged.");
 
     ImGui::SeparatorText("Advanced GI");
     ImGui::BeginDisabled(true);

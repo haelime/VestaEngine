@@ -282,6 +282,7 @@ struct DdgiStats {
     bool probeStorageAvailable{ false };
     bool probeCompositeAvailable{ false };
     bool rayUpdateAvailable{ false };
+    bool temporalBlendAvailable{ false };
     bool overlayEnabled{ false };
 };
 

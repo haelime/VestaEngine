@@ -126,10 +126,16 @@ void main()
     vec3 radiance = proceduralSky(direction) * visible
         + max(pc.directionalLightColor.rgb, vec3(0.0)) * pc.lightDirectionAndIntensity.w * direct * 0.12;
 
-    // Multiple rays race to the same probe record by design; the frame-varying
-    // sample still gives a live, bounded probe update signal without atomics.
     float moment1 = hitDistance / maxDistance;
     float moment2 = moment1 * moment1;
-    storageBuffersVec4[nonuniformEXT(int(pc.bufferIndices.x))].values[probeIndex] = vec4(radiance, visible);
-    storageBuffersVec4[nonuniformEXT(int(pc.bufferIndices.y))].values[probeIndex] = vec4(moment1, moment2, visible, 1.0);
+    vec4 previousIrradiance = storageBuffersVec4[nonuniformEXT(int(pc.bufferIndices.x))].values[probeIndex];
+    vec4 previousVisibility = storageBuffersVec4[nonuniformEXT(int(pc.bufferIndices.y))].values[probeIndex];
+    float historyWeight = (pc.gridAndFrame.w == 0u || previousIrradiance.a <= 0.0) ? 0.0 : clamp(pc.probeParams.y, 0.0, 0.99);
+    vec3 blendedRadiance = mix(radiance, previousIrradiance.rgb, historyWeight);
+    vec3 blendedVisibility = mix(vec3(moment1, moment2, visible), previousVisibility.xyz, historyWeight);
+
+    // Multiple rays can update the same probe during a frame; each ray blends
+    // against the previous frame record so the probe field evolves smoothly.
+    storageBuffersVec4[nonuniformEXT(int(pc.bufferIndices.x))].values[probeIndex] = vec4(blendedRadiance, 1.0);
+    storageBuffersVec4[nonuniformEXT(int(pc.bufferIndices.y))].values[probeIndex] = vec4(blendedVisibility, 1.0);
 }
