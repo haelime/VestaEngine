@@ -556,6 +556,9 @@ struct RendererGraphResources {
     GraphTextureHandle pathTraceNormalGuide{};
     GraphTextureHandle pathTraceDepthGuide{};
     GraphTextureHandle pathTraceDenoised{};
+    GraphTextureHandle bloomHalf{};
+    GraphTextureHandle bloomQuarter{};
+    GraphTextureHandle bloomOutput{};
     GraphTextureHandle gaussianAccum{};
     GraphTextureHandle gaussianReveal{};
     GraphTextureHandle gaussianDebug{};

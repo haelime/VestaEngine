@@ -30,6 +30,9 @@ layout(location = 0) out vec4 outColor;
 
 const uint INVALID_IMAGE_INDEX = 0xffffffffu;
 const uint GAUSSIAN_TILE_SIZE = 8u;
+const uint MODE_BLOOM_EXTRACT = 90u;
+const uint MODE_BLOOM_DOWNSAMPLE = 91u;
+const uint MODE_BLOOM_UPSAMPLE = 92u;
 
 vec3 srgb_to_linear(vec3 value)
 {
@@ -419,10 +422,71 @@ vec3 bloomExtract(vec3 color)
     return color * knee;
 }
 
+vec3 sampleBloomPyramid(uint imageIndex, vec2 uv)
+{
+    if (!hasImage(imageIndex)) {
+        return vec3(0.0);
+    }
+    ivec2 imageSizeValue = imageSize(storageImages[nonuniformEXT(int(imageIndex))]);
+    ivec2 samplePixel = clamp(ivec2(uv * vec2(imageSizeValue)), ivec2(0), imageSizeValue - ivec2(1));
+    return imageLoad(storageImages[nonuniformEXT(int(imageIndex))], samplePixel).rgb;
+}
+
+vec3 filterBloomPyramid(uint imageIndex, vec2 uv, float radius)
+{
+    if (!hasImage(imageIndex)) {
+        return vec3(0.0);
+    }
+    ivec2 sourceSize = imageSize(storageImages[nonuniformEXT(int(imageIndex))]);
+    vec2 texel = radius / vec2(sourceSize);
+    vec3 center = sampleBloomPyramid(imageIndex, uv) * 0.30;
+    vec3 cross = vec3(0.0);
+    cross += sampleBloomPyramid(imageIndex, clamp(uv + vec2(texel.x, 0.0), vec2(0.0), vec2(1.0)));
+    cross += sampleBloomPyramid(imageIndex, clamp(uv - vec2(texel.x, 0.0), vec2(0.0), vec2(1.0)));
+    cross += sampleBloomPyramid(imageIndex, clamp(uv + vec2(0.0, texel.y), vec2(0.0), vec2(1.0)));
+    cross += sampleBloomPyramid(imageIndex, clamp(uv - vec2(0.0, texel.y), vec2(0.0), vec2(1.0)));
+    vec3 diagonal = vec3(0.0);
+    diagonal += sampleBloomPyramid(imageIndex, clamp(uv + texel, vec2(0.0), vec2(1.0)));
+    diagonal += sampleBloomPyramid(imageIndex, clamp(uv + vec2(-texel.x, texel.y), vec2(0.0), vec2(1.0)));
+    diagonal += sampleBloomPyramid(imageIndex, clamp(uv + vec2(texel.x, -texel.y), vec2(0.0), vec2(1.0)));
+    diagonal += sampleBloomPyramid(imageIndex, clamp(uv - texel, vec2(0.0), vec2(1.0)));
+    return center + cross * 0.12 + diagonal * 0.055;
+}
+
+vec3 runBloomPipelineStage(vec2 uv)
+{
+    uint stage = pc.imageIndices1.x;
+    uint sourceImage = pc.imageIndices0.x;
+    if (stage == MODE_BLOOM_EXTRACT) {
+        vec3 source = vec3(0.0);
+        source += sampleBloomSource(sourceImage, uv) * 0.40;
+        ivec2 sourceSize = hasImage(sourceImage) ? imageSize(storageImages[nonuniformEXT(int(sourceImage))]) : ivec2(1);
+        vec2 texel = 1.0 / vec2(sourceSize);
+        source += sampleBloomSource(sourceImage, clamp(uv + vec2(texel.x, 0.0), vec2(0.0), vec2(1.0))) * 0.15;
+        source += sampleBloomSource(sourceImage, clamp(uv - vec2(texel.x, 0.0), vec2(0.0), vec2(1.0))) * 0.15;
+        source += sampleBloomSource(sourceImage, clamp(uv + vec2(0.0, texel.y), vec2(0.0), vec2(1.0))) * 0.15;
+        source += sampleBloomSource(sourceImage, clamp(uv - vec2(0.0, texel.y), vec2(0.0), vec2(1.0))) * 0.15;
+        return bloomExtract(source);
+    }
+    if (stage == MODE_BLOOM_DOWNSAMPLE) {
+        return filterBloomPyramid(sourceImage, uv, 1.4);
+    }
+    if (stage == MODE_BLOOM_UPSAMPLE) {
+        vec3 halfLevel = filterBloomPyramid(sourceImage, uv, 1.0);
+        vec3 quarterLevel = filterBloomPyramid(pc.imageIndices0.y, uv, 1.8);
+        return halfLevel * 0.62 + quarterLevel * 0.70;
+    }
+    return vec3(0.0);
+}
+
 vec3 computeBloom(vec2 uv)
 {
     if (pc.bloomParams.z < 0.5 || pc.bloomParams.y <= 0.0) {
         return vec3(0.0);
+    }
+
+    if (hasImage(pc.imageIndices4.y) && pc.imageIndices1.y != 21u) {
+        return filterBloomPyramid(pc.imageIndices4.y, uv, 0.75) * pc.bloomParams.y;
     }
 
     uint sourceImage = hasImage(pc.imageIndices0.x) ? pc.imageIndices0.x : pc.imageIndices0.y;
@@ -633,6 +697,12 @@ void main() {
     ivec2 baseSize = getOutputSize();
 
     vec2 uv = (vec2(pixel) + 0.5) / vec2(baseSize);
+    if (pc.imageIndices1.x == MODE_BLOOM_EXTRACT
+        || pc.imageIndices1.x == MODE_BLOOM_DOWNSAMPLE
+        || pc.imageIndices1.x == MODE_BLOOM_UPSAMPLE) {
+        outColor = vec4(runBloomPipelineStage(uv), 1.0);
+        return;
+    }
 
     vec3 deferredColor = vec3(0.0);
     if (hasImage(pc.imageIndices0.x)) {

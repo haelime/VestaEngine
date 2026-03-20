@@ -48,7 +48,7 @@ VestaEngine& VestaEngine::Get() { return *loadedEngine; }
 
 namespace {
 constexpr size_t kMaxRecentScenePaths = 5;
-constexpr std::array<std::string_view, 14> kBenchmarkPassNames{
+constexpr std::array<std::string_view, 17> kBenchmarkPassNames{
     "GeometryRasterPass",
     "ShadowMapPass",
     "OverdrawPass",
@@ -62,6 +62,9 @@ constexpr std::array<std::string_view, 14> kBenchmarkPassNames{
     "PathTracerPass",
     "PathDenoisePass",
     "TemporalAAPass",
+    "Bloom ExtractPass",
+    "Bloom DownsamplePass",
+    "Bloom UpsamplePass",
     "CompositePass",
 };
 
@@ -1939,7 +1942,7 @@ void VestaEngine::finish_benchmark()
                << "gaussian_preprocess_ms,gaussian_scan_ms,gaussian_duplicate_ms,gaussian_sort_ms,gaussian_range_ms,"
                << "gaussian_raster_ms,gaussian_total_build_ms,"
                << "geometry_pass_gpu_ms,shadow_pass_gpu_ms,overdraw_pass_gpu_ms,ray_effects_pass_gpu_ms,restir_candidate_pass_gpu_ms,restir_resolve_pass_gpu_ms,ddgi_probe_update_pass_gpu_ms,deferred_pass_gpu_ms,legacy_gaussian_pass_gpu_ms,official_gaussian_pass_gpu_ms,"
-               << "path_trace_pass_gpu_ms,path_denoise_pass_gpu_ms,temporal_aa_pass_gpu_ms,composite_pass_gpu_ms\n";
+               << "path_trace_pass_gpu_ms,path_denoise_pass_gpu_ms,temporal_aa_pass_gpu_ms,bloom_extract_pass_gpu_ms,bloom_downsample_pass_gpu_ms,bloom_upsample_pass_gpu_ms,composite_pass_gpu_ms\n";
     }
 
     const auto now = std::chrono::system_clock::now();
@@ -2228,7 +2231,10 @@ void VestaEngine::finish_benchmark()
            << averagePassGpuMs(10) << ','
            << averagePassGpuMs(11) << ','
            << averagePassGpuMs(12) << ','
-           << averagePassGpuMs(13) << '\n';
+           << averagePassGpuMs(13) << ','
+           << averagePassGpuMs(14) << ','
+           << averagePassGpuMs(15) << ','
+           << averagePassGpuMs(16) << '\n';
 
     fmt::println("Benchmark written to {}", outputPath.string());
 }
@@ -6461,7 +6467,7 @@ void VestaEngine::draw_post_process_panel()
     }
 
     ImGui::SeparatorText("Implemented vs Stub");
-    ImGui::BulletText("Exposure, ACES-style display transform, bloom, FXAA, motion blur, color controls, and vignette are live in CompositePass.");
+    ImGui::BulletText("Exposure, ACES-style display transform, multi-pass bloom, FXAA, motion blur, color controls, and vignette are live.");
     ImGui::BulletText("Depth-of-field parameters are live for path tracing camera settings.");
     ImGui::BulletText("Motion blur uses the GBuffer motion vector target for a lightweight screen-space blur.");
 }

@@ -5,6 +5,41 @@
 #include <vesta/render/graph/render_graph.h>
 
 namespace vesta::render {
+enum class BloomPassStage : uint32_t {
+    Extract = 0,
+    Downsample = 1,
+    Upsample = 2,
+};
+
+class BloomPass final : public IRenderPass {
+public:
+    explicit BloomPass(BloomPassStage stage);
+
+    void SetInput(GraphTextureHandle input);
+    void SetSecondaryInput(GraphTextureHandle input);
+    void SetOutput(GraphTextureHandle output);
+    void SetParameters(float threshold, float intensity);
+    [[nodiscard]] BloomPassStage Stage() const { return _stage; }
+
+    [[nodiscard]] std::string_view Name() const override;
+    void Initialize(RenderDevice& device) override;
+    void Setup(RenderGraphBuilder& builder) override;
+    void Execute(const RenderGraphContext& context) override;
+    void Shutdown(RenderDevice& device) override;
+
+private:
+    BloomPassStage _stage{ BloomPassStage::Extract };
+    GraphTextureHandle _input{};
+    GraphTextureHandle _secondaryInput{};
+    GraphTextureHandle _output{};
+    float _threshold{ 1.0f };
+    float _intensity{ 0.1f };
+    VkPipelineLayout _pipelineLayout{ VK_NULL_HANDLE };
+    VkPipeline _pipeline{ VK_NULL_HANDLE };
+    VkShaderModule _vertexShader{ VK_NULL_HANDLE };
+    VkShaderModule _fragmentShader{ VK_NULL_HANDLE };
+};
+
 // Final full-screen pass. It chooses which intermediate image to show, or blends
 // several of them together for the portfolio "composite" presentation mode.
 class CompositePass final : public IRenderPass {
@@ -24,6 +59,7 @@ public:
     void SetGaussianDebugResources(uint32_t tileRangeBufferIndex, uint32_t tileCountX, uint32_t tileCountY);
     void SetShadowMap(GraphTextureHandle shadowMap);
     void SetOverdraw(GraphTextureHandle overdraw);
+    void SetBloomInput(GraphTextureHandle bloom);
     void SetOutput(GraphTextureHandle output);
     void SetMode(uint32_t mode, float gaussianMix, uint32_t debugView, uint32_t gaussianDebugView);
     void SetCompare(uint32_t compareMode, float splitPosition, float differenceScale);
@@ -65,6 +101,7 @@ private:
     GraphTextureHandle _gbufferDepth{};
     GraphTextureHandle _shadowMap{};
     GraphTextureHandle _overdraw{};
+    GraphTextureHandle _bloom{};
     GraphTextureHandle _output{};
     uint32_t _mode{ 0 };
     uint32_t _debugView{ 0 };

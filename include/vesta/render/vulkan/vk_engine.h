@@ -209,8 +209,8 @@ private:
         uint32_t stableGaussianFrames{ 0 };
         bool screenshotQueued{ false };
         std::vector<float> frameTimesMs;
-        std::array<float, 14> passGpuMsSums{};
-        std::array<uint32_t, 14> passGpuSampleCounts{};
+        std::array<float, 17> passGpuMsSums{};
+        std::array<uint32_t, 17> passGpuSampleCounts{};
     } _benchmarkState;
     struct StartupState {
         bool safeOverridesActive{ false };

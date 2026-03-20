@@ -1062,6 +1062,29 @@ void ConfigureTemporalAAPass(Renderer& renderer, IRenderPass& pass, const Render
     temporalPass.SetDebugView(renderer.GetSettings().debugView);
 }
 
+void ConfigureBloomPass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
+{
+    auto& bloomPass = static_cast<BloomPass&>(pass);
+    const GraphTextureHandle rasterInput = resources.temporalLighting ? resources.temporalLighting : resources.deferredLighting;
+    const GraphTextureHandle pathTraceInput = resources.pathTraceDenoised ? resources.pathTraceDenoised : resources.pathTraceOutput;
+    const GraphTextureHandle sourceInput = rasterInput ? rasterInput : pathTraceInput;
+
+    if (bloomPass.Stage() == BloomPassStage::Extract) {
+        bloomPass.SetInput(sourceInput);
+        bloomPass.SetSecondaryInput({});
+        bloomPass.SetOutput(resources.bloomHalf);
+    } else if (bloomPass.Stage() == BloomPassStage::Downsample) {
+        bloomPass.SetInput(resources.bloomHalf);
+        bloomPass.SetSecondaryInput({});
+        bloomPass.SetOutput(resources.bloomQuarter);
+    } else {
+        bloomPass.SetInput(resources.bloomHalf);
+        bloomPass.SetSecondaryInput(resources.bloomQuarter);
+        bloomPass.SetOutput(resources.bloomOutput);
+    }
+    bloomPass.SetParameters(renderer.GetSettings().bloomThreshold, renderer.GetSettings().bloomIntensity);
+}
+
 void ConfigureCompositePass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
 {
     auto& compositePass = static_cast<CompositePass&>(pass);
@@ -1085,6 +1108,7 @@ void ConfigureCompositePass(Renderer& renderer, IRenderPass& pass, const Rendere
         gaussianTileRangeBufferIndex, (extent.width + 7u) / 8u, (extent.height + 7u) / 8u);
     compositePass.SetShadowMap(resources.shadowMap);
     compositePass.SetOverdraw(resources.overdraw);
+    compositePass.SetBloomInput(resources.bloomOutput);
     compositePass.SetOutput(resources.swapchainTarget);
     compositePass.SetMode(static_cast<uint32_t>(renderer.GetSettings().displayMode),
         renderer.GetSettings().gaussianMix,
@@ -3164,6 +3188,33 @@ void Renderer::InitializeDefaultPasses()
         .enabled = true,
     });
     RegisterPass(RenderPassRegistrationDesc{
+        .id = "bloom-extract",
+        .pass = std::make_unique<BloomPass>(BloomPassStage::Extract),
+        .configure = [this](IRenderPass& pass, const RendererGraphResources& resources) {
+            ConfigureBloomPass(*this, pass, resources);
+        },
+        .order = 47,
+        .enabled = true,
+    });
+    RegisterPass(RenderPassRegistrationDesc{
+        .id = "bloom-downsample",
+        .pass = std::make_unique<BloomPass>(BloomPassStage::Downsample),
+        .configure = [this](IRenderPass& pass, const RendererGraphResources& resources) {
+            ConfigureBloomPass(*this, pass, resources);
+        },
+        .order = 48,
+        .enabled = true,
+    });
+    RegisterPass(RenderPassRegistrationDesc{
+        .id = "bloom-upsample",
+        .pass = std::make_unique<BloomPass>(BloomPassStage::Upsample),
+        .configure = [this](IRenderPass& pass, const RendererGraphResources& resources) {
+            ConfigureBloomPass(*this, pass, resources);
+        },
+        .order = 49,
+        .enabled = true,
+    });
+    RegisterPass(RenderPassRegistrationDesc{
         .id = "composite",
         .pass = std::make_unique<CompositePass>(),
         .configure = [this](IRenderPass& pass, const RendererGraphResources& resources) {
@@ -4078,6 +4129,7 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
     const bool usePathTracePass = NeedsPathTracePass(_settings);
     const bool usePathDenoisePass = NeedsPathDenoisePass(_settings);
     const bool useTemporalAAPass = NeedsTemporalAAPass(_settings);
+    const bool useBloomPass = _settings.enableBloom && _settings.bloomIntensity > 0.0f && (useDeferredPass || usePathTracePass);
     const bool useOfficialGaussianPass = useGaussianPass && _scene.HasTrainedGaussians() && !IsGaussianInteractivePreviewActive();
     const bool useLegacyGaussianPass = useGaussianPass && (!_scene.HasTrainedGaussians() || IsGaussianInteractivePreviewActive());
 
@@ -4179,6 +4231,21 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
         resources.pathTraceDepthGuide = graph.CreateTexture("PathTraceGuide.Depth", pathTraceDesc);
         resources.pathTraceDenoised = graph.CreateTexture("PathTraceDenoised", pathTraceDesc);
     }
+    if (useBloomPass) {
+        ImageDesc bloomHalfDesc = storageDesc;
+        bloomHalfDesc.debugName = "Bloom.Half";
+        bloomHalfDesc.extent = ScaleExtent(renderExtent, 0.5f);
+        resources.bloomHalf = graph.CreateTexture("Bloom.Half", bloomHalfDesc);
+
+        ImageDesc bloomQuarterDesc = storageDesc;
+        bloomQuarterDesc.debugName = "Bloom.Quarter";
+        bloomQuarterDesc.extent = ScaleExtent(renderExtent, 0.25f);
+        resources.bloomQuarter = graph.CreateTexture("Bloom.Quarter", bloomQuarterDesc);
+
+        ImageDesc bloomOutputDesc = bloomHalfDesc;
+        bloomOutputDesc.debugName = "Bloom.Output";
+        resources.bloomOutput = graph.CreateTexture("Bloom.Output", bloomOutputDesc);
+    }
     if (useGaussianPass) {
         resources.gaussianAccum = graph.CreateTexture("GaussianAccum", storageDesc);
         resources.gaussianReveal = graph.CreateTexture("GaussianReveal", storageDesc);
@@ -4226,6 +4293,9 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
             continue;
         }
         if (id == "temporal-aa" && !useTemporalAAPass) {
+            continue;
+        }
+        if ((id == "bloom-extract" || id == "bloom-downsample" || id == "bloom-upsample") && !useBloomPass) {
             continue;
         }
 
