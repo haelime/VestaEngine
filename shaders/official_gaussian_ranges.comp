@@ -1,0 +1,56 @@
+#version 460
+
+const uint INVALID_RANGE_INDEX = 0xffffffffu;
+
+layout(set = 1, binding = 1, std430) readonly buffer DuplicateKeyBuffer {
+    uint duplicateKeys[];
+};
+
+layout(set = 1, binding = 7, std430) buffer TileRangeBuffer {
+    uvec2 tileRanges[];
+};
+
+layout(set = 1, binding = 11, std430) readonly buffer CountBuffer {
+    uvec4 countMeta[4];
+};
+
+layout(push_constant) uniform GaussianComputePushConstants {
+    uvec4 params0;
+    uvec4 params1;
+    vec4 params2;
+} pc;
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+uint ExtractTile(uint packedKey)
+{
+    uint tileCount = pc.params0.y > 0u ? pc.params0.y : 1u;
+    uint tileBitCount = tileCount <= 1u ? 1u : findMSB(tileCount - 1u) + 1u;
+    uint depthBitCount = 32u - min(tileBitCount, 24u);
+    return packedKey >> depthBitCount;
+}
+
+void main()
+{
+    uint index = gl_GlobalInvocationID.x;
+    uint count = countMeta[0].x;
+    if (index >= count) {
+        return;
+    }
+
+    uint key = duplicateKeys[index];
+    if (key == INVALID_RANGE_INDEX) {
+        return;
+    }
+    uint tile = ExtractTile(key);
+
+    uint previousTile = index > 0u ? ExtractTile(duplicateKeys[index - 1u]) : INVALID_RANGE_INDEX;
+    uint nextTile = index + 1u < count ? ExtractTile(duplicateKeys[index + 1u]) : INVALID_RANGE_INDEX;
+
+    if (index == 0u || previousTile != tile) {
+        tileRanges[tile].x = index;
+    }
+    if (index + 1u == count || nextTile != tile) {
+        tileRanges[tile].y = index + 1u;
+    }
+}

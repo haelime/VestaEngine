@@ -19,6 +19,7 @@
 #include <vesta/render/passes/composite_pass.h>
 #include <vesta/render/passes/deferred_lighting_pass.h>
 #include <vesta/render/passes/gaussian_splat_pass.h>
+#include <vesta/render/passes/official_gaussian_raster_pass.h>
 #include <vesta/render/passes/geometry_raster_pass.h>
 #include <vesta/render/passes/path_tracer_pass.h>
 #include <vesta/render/vulkan/vk_images.h>
@@ -41,6 +42,21 @@ std::string ToUpper(std::string value)
 bool IsRtx5060Ti(const RenderDevice& device)
 {
     return ToUpper(device.GetGpuName()).find("RTX 5060 TI") != std::string::npos;
+}
+
+uint32_t GaussianInteractivePreviewFrameBudget(const vesta::scene::Scene& scene)
+{
+    if (!scene.HasTrainedGaussians()) {
+        return 0u;
+    }
+    const uint32_t gaussianCount = scene.GetGaussianCount();
+    if (gaussianCount >= 4'000'000u) {
+        return 360u;
+    }
+    if (gaussianCount >= 1'000'000u) {
+        return 240u;
+    }
+    return 120u;
 }
 
 bool NeedsGeometryPass(const RendererSettings& settings)
@@ -250,12 +266,38 @@ void ConfigureGaussianPass(Renderer& renderer, IRenderPass& pass, const Renderer
 {
     auto& gaussianPass = static_cast<GaussianSplatPass&>(pass);
     gaussianPass.SetDepthInput(resources.sceneDepth);
-    gaussianPass.SetOutput(resources.gaussianOutput);
+    gaussianPass.SetOutputs(resources.gaussianAccum, resources.gaussianReveal);
     gaussianPass.SetScene(&renderer.GetScene());
     gaussianPass.SetCamera(&renderer.GetCamera());
+    const uint32_t effectiveShDegree =
+        std::min(renderer.GetSettings().gaussianShDegree, renderer.GetScene().GetGaussianShDegree());
     gaussianPass.SetParams(renderer.GetSettings().gaussianPointSize,
         renderer.GetSettings().gaussianOpacity,
-        renderer.GetSettings().enableGaussian);
+        renderer.GetSettings().gaussianAlphaCutoff,
+        renderer.GetSettings().enableGaussian,
+        effectiveShDegree,
+        renderer.GetSettings().gaussianViewDependentColor,
+        renderer.GetSettings().gaussianAntialiasing,
+        renderer.GetSettings().gaussianFastCulling);
+}
+
+void ConfigureOfficialGaussianPass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
+{
+    auto& gaussianPass = static_cast<OfficialGaussianRasterPass&>(pass);
+    const bool useDepthInput = renderer.GetSettings().enableRaster && renderer.GetScene().GetSceneKind() == vesta::scene::SceneKind::Mesh;
+    gaussianPass.SetDepthInput(useDepthInput ? resources.sceneDepth : GraphTextureHandle{});
+    gaussianPass.SetOutputs(resources.gaussianAccum, resources.gaussianReveal);
+    gaussianPass.SetScene(&renderer.GetScene());
+    gaussianPass.SetCamera(&renderer.GetCamera());
+    gaussianPass.SetJobSystem(&renderer.GetJobSystem());
+    const uint32_t effectiveShDegree =
+        std::min(renderer.GetSettings().gaussianShDegree, renderer.GetScene().GetGaussianShDegree());
+    gaussianPass.SetParams(renderer.GetSettings().gaussianOpacity,
+        renderer.GetSettings().gaussianAlphaCutoff,
+        effectiveShDegree,
+        renderer.GetSettings().gaussianViewDependentColor,
+        renderer.GetSettings().gaussianAntialiasing,
+        renderer.GetSettings().gaussianFastCulling);
 }
 
 void ConfigurePathTracerPass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
@@ -274,7 +316,7 @@ void ConfigurePathTracerPass(Renderer& renderer, IRenderPass& pass, const Render
 void ConfigureCompositePass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
 {
     auto& compositePass = static_cast<CompositePass&>(pass);
-    compositePass.SetInputs(resources.deferredLighting, resources.pathTraceOutput, resources.gaussianOutput);
+    compositePass.SetInputs(resources.deferredLighting, resources.pathTraceOutput, resources.gaussianAccum, resources.gaussianReveal);
     compositePass.SetOutput(resources.swapchainTarget);
     compositePass.SetMode(static_cast<uint32_t>(renderer.GetSettings().displayMode), renderer.GetSettings().gaussianMix);
 }
@@ -489,8 +531,17 @@ void Renderer::Update(float deltaSeconds)
     if (_camera.ConsumeMoved()) {
         _pathTraceFrameIndex = 0;
         _visibilityDirty = true;
+        if (_scene.HasTrainedGaussians()) {
+            _gaussianInteractivePreviewFramesRemaining = GaussianInteractivePreviewFrameBudget(_scene);
+        }
+        if (!_scene.HasTrainedGaussians() && _scene.SupportsRealtimeGaussianSorting()) {
+            _scene.ResortGaussians(_device, _camera);
+        }
     } else {
         ++_pathTraceFrameIndex;
+        if (_gaussianInteractivePreviewFramesRemaining > 0) {
+            --_gaussianInteractivePreviewFramesRemaining;
+        }
     }
 
     DispatchVisibilityCullIfNeeded();
@@ -593,6 +644,54 @@ RendererPreset Renderer::GetRecommendedPreset() const
     return ChooseRecommendedPreset(_device);
 }
 
+uint32_t Renderer::GetOfficialGaussianProjectedCount() const
+{
+    if (const auto* pass = FindPass<OfficialGaussianRasterPass>("official-gaussian-raster")) {
+        return pass->GetStatistics().projectedCount;
+    }
+    return 0;
+}
+
+uint32_t Renderer::GetOfficialGaussianDuplicateCount() const
+{
+    if (const auto* pass = FindPass<OfficialGaussianRasterPass>("official-gaussian-raster")) {
+        return pass->GetStatistics().duplicateCount;
+    }
+    return 0;
+}
+
+uint32_t Renderer::GetOfficialGaussianPaddedDuplicateCount() const
+{
+    if (const auto* pass = FindPass<OfficialGaussianRasterPass>("official-gaussian-raster")) {
+        return pass->GetStatistics().paddedDuplicateCount;
+    }
+    return 0;
+}
+
+uint32_t Renderer::GetOfficialGaussianTileCount() const
+{
+    if (const auto* pass = FindPass<OfficialGaussianRasterPass>("official-gaussian-raster")) {
+        return pass->GetStatistics().tileCount;
+    }
+    return 0;
+}
+
+float Renderer::GetOfficialGaussianAverageTilesTouched() const
+{
+    if (const auto* pass = FindPass<OfficialGaussianRasterPass>("official-gaussian-raster")) {
+        return pass->GetStatistics().averageTilesTouched;
+    }
+    return 0.0f;
+}
+
+uint64_t Renderer::GetOfficialGaussianRebuildCount() const
+{
+    if (const auto* pass = FindPass<OfficialGaussianRasterPass>("official-gaussian-raster")) {
+        return pass->GetStatistics().rebuildCount;
+    }
+    return 0;
+}
+
 vesta::scene::SceneKind Renderer::GetRecommendedSceneKind() const
 {
     return _scene.GetSceneKind();
@@ -657,7 +756,7 @@ std::pair<glm::vec3, glm::vec3> Renderer::ComputeMouseRay(glm::vec2 mousePositio
         std::max(1.0f, static_cast<float>(extent.width)), std::max(1.0f, static_cast<float>(extent.height)));
     const glm::vec2 ndc(
         (mousePosition.x / viewportSize.x) * 2.0f - 1.0f,
-        1.0f - (mousePosition.y / viewportSize.y) * 2.0f);
+        (mousePosition.y / viewportSize.y) * 2.0f - 1.0f);
 
     const glm::vec4 nearPoint = _camera.GetInverseViewProjection() * glm::vec4(ndc.x, ndc.y, 0.0f, 1.0f);
     const glm::vec4 farPoint = _camera.GetInverseViewProjection() * glm::vec4(ndc.x, ndc.y, 1.0f, 1.0f);
@@ -685,6 +784,12 @@ void Renderer::OnSceneEdited(bool rebuildRayTracing)
     _visibleSurfaceIndices.clear();
     _visibleSceneToken.reset();
     _frameSnapshot = {};
+    if (_scene.HasTrainedGaussians()) {
+        _gaussianInteractivePreviewFramesRemaining = 8;
+    }
+    if (!_scene.HasTrainedGaussians() && _scene.SupportsRealtimeGaussianSorting()) {
+        _scene.ResortGaussians(_device, _camera);
+    }
 
     if (rebuildRayTracing && _scene.HasRayTracingScene()) {
         _scene.RebuildRayTracing(_device);
@@ -987,6 +1092,15 @@ void Renderer::InitializeDefaultPasses()
             ConfigureGaussianPass(*this, pass, resources);
         },
         .order = 30,
+        .enabled = true,
+    });
+    RegisterPass(RenderPassRegistrationDesc{
+        .id = "official-gaussian-raster",
+        .pass = std::make_unique<OfficialGaussianRasterPass>(),
+        .configure = [this](IRenderPass& pass, const RendererGraphResources& resources) {
+            ConfigureOfficialGaussianPass(*this, pass, resources);
+        },
+        .order = 31,
         .enabled = true,
     });
     RegisterPass(RenderPassRegistrationDesc{
@@ -1709,12 +1823,18 @@ void Renderer::ApplyLoadedScene(vesta::scene::Scene&& scene)
     if (_settings.autoFocusSceneOnLoad) {
         _camera.Focus(_scene.GetBounds().center, _scene.GetBounds().radius);
     }
+    if (!_scene.HasTrainedGaussians() && _scene.SupportsRealtimeGaussianSorting()) {
+        _scene.ResortGaussians(_device, _camera);
+    }
     ResetAccumulation();
     _visibilityDirty = true;
     _visibleSurfaceIndices.clear();
     _visibleSceneToken.reset();
     _frameSnapshot = {};
     ClearSelection();
+    if (_scene.HasTrainedGaussians()) {
+        _gaussianInteractivePreviewFramesRemaining = GaussianInteractivePreviewFrameBudget(_scene);
+    }
 
     if (!previousScene.GetSourcePath().empty()) {
         if (_settings.deferOldSceneDestruction) {
@@ -1757,6 +1877,8 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
     const bool useDeferredPass = NeedsDeferredPass(_settings);
     const bool useGaussianPass = NeedsGaussianPass(_settings);
     const bool usePathTracePass = NeedsPathTracePass(_settings);
+    const bool useOfficialGaussianPass = useGaussianPass && _scene.HasTrainedGaussians() && !IsGaussianInteractivePreviewActive();
+    const bool useLegacyGaussianPass = useGaussianPass && (!_scene.HasTrainedGaussians() || IsGaussianInteractivePreviewActive());
 
     const VkExtent2D swapchainExtent = _device.GetSwapchainExtent();
     const VkExtent3D renderExtent{ swapchainExtent.width, swapchainExtent.height, 1 };
@@ -1804,7 +1926,8 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
         resources.pathTraceOutput = graph.CreateTexture("PathTraceOutput", pathTraceDesc);
     }
     if (useGaussianPass) {
-        resources.gaussianOutput = graph.CreateTexture("GaussianOutput", storageDesc);
+        resources.gaussianAccum = graph.CreateTexture("GaussianAccum", storageDesc);
+        resources.gaussianReveal = graph.CreateTexture("GaussianReveal", storageDesc);
     }
 
     for (RegisteredPassEntry* entry : _passExecutionPlan) {
@@ -1815,7 +1938,10 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
         if (id == "deferred-lighting" && !useDeferredPass) {
             continue;
         }
-        if (id == "gaussian-splat" && !useGaussianPass) {
+        if (id == "gaussian-splat" && !useLegacyGaussianPass) {
+            continue;
+        }
+        if (id == "official-gaussian-raster" && !useOfficialGaussianPass) {
             continue;
         }
         if (id == "path-tracer" && !usePathTracePass) {

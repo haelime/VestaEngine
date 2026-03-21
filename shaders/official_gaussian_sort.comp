@@ -1,0 +1,180 @@
+#version 460
+
+const uint RADIX = 16u;
+const uint RADIX_MASK = RADIX - 1u;
+const uint BLOCK_SIZE = 256u;
+
+layout(set = 1, binding = 1, std430) buffer DuplicateKeyBufferA {
+    uint keysA[];
+};
+
+layout(set = 1, binding = 2, std430) buffer DuplicateValueBufferA {
+    uint valuesA[];
+};
+
+layout(set = 1, binding = 3, std430) buffer DuplicateKeyBufferB {
+    uint keysB[];
+};
+
+layout(set = 1, binding = 4, std430) buffer DuplicateValueBufferB {
+    uint valuesB[];
+};
+
+layout(set = 1, binding = 5, std430) buffer RadixHistogramBuffer {
+    uint radixHistogram[];
+};
+
+layout(set = 1, binding = 6, std430) buffer RadixBinBaseBuffer {
+    uint radixBinBase[];
+};
+
+layout(set = 1, binding = 11, std430) readonly buffer CountBuffer {
+    uvec4 countMeta[4];
+};
+
+layout(push_constant) uniform GaussianComputePushConstants {
+    uvec4 params0;
+    uvec4 params1;
+    vec4 params2;
+} pc;
+
+layout(local_size_x = BLOCK_SIZE, local_size_y = 1, local_size_z = 1) in;
+
+shared uint sKeys[BLOCK_SIZE];
+shared uint sValues[BLOCK_SIZE];
+shared uint sDigits[BLOCK_SIZE];
+shared uint sLocalOffsets[BLOCK_SIZE];
+shared uint sBucketCounts[RADIX];
+
+uint ReadKey(uint bufferIndex, uint index)
+{
+    return bufferIndex == 0u ? keysA[index] : keysB[index];
+}
+
+uint ReadValue(uint bufferIndex, uint index)
+{
+    return bufferIndex == 0u ? valuesA[index] : valuesB[index];
+}
+
+void WriteItem(uint bufferIndex, uint index, uint key, uint value)
+{
+    if (bufferIndex == 0u) {
+        keysA[index] = key;
+        valuesA[index] = value;
+    } else {
+        keysB[index] = key;
+        valuesB[index] = value;
+    }
+}
+
+uint ExtractDigit(uint key, uint shift)
+{
+    return (key >> shift) & RADIX_MASK;
+}
+
+void main()
+{
+    uint count = countMeta[0].x;
+    uint shift = pc.params0.y;
+    uint blockCount = countMeta[0].y;
+    uint mode = pc.params0.w;
+    uint localIndex = gl_LocalInvocationIndex;
+
+    if (mode == 0u) {
+        uint blockIndex = gl_WorkGroupID.x;
+        if (blockIndex >= blockCount) {
+            return;
+        }
+        if (localIndex < RADIX) {
+            sBucketCounts[localIndex] = 0u;
+        }
+        barrier();
+        if (localIndex == 0u) {
+            uint begin = blockIndex * BLOCK_SIZE;
+            uint end = min(begin + BLOCK_SIZE, count);
+            for (uint i = begin; i < end; ++i) {
+                uint digit = ExtractDigit(ReadKey(pc.params1.x, i), shift);
+                sBucketCounts[digit] += 1u;
+            }
+            for (uint digit = 0u; digit < RADIX; ++digit) {
+                radixHistogram[blockIndex * RADIX + digit] = sBucketCounts[digit];
+            }
+        }
+        return;
+    }
+
+    if (mode == 1u) {
+        if (gl_GlobalInvocationID.x >= RADIX) {
+            return;
+        }
+        uint digit = gl_GlobalInvocationID.x;
+        uint running = 0u;
+        for (uint blockIndex = 0u; blockIndex < blockCount; ++blockIndex) {
+            uint histogramIndex = blockIndex * RADIX + digit;
+            uint bucketCount = radixHistogram[histogramIndex];
+            radixHistogram[histogramIndex] = running;
+            running += bucketCount;
+        }
+        radixBinBase[digit] = running;
+        return;
+    }
+
+    if (mode == 2u) {
+        if (gl_GlobalInvocationID.x != 0u) {
+            return;
+        }
+        uint running = 0u;
+        for (uint digit = 0u; digit < RADIX; ++digit) {
+            uint bucketCount = radixBinBase[digit];
+            radixBinBase[digit] = running;
+            running += bucketCount;
+        }
+        return;
+    }
+
+    if (mode != 3u) {
+        return;
+    }
+
+    uint blockIndex = gl_WorkGroupID.x;
+    if (blockIndex >= blockCount) {
+        return;
+    }
+
+    uint begin = blockIndex * BLOCK_SIZE;
+    uint itemIndex = begin + localIndex;
+    bool valid = itemIndex < count;
+    if (valid) {
+        sKeys[localIndex] = ReadKey(pc.params1.x, itemIndex);
+        sValues[localIndex] = ReadValue(pc.params1.x, itemIndex);
+        sDigits[localIndex] = ExtractDigit(sKeys[localIndex], shift);
+    } else {
+        sKeys[localIndex] = 0u;
+        sValues[localIndex] = 0u;
+        sDigits[localIndex] = 0u;
+    }
+    barrier();
+
+    if (localIndex < RADIX) {
+        sBucketCounts[localIndex] = 0u;
+    }
+    barrier();
+
+    if (localIndex == 0u) {
+        uint end = min(begin + BLOCK_SIZE, count);
+        for (uint i = 0u; i < end - begin; ++i) {
+            uint digit = sDigits[i];
+            sLocalOffsets[i] = sBucketCounts[digit];
+            sBucketCounts[digit] += 1u;
+        }
+    }
+    barrier();
+
+    if (!valid) {
+        return;
+    }
+
+    uint digit = sDigits[localIndex];
+    uint outIndex = radixBinBase[digit] + radixHistogram[blockIndex * RADIX + digit] + sLocalOffsets[localIndex];
+    WriteItem(pc.params1.y, outIndex, sKeys[localIndex], sValues[localIndex]);
+}
