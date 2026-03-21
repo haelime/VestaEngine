@@ -1914,7 +1914,7 @@ void VestaEngine::finish_benchmark()
                << "debug_view,path_trace_debug_view,gaussian_debug_view,compare_mode,compare_split,compare_difference_scale,"
                << "ssao,ssao_radius,ssao_intensity,"
                << "taa,taa_feedback,temporal_upscaler,temporal_upscaler_backend,temporal_upscaler_input,temporal_upscaler_output,temporal_upscaler_scale,temporal_upscaler_sharpness,temporal_upscaler_history,temporal_upscaler_reactive_mask,temporal_upscaler_material_reactive_mask,temporal_upscaler_authored_alpha_reactive_mask,temporal_upscaler_reactive_strength,"
-               << "restir_di,restir_gi,restir_pt,restir_backend,restir_reservoir_storage,restir_lights,restir_emissive_lights,restir_candidates,restir_reservoirs,restir_reservoir_mb,restir_temporal_reuse,restir_spatial_reuse,restir_history,restir_candidate_pass,restir_temporal_pass,restir_spatial_pass,restir_resolve,"
+               << "restir_di,restir_gi,restir_pt,restir_backend,restir_reservoir_storage,restir_di_storage,restir_gi_storage,restir_pt_storage,restir_gi_backend,restir_pt_backend,restir_lights,restir_emissive_lights,restir_candidates,restir_reservoirs,restir_reservoir_mb,restir_di_reservoir_mb,restir_gi_reservoir_mb,restir_pt_reservoir_mb,restir_temporal_reuse,restir_spatial_reuse,restir_history,restir_candidate_pass,restir_temporal_pass,restir_spatial_pass,restir_resolve,"
                << "rt_hybrid_backend,rt_hybrid_ray_query,rt_hybrid_tlas,rt_hybrid_resolution,rt_shadow_requested,rt_ao_requested,rt_reflection_requested,rt_gi_requested,rt_shadow_samples,rt_ao_samples,rt_reflection_samples,rt_gi_samples,rt_shadow_rays,rt_ao_rays,rt_reflection_rays,rt_gi_rays,rt_denoiser,rt_temporal,"
                << "ssr,ssr_max_distance,ssr_thickness,ssr_intensity,"
                << "ssgi,ssgi_radius,ssgi_intensity,ssgi_samples,"
@@ -2035,14 +2035,22 @@ void VestaEngine::finish_benchmark()
            << (restirStats.requestedGi ? "true" : "false") << ','
            << (restirStats.requestedPt ? "true" : "false") << ','
            << (restirStats.lightingResolveAvailable ? "CandidateReservoir+LightingResolve"
-                                                     : (restirStats.backendAvailable ? "CandidateReservoirPass" : "Staged"))
+                                                     : (restirStats.backendAvailable ? "ReservoirBackend" : "Staged"))
            << ','
            << (restirStats.reservoirBuffersAvailable ? "true" : "false") << ','
+           << (restirStats.diReservoirBuffersAvailable ? "true" : "false") << ','
+           << (restirStats.giReservoirBuffersAvailable ? "true" : "false") << ','
+           << (restirStats.ptReservoirBuffersAvailable ? "true" : "false") << ','
+           << (restirStats.giReservoirBackendAvailable ? "true" : "false") << ','
+           << (restirStats.ptReservoirBackendAvailable ? "true" : "false") << ','
            << restirStats.activeLightCount << ','
            << restirStats.emissiveTriangleCount << ','
            << restirStats.candidateLightCount << ','
            << restirStats.reservoirCount << ','
            << MiB(restirStats.estimatedReservoirBytes) << ','
+           << MiB(restirStats.estimatedDiReservoirBytes) << ','
+           << MiB(restirStats.estimatedGiReservoirBytes) << ','
+           << MiB(restirStats.estimatedPtReservoirBytes) << ','
            << (restirStats.temporalReuse ? "true" : "false") << ','
            << (restirStats.spatialReuse ? "true" : "false") << ','
            << (restirStats.historyAvailable ? "true" : "false") << ','
@@ -2331,12 +2339,20 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "    \"pt_requested\": " << (restirStats.requestedPt ? "true" : "false") << ",\n"
            << "    \"backend_available\": " << (restirStats.backendAvailable ? "true" : "false") << ",\n"
            << "    \"reservoir_buffers_available\": " << (restirStats.reservoirBuffersAvailable ? "true" : "false") << ",\n"
+           << "    \"di_reservoir_buffers_available\": " << (restirStats.diReservoirBuffersAvailable ? "true" : "false") << ",\n"
+           << "    \"gi_reservoir_buffers_available\": " << (restirStats.giReservoirBuffersAvailable ? "true" : "false") << ",\n"
+           << "    \"pt_reservoir_buffers_available\": " << (restirStats.ptReservoirBuffersAvailable ? "true" : "false") << ",\n"
+           << "    \"gi_reservoir_backend_available\": " << (restirStats.giReservoirBackendAvailable ? "true" : "false") << ",\n"
+           << "    \"pt_reservoir_backend_available\": " << (restirStats.ptReservoirBackendAvailable ? "true" : "false") << ",\n"
            << "    \"active_light_count\": " << restirStats.activeLightCount << ",\n"
            << "    \"emissive_triangle_count\": " << restirStats.emissiveTriangleCount << ",\n"
            << "    \"candidate_light_count\": " << restirStats.candidateLightCount << ",\n"
            << "    \"reservoir_count\": " << restirStats.reservoirCount << ",\n"
            << "    \"reservoir_pixels\": " << restirStats.reservoirPixels << ",\n"
            << "    \"estimated_reservoir_bytes\": " << restirStats.estimatedReservoirBytes << ",\n"
+           << "    \"estimated_di_reservoir_bytes\": " << restirStats.estimatedDiReservoirBytes << ",\n"
+           << "    \"estimated_gi_reservoir_bytes\": " << restirStats.estimatedGiReservoirBytes << ",\n"
+           << "    \"estimated_pt_reservoir_bytes\": " << restirStats.estimatedPtReservoirBytes << ",\n"
            << "    \"temporal_reuse\": " << (restirStats.temporalReuse ? "true" : "false") << ",\n"
            << "    \"spatial_reuse\": " << (restirStats.spatialReuse ? "true" : "false") << ",\n"
            << "    \"history_available\": " << (restirStats.historyAvailable ? "true" : "false") << ",\n"
@@ -5306,8 +5322,9 @@ void VestaEngine::build_debug_ui()
                     };
                     const auto ddgiStats = _renderer.GetDdgiStats();
                     const auto restirStats = _renderer.GetRestirStats();
-                    const uint64_t restirPerBufferBytes =
-                        restirStats.temporalReuse ? restirStats.estimatedReservoirBytes / 2u : restirStats.estimatedReservoirBytes;
+                    const auto restirPerBufferBytes = [&](uint64_t totalBytes) {
+                        return restirStats.temporalReuse ? totalBytes / 2u : totalBytes;
+                    };
                     std::vector<BufferInspectorEntry> bufferEntries{
                         BufferInspectorEntry{ "Vertex Buffer", scene.GetVertexBuffer(), vertexBytes },
                         BufferInspectorEntry{ "Index Buffer", scene.GetIndexBuffer(), indexBytes },
@@ -5327,14 +5344,34 @@ void VestaEngine::build_debug_ui()
                         ddgiStats.estimatedVisibilityBytes,
                     });
                     bufferEntries.push_back(BufferInspectorEntry{
-                        "ReSTIR Current Reservoir Storage",
+                        "ReSTIR DI Current Reservoir Storage",
                         _renderer.GetRestirReservoirBuffer(),
-                        restirPerBufferBytes,
+                        restirPerBufferBytes(restirStats.estimatedDiReservoirBytes),
                     });
                     bufferEntries.push_back(BufferInspectorEntry{
-                        "ReSTIR History Reservoir Storage",
+                        "ReSTIR DI History Reservoir Storage",
                         _renderer.GetRestirHistoryReservoirBuffer(),
-                        restirStats.temporalReuse ? restirPerBufferBytes : 0u,
+                        restirStats.temporalReuse ? restirPerBufferBytes(restirStats.estimatedDiReservoirBytes) : 0u,
+                    });
+                    bufferEntries.push_back(BufferInspectorEntry{
+                        "ReSTIR GI Current Reservoir Storage",
+                        _renderer.GetRestirGiReservoirBuffer(),
+                        restirPerBufferBytes(restirStats.estimatedGiReservoirBytes),
+                    });
+                    bufferEntries.push_back(BufferInspectorEntry{
+                        "ReSTIR GI History Reservoir Storage",
+                        _renderer.GetRestirGiHistoryReservoirBuffer(),
+                        restirStats.temporalReuse ? restirPerBufferBytes(restirStats.estimatedGiReservoirBytes) : 0u,
+                    });
+                    bufferEntries.push_back(BufferInspectorEntry{
+                        "ReSTIR PT Current Reservoir Storage",
+                        _renderer.GetRestirPtReservoirBuffer(),
+                        restirPerBufferBytes(restirStats.estimatedPtReservoirBytes),
+                    });
+                    bufferEntries.push_back(BufferInspectorEntry{
+                        "ReSTIR PT History Reservoir Storage",
+                        _renderer.GetRestirPtHistoryReservoirBuffer(),
+                        restirStats.temporalReuse ? restirPerBufferBytes(restirStats.estimatedPtReservoirBytes) : 0u,
                     });
                     if (ImGui::BeginTable("BufferTable", 8, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
                         ImGui::TableSetupColumn("Name");
@@ -6418,7 +6455,7 @@ void VestaEngine::draw_global_illumination_panel()
     ImGui::Checkbox("Voxel GI", &settings.enableVoxelGi);
     ImGui::Checkbox("ReSTIR GI", &settings.enableRestirGi);
     ImGui::EndDisabled();
-    ImGui::TextDisabled("Voxel GI and ReSTIR GI are portfolio roadmap stubs.");
+    ImGui::TextDisabled("Voxel GI remains a roadmap stub; ReSTIR GI allocates reservoir storage, with GI resolve shading still staged.");
 
     if (resetHistory) {
         _renderer.ResetAccumulation();
@@ -6508,6 +6545,10 @@ void VestaEngine::draw_advanced_portfolio_panel()
         restirStats.reservoirCount,
         restirStats.candidateLightCount,
         MiB(restirStats.estimatedReservoirBytes));
+    ImGui::Text("DI %.2f MiB  GI %.2f MiB  PT %.2f MiB",
+        MiB(restirStats.estimatedDiReservoirBytes),
+        MiB(restirStats.estimatedGiReservoirBytes),
+        MiB(restirStats.estimatedPtReservoirBytes));
     ImGui::Text("History %s  Temporal %s  Spatial %s",
         restirStats.historyAvailable ? "ready" : "disabled",
         restirStats.temporalReuse ? "on" : "off",
@@ -6515,13 +6556,17 @@ void VestaEngine::draw_advanced_portfolio_panel()
     ImGui::Text("Storage %s  Backend %s",
         restirStats.reservoirBuffersAvailable ? "allocated" : "staged",
         restirStats.lightingResolveAvailable ? "CandidateReservoir+LightingResolve"
-                                             : (restirStats.backendAvailable ? "CandidateReservoirPass" : "Staged"));
+                                             : (restirStats.backendAvailable ? "ReservoirBackend" : "Staged"));
+    ImGui::Text("Storage DI %s  GI %s  PT %s",
+        restirStats.diReservoirBuffersAvailable ? "ready" : "staged",
+        restirStats.giReservoirBuffersAvailable ? "ready" : "staged",
+        restirStats.ptReservoirBuffersAvailable ? "ready" : "staged");
     ImGui::Text("Passes Candidate %s  Temporal %s  Spatial %s  Resolve %s",
         restirStats.candidateSamplingAvailable ? "live" : "staged",
         restirStats.temporalReusePassAvailable ? "live" : "staged",
         restirStats.spatialReusePassAvailable ? "live" : "staged",
         restirStats.lightingResolveAvailable ? "live" : "staged");
-    ImGui::TextDisabled("DI candidate sampling and first lighting resolve are live; exact spatial reuse and GI/PT reservoirs remain staged.");
+    ImGui::TextDisabled("DI candidate sampling and lighting resolve are live; GI/PT reservoir storage is allocated when requested, while GI/PT shading resolve remains staged.");
 
     ImGui::SeparatorText("GPU-driven Rendering");
     ImGui::Checkbox("Indirect Draw", &settings.useIndirectDraw);

@@ -2547,22 +2547,47 @@ RestirStats Renderer::GetRestirStats() const
     stats.reservoirCount = std::clamp(_settings.restirReservoirCount, 1u, 8u);
     stats.reservoirPixels = static_cast<uint64_t>(extent.width) * static_cast<uint64_t>(extent.height) * stats.reservoirCount;
     const uint64_t reservoirBufferBytes = stats.reservoirPixels * kEstimatedReservoirBytes;
-    stats.estimatedReservoirBytes = reservoirBufferBytes * (stats.temporalReuse ? 2u : 1u);
+    const uint64_t temporalMultiplier = stats.temporalReuse ? 2u : 1u;
+    stats.estimatedDiReservoirBytes = stats.requestedDi ? reservoirBufferBytes * temporalMultiplier : 0u;
+    stats.estimatedGiReservoirBytes = stats.requestedGi ? reservoirBufferBytes * temporalMultiplier : 0u;
+    stats.estimatedPtReservoirBytes = stats.requestedPt ? reservoirBufferBytes * temporalMultiplier : 0u;
+    stats.estimatedReservoirBytes =
+        stats.estimatedDiReservoirBytes + stats.estimatedGiReservoirBytes + stats.estimatedPtReservoirBytes;
     const bool requested = stats.requestedDi || stats.requestedGi || stats.requestedPt;
-    stats.reservoirBuffersAvailable = _restirReservoirBuffer && _restirReservoirBufferBytes >= reservoirBufferBytes
-        && (!stats.temporalReuse
-            || (_restirHistoryReservoirBuffer && _restirHistoryReservoirBufferBytes >= reservoirBufferBytes));
-    stats.historyAvailable = stats.temporalReuse && _restirHistoryReservoirBuffer && _restirHistoryReservoirBufferBytes >= reservoirBufferBytes;
+    stats.diReservoirBuffersAvailable = stats.requestedDi
+        && (_restirReservoirBuffer && _restirReservoirBufferBytes >= reservoirBufferBytes
+            && (!stats.temporalReuse
+                || (_restirHistoryReservoirBuffer && _restirHistoryReservoirBufferBytes >= reservoirBufferBytes)));
+    stats.giReservoirBuffersAvailable = stats.requestedGi
+        && (_restirGiReservoirBuffer && _restirGiReservoirBufferBytes >= reservoirBufferBytes
+            && (!stats.temporalReuse
+                || (_restirGiHistoryReservoirBuffer && _restirGiHistoryReservoirBufferBytes >= reservoirBufferBytes)));
+    stats.ptReservoirBuffersAvailable = stats.requestedPt
+        && (_restirPtReservoirBuffer && _restirPtReservoirBufferBytes >= reservoirBufferBytes
+            && (!stats.temporalReuse
+                || (_restirPtHistoryReservoirBuffer && _restirPtHistoryReservoirBufferBytes >= reservoirBufferBytes)));
+    stats.reservoirBuffersAvailable =
+        requested
+        && (!stats.requestedDi || stats.diReservoirBuffersAvailable)
+        && (!stats.requestedGi || stats.giReservoirBuffersAvailable)
+        && (!stats.requestedPt || stats.ptReservoirBuffersAvailable);
+    stats.historyAvailable = stats.temporalReuse
+        && ((!stats.requestedDi || (_restirHistoryReservoirBuffer && _restirHistoryReservoirBufferBytes >= reservoirBufferBytes))
+            && (!stats.requestedGi || (_restirGiHistoryReservoirBuffer && _restirGiHistoryReservoirBufferBytes >= reservoirBufferBytes))
+            && (!stats.requestedPt || (_restirPtHistoryReservoirBuffer && _restirPtHistoryReservoirBufferBytes >= reservoirBufferBytes)));
     const auto* restirPass = FindPass<RestirDiPass>("restir-di");
     const auto* restirResolvePass = FindPass<RestirDiResolvePass>("restir-di-resolve");
-    stats.candidateSamplingAvailable = requested && stats.reservoirBuffersAvailable
+    stats.candidateSamplingAvailable = stats.requestedDi && stats.diReservoirBuffersAvailable
         && restirPass != nullptr && restirPass->IsBackendAvailable();
     stats.temporalReusePassAvailable = stats.candidateSamplingAvailable && stats.temporalReuse && stats.historyAvailable;
     stats.lightingResolveAvailable = stats.requestedDi && stats.candidateSamplingAvailable
         && NeedsDeferredPass(_settings) && restirResolvePass != nullptr && restirResolvePass->IsBackendAvailable();
     stats.spatialReusePassAvailable =
         stats.lightingResolveAvailable && stats.spatialReuse && _settings.restirSpatialSamples > 0u;
-    stats.backendAvailable = requested && stats.reservoirBuffersAvailable && stats.candidateSamplingAvailable;
+    stats.giReservoirBackendAvailable = stats.requestedGi && stats.giReservoirBuffersAvailable;
+    stats.ptReservoirBackendAvailable = stats.requestedPt && stats.ptReservoirBuffersAvailable;
+    stats.backendAvailable = requested && stats.reservoirBuffersAvailable
+        && (stats.candidateSamplingAvailable || stats.giReservoirBackendAvailable || stats.ptReservoirBackendAvailable);
     return stats;
 }
 
@@ -2681,14 +2706,56 @@ void Renderer::EnsureRestirResources()
         currentBytes = requiredBytes;
     };
 
-    recreateBuffer(_restirReservoirBuffer, _restirReservoirBufferBytes, reservoirBufferBytes, "ReSTIR.CurrentReservoirStorage");
-    if (stats.temporalReuse) {
-        recreateBuffer(_restirHistoryReservoirBuffer, _restirHistoryReservoirBufferBytes, reservoirBufferBytes, "ReSTIR.HistoryReservoirStorage");
-    } else if (_restirHistoryReservoirBuffer) {
-        _device.DestroyBuffer(_restirHistoryReservoirBuffer);
-        _restirHistoryReservoirBuffer = {};
-        _restirHistoryReservoirBufferBytes = 0;
-    }
+    const auto releaseBuffer = [&](BufferHandle& handle, uint64_t& currentBytes) {
+        if (!handle) {
+            currentBytes = 0;
+            return;
+        }
+        _device.DestroyBuffer(handle);
+        handle = {};
+        currentBytes = 0;
+    };
+    const auto updateReservoirSet = [&](bool enabled,
+                                        BufferHandle& current,
+                                        uint64_t& currentBytes,
+                                        BufferHandle& history,
+                                        uint64_t& historyBytes,
+                                        std::string_view currentName,
+                                        std::string_view historyName) {
+        if (!enabled) {
+            releaseBuffer(current, currentBytes);
+            releaseBuffer(history, historyBytes);
+            return;
+        }
+        recreateBuffer(current, currentBytes, reservoirBufferBytes, currentName);
+        if (stats.temporalReuse) {
+            recreateBuffer(history, historyBytes, reservoirBufferBytes, historyName);
+        } else {
+            releaseBuffer(history, historyBytes);
+        }
+    };
+
+    updateReservoirSet(stats.requestedDi,
+        _restirReservoirBuffer,
+        _restirReservoirBufferBytes,
+        _restirHistoryReservoirBuffer,
+        _restirHistoryReservoirBufferBytes,
+        "ReSTIR.DI.CurrentReservoirStorage",
+        "ReSTIR.DI.HistoryReservoirStorage");
+    updateReservoirSet(stats.requestedGi,
+        _restirGiReservoirBuffer,
+        _restirGiReservoirBufferBytes,
+        _restirGiHistoryReservoirBuffer,
+        _restirGiHistoryReservoirBufferBytes,
+        "ReSTIR.GI.CurrentReservoirStorage",
+        "ReSTIR.GI.HistoryReservoirStorage");
+    updateReservoirSet(stats.requestedPt,
+        _restirPtReservoirBuffer,
+        _restirPtReservoirBufferBytes,
+        _restirPtHistoryReservoirBuffer,
+        _restirPtHistoryReservoirBufferBytes,
+        "ReSTIR.PT.CurrentReservoirStorage",
+        "ReSTIR.PT.HistoryReservoirStorage");
 }
 
 void Renderer::DestroyRestirResources()
@@ -2701,8 +2768,28 @@ void Renderer::DestroyRestirResources()
         _device.DestroyBuffer(_restirHistoryReservoirBuffer);
         _restirHistoryReservoirBuffer = {};
     }
+    if (_restirGiReservoirBuffer) {
+        _device.DestroyBuffer(_restirGiReservoirBuffer);
+        _restirGiReservoirBuffer = {};
+    }
+    if (_restirGiHistoryReservoirBuffer) {
+        _device.DestroyBuffer(_restirGiHistoryReservoirBuffer);
+        _restirGiHistoryReservoirBuffer = {};
+    }
+    if (_restirPtReservoirBuffer) {
+        _device.DestroyBuffer(_restirPtReservoirBuffer);
+        _restirPtReservoirBuffer = {};
+    }
+    if (_restirPtHistoryReservoirBuffer) {
+        _device.DestroyBuffer(_restirPtHistoryReservoirBuffer);
+        _restirPtHistoryReservoirBuffer = {};
+    }
     _restirReservoirBufferBytes = 0;
     _restirHistoryReservoirBufferBytes = 0;
+    _restirGiReservoirBufferBytes = 0;
+    _restirGiHistoryReservoirBufferBytes = 0;
+    _restirPtReservoirBufferBytes = 0;
+    _restirPtHistoryReservoirBufferBytes = 0;
 }
 
 IblStats Renderer::GetIblStats() const

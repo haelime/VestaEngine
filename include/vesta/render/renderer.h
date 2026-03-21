@@ -250,16 +250,24 @@ struct RestirStats {
     uint32_t candidateLightCount{ 0 };
     uint32_t reservoirCount{ 0 };
     uint64_t reservoirPixels{ 0 };
+    uint64_t estimatedDiReservoirBytes{ 0 };
+    uint64_t estimatedGiReservoirBytes{ 0 };
+    uint64_t estimatedPtReservoirBytes{ 0 };
     uint64_t estimatedReservoirBytes{ 0 };
     bool requestedDi{ false };
     bool requestedGi{ false };
     bool requestedPt{ false };
     bool backendAvailable{ false };
     bool reservoirBuffersAvailable{ false };
+    bool diReservoirBuffersAvailable{ false };
+    bool giReservoirBuffersAvailable{ false };
+    bool ptReservoirBuffersAvailable{ false };
     bool candidateSamplingAvailable{ false };
     bool temporalReusePassAvailable{ false };
     bool spatialReusePassAvailable{ false };
     bool lightingResolveAvailable{ false };
+    bool giReservoirBackendAvailable{ false };
+    bool ptReservoirBackendAvailable{ false };
     bool temporalReuse{ true };
     bool spatialReuse{ true };
     bool historyAvailable{ false };
@@ -692,6 +700,10 @@ public:
     [[nodiscard]] BufferHandle GetDdgiVisibilityBuffer() const { return _ddgiVisibilityBuffer; }
     [[nodiscard]] BufferHandle GetRestirReservoirBuffer() const { return _restirReservoirBuffer; }
     [[nodiscard]] BufferHandle GetRestirHistoryReservoirBuffer() const { return _restirHistoryReservoirBuffer; }
+    [[nodiscard]] BufferHandle GetRestirGiReservoirBuffer() const { return _restirGiReservoirBuffer; }
+    [[nodiscard]] BufferHandle GetRestirGiHistoryReservoirBuffer() const { return _restirGiHistoryReservoirBuffer; }
+    [[nodiscard]] BufferHandle GetRestirPtReservoirBuffer() const { return _restirPtReservoirBuffer; }
+    [[nodiscard]] BufferHandle GetRestirPtHistoryReservoirBuffer() const { return _restirPtHistoryReservoirBuffer; }
     [[nodiscard]] IblStats GetIblStats() const;
     [[nodiscard]] RayEffectsStats GetRayEffectsStats() const;
     [[nodiscard]] std::vector<RenderPassDebugInfo> GetRenderPassDebugInfo() const;
@@ -944,8 +956,16 @@ private:
     uint64_t _ddgiVisibilityBufferBytes{ 0 };
     BufferHandle _restirReservoirBuffer{};
     BufferHandle _restirHistoryReservoirBuffer{};
+    BufferHandle _restirGiReservoirBuffer{};
+    BufferHandle _restirGiHistoryReservoirBuffer{};
+    BufferHandle _restirPtReservoirBuffer{};
+    BufferHandle _restirPtHistoryReservoirBuffer{};
     uint64_t _restirReservoirBufferBytes{ 0 };
     uint64_t _restirHistoryReservoirBufferBytes{ 0 };
+    uint64_t _restirGiReservoirBufferBytes{ 0 };
+    uint64_t _restirGiHistoryReservoirBufferBytes{ 0 };
+    uint64_t _restirPtReservoirBufferBytes{ 0 };
+    uint64_t _restirPtHistoryReservoirBufferBytes{ 0 };
     glm::vec2 _lastDragMousePosition{ 0.0f };
     glm::vec3 _dragPlaneOrigin{ 0.0f };
     glm::vec3 _dragPlaneNormal{ 0.0f, 1.0f, 0.0f };
