@@ -819,7 +819,9 @@ void ConfigureDeferredLightingPass(Renderer& renderer, IRenderPass& pass, const 
         resources.rayGlobalIllumination,
         settings.enableRtShadows,
         settings.enableRtAmbientOcclusion,
-        settings.enableRtReflections);
+        settings.enableRtReflections,
+        settings.rtDenoiser,
+        settings.rtTemporalAccumulation);
     lightingPass.SetRestirDiResolve(resources.restirDirectLighting, settings.enableRestirDi);
     lightingPass.SetAmbientOcclusion(settings.enableSsao, settings.ssaoRadius, settings.ssaoIntensity);
     lightingPass.SetScreenSpaceReflections(
@@ -2868,6 +2870,7 @@ RayEffectsStats Renderer::GetRayEffectsStats() const
         && rayEffectsPass != nullptr && rayEffectsPass->IsBackendAvailable();
     stats.halfResolution = _settings.rtHalfResolution;
     stats.denoiserRequested = _settings.rtDenoiser;
+    stats.giSpatialDenoiseAvailable = stats.backendAvailable && stats.giRequested && stats.denoiserRequested;
     stats.temporalAccumulation = _settings.rtTemporalAccumulation;
     stats.estimatedShadowRays = stats.shadowsRequested ? pixels * stats.shadowSamples : 0u;
     stats.estimatedAoRays = stats.aoRequested ? pixels * stats.aoSamples : 0u;

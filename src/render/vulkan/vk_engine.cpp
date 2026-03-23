@@ -1915,7 +1915,7 @@ void VestaEngine::finish_benchmark()
                << "ssao,ssao_radius,ssao_intensity,"
                << "taa,taa_feedback,temporal_upscaler,temporal_upscaler_backend,temporal_upscaler_input,temporal_upscaler_output,temporal_upscaler_scale,temporal_upscaler_sharpness,temporal_upscaler_history,temporal_upscaler_reactive_mask,temporal_upscaler_material_reactive_mask,temporal_upscaler_authored_alpha_reactive_mask,temporal_upscaler_reactive_strength,"
                << "restir_di,restir_gi,restir_pt,restir_backend,restir_reservoir_storage,restir_di_storage,restir_gi_storage,restir_pt_storage,restir_gi_backend,restir_pt_backend,restir_lights,restir_emissive_lights,restir_candidates,restir_reservoirs,restir_reservoir_mb,restir_di_reservoir_mb,restir_gi_reservoir_mb,restir_pt_reservoir_mb,restir_temporal_reuse,restir_spatial_reuse,restir_history,restir_candidate_pass,restir_temporal_pass,restir_spatial_pass,restir_resolve,"
-               << "rt_hybrid_backend,rt_hybrid_ray_query,rt_hybrid_tlas,rt_hybrid_resolution,rt_shadow_requested,rt_ao_requested,rt_reflection_requested,rt_gi_requested,rt_shadow_samples,rt_ao_samples,rt_reflection_samples,rt_gi_samples,rt_shadow_rays,rt_ao_rays,rt_reflection_rays,rt_gi_rays,rt_denoiser,rt_temporal,"
+               << "rt_hybrid_backend,rt_hybrid_ray_query,rt_hybrid_tlas,rt_hybrid_resolution,rt_shadow_requested,rt_ao_requested,rt_reflection_requested,rt_gi_requested,rt_shadow_samples,rt_ao_samples,rt_reflection_samples,rt_gi_samples,rt_shadow_rays,rt_ao_rays,rt_reflection_rays,rt_gi_rays,rt_denoiser,rt_gi_spatial_denoise,rt_temporal,"
                << "ssr,ssr_max_distance,ssr_thickness,ssr_intensity,"
                << "ssgi,ssgi_radius,ssgi_intensity,ssgi_samples,"
                << "ddgi,ddgi_backend,ddgi_probes,ddgi_rays_per_update,ddgi_memory_mb,ddgi_probe_spacing,ddgi_hysteresis,ddgi_intensity,ddgi_overlay,ddgi_composite,ddgi_ray_update,ddgi_temporal_blend,"
@@ -2075,6 +2075,7 @@ void VestaEngine::finish_benchmark()
            << rayEffectsStats.estimatedReflectionRays << ','
            << rayEffectsStats.estimatedGiRays << ','
            << (rayEffectsStats.denoiserRequested ? "true" : "false") << ','
+           << (rayEffectsStats.giSpatialDenoiseAvailable ? "true" : "false") << ','
            << (rayEffectsStats.temporalAccumulation ? "true" : "false") << ','
            << (settings.enableSsr ? "true" : "false") << ','
            << settings.ssrMaxDistance << ','
@@ -2461,6 +2462,7 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "    \"gi_rays\": " << rayEffectsStats.estimatedGiRays << ",\n"
            << "    \"half_resolution\": " << (rayEffectsStats.halfResolution ? "true" : "false") << ",\n"
            << "    \"denoiser_requested\": " << (rayEffectsStats.denoiserRequested ? "true" : "false") << ",\n"
+           << "    \"gi_spatial_denoise_available\": " << (rayEffectsStats.giSpatialDenoiseAvailable ? "true" : "false") << ",\n"
            << "    \"temporal_accumulation\": " << (rayEffectsStats.temporalAccumulation ? "true" : "false") << "\n"
            << "  },\n"
            << "  \"frame_index\": " << _frameNumber << ",\n"
@@ -6317,8 +6319,9 @@ void VestaEngine::draw_ray_tracing_debug_panel()
         static_cast<unsigned long long>(rayEffectsStats.estimatedAoRays),
         static_cast<unsigned long long>(rayEffectsStats.estimatedReflectionRays),
         static_cast<unsigned long long>(rayEffectsStats.estimatedGiRays));
-    ImGui::Text("Denoiser %s  Temporal %s  Resolution %s",
+    ImGui::Text("Denoiser %s  GI Spatial %s  Temporal %s  Resolution %s",
         rayEffectsStats.denoiserRequested ? "on" : "off",
+        rayEffectsStats.giSpatialDenoiseAvailable ? "live" : "staged",
         rayEffectsStats.temporalAccumulation ? "on" : "off",
         rayEffectsStats.halfResolution ? "half" : "full");
 

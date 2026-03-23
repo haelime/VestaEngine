@@ -341,6 +341,7 @@ struct RayEffectsStats {
     bool backendAvailable{ false };
     bool halfResolution{ true };
     bool denoiserRequested{ true };
+    bool giSpatialDenoiseAvailable{ false };
     bool temporalAccumulation{ true };
 };
 

@@ -449,7 +449,30 @@ vec4 sampleRayGlobalIllumination(DeferredLightingConstants constants, ivec2 pixe
     }
     ivec2 rtSize = imageSize(storageImages[nonuniformEXT(int(constants.rayGlobalIllumination.x))]);
     ivec2 rtPixel = clamp(ivec2((vec2(pixel) + 0.5) * vec2(rtSize) / vec2(fullSize)), ivec2(0), rtSize - ivec2(1));
-    return imageLoad(storageImages[nonuniformEXT(int(constants.rayGlobalIllumination.x))], rtPixel);
+    vec4 center = imageLoad(storageImages[nonuniformEXT(int(constants.rayGlobalIllumination.x))], rtPixel);
+    if (constants.rayGlobalIllumination.z == 0u) {
+        return center;
+    }
+
+    vec3 filtered = center.rgb * 0.32;
+    float filteredAlpha = center.a * 0.32;
+    float weightSum = 0.32;
+    for (int y = -1; y <= 1; ++y) {
+        for (int x = -1; x <= 1; ++x) {
+            if (x == 0 && y == 0) {
+                continue;
+            }
+            ivec2 samplePixel = clamp(rtPixel + ivec2(x, y), ivec2(0), rtSize - ivec2(1));
+            vec4 sampleValue = imageLoad(storageImages[nonuniformEXT(int(constants.rayGlobalIllumination.x))], samplePixel);
+            float distanceWeight = (abs(x) + abs(y)) == 1 ? 0.12 : 0.07;
+            float confidenceWeight = mix(0.35, 1.0, clamp(sampleValue.a, 0.0, 1.0));
+            float weight = distanceWeight * confidenceWeight;
+            filtered += sampleValue.rgb * weight;
+            filteredAlpha += sampleValue.a * weight;
+            weightSum += weight;
+        }
+    }
+    return vec4(filtered / max(weightSum, 0.0001), clamp(filteredAlpha / max(weightSum, 0.0001), 0.0, 1.0));
 }
 
 vec3 sampleRestirDirectLighting(DeferredLightingConstants constants, ivec2 pixel, ivec2 fullSize)

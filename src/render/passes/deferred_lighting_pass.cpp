@@ -181,7 +181,9 @@ void DeferredLightingPass::SetRayEffects(GraphTextureHandle rayEffects,
     GraphTextureHandle rayGlobalIllumination,
     bool shadowsEnabled,
     bool ambientOcclusionEnabled,
-    bool reflectionsEnabled)
+    bool reflectionsEnabled,
+    bool denoiserEnabled,
+    bool temporalEnabled)
 {
     _rayEffects = rayEffects;
     _rayReflection = rayReflection;
@@ -191,6 +193,7 @@ void DeferredLightingPass::SetRayEffects(GraphTextureHandle rayEffects,
         ambientOcclusionEnabled ? 1u : 0u,
         reflectionsEnabled ? 1u : 0u,
         0u);
+    _rayGiFlags = glm::uvec2(denoiserEnabled ? 1u : 0u, temporalEnabled ? 1u : 0u);
 }
 
 void DeferredLightingPass::SetRestirDiResolve(GraphTextureHandle restirDirectLighting, bool enabled)
@@ -393,8 +396,8 @@ void DeferredLightingPass::Execute(const RenderGraphContext& context)
                 0u),
             .rayGlobalIllumination = glm::uvec4(rayGiImageIndex,
                 rayGiImageIndex != kInvalidResourceIndex ? 1u : 0u,
-                0u,
-                0u),
+                _rayGiFlags.x,
+                _rayGiFlags.y),
             .restirDi = glm::uvec4(restirDirectLightingImageIndex,
                 _restirDirectLightingEnabled && restirDirectLightingImageIndex != kInvalidResourceIndex ? 1u : 0u,
                 0u,

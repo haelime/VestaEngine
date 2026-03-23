@@ -32,7 +32,9 @@ public:
         GraphTextureHandle rayGlobalIllumination,
         bool shadowsEnabled,
         bool ambientOcclusionEnabled,
-        bool reflectionsEnabled);
+        bool reflectionsEnabled,
+        bool denoiserEnabled,
+        bool temporalEnabled);
     void SetRestirDiResolve(GraphTextureHandle restirDirectLighting, bool enabled);
     void SetAmbientOcclusion(bool enabled, float radius, float intensity);
     void SetScreenSpaceReflections(bool enabled, float maxDistance, float thickness, float intensity);
@@ -86,6 +88,7 @@ private:
     uint32_t _iblSpecularPrefilterImageIndex{ kInvalidResourceIndex };
     float _environmentSpecularStrength{ 0.45f };
     glm::uvec4 _rayEffectsFlags{ 0u, 0u, 0u, 0u };
+    glm::uvec2 _rayGiFlags{ 0u, 0u };
     bool _restirDirectLightingEnabled{ false };
     glm::vec4 _ssaoParams{ 1.0f, 0.75f, 1.35f, 0.0f };
     glm::vec4 _ssrParams{ 1.0f, 18.0f, 0.18f, 0.65f };
