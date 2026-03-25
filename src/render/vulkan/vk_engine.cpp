@@ -6365,8 +6365,8 @@ void VestaEngine::draw_ray_tracing_debug_panel()
     ImGui::SeparatorText("Implemented vs Stub");
     ImGui::BulletText("Hardware path tracing uses RT pipeline when available.");
     ImGui::BulletText("Hybrid RT shadows, AO, and reflection visibility use a ray-query pass when Ray Query and TLAS are available.");
-    ImGui::BulletText("RT reflection currently masks IBL/SSR by TLAS hit/miss; full hit-material reflection resolve remains staged.");
-    ImGui::BulletText("RT GI controls remain staged until bounce shading and resolve passes are added.");
+    ImGui::BulletText("RT reflection and RT GI resolve material-colored ray hits from the TLAS-backed scene triangle buffer.");
+    ImGui::BulletText("RT GI spatial denoise is live when the denoiser is enabled; production temporal reuse remains staged.");
     ImGui::BulletText("Acceleration structure residency and build timing are live in Resource Inspector.");
 }
 
