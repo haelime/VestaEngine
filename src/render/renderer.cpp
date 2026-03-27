@@ -834,7 +834,9 @@ void ConfigureDeferredLightingPass(Renderer& renderer, IRenderPass& pass, const 
         settings.ddgiProbeCountZ,
         settings.ddgiProbeSpacing,
         settings.ddgiHysteresis,
-        settings.ddgiIntensity);
+        settings.ddgiIntensity,
+        renderer.GetDdgiIrradianceBuffer(),
+        renderer.GetDdgiVisibilityBuffer());
     lightingPass.SetContactShadows(
         settings.enableContactShadows, settings.contactShadowLength, settings.contactShadowIntensity);
     if (resources.shadowMap && renderer.GetScene().HasRasterGeometry()) {
@@ -2617,12 +2619,13 @@ DdgiStats Renderer::GetDdgiStats() const
         && _ddgiIrradianceBufferBytes >= stats.estimatedIrradianceBytes
         && _ddgiVisibilityBufferBytes >= stats.estimatedVisibilityBytes;
     stats.probeCompositeAvailable = stats.requested && NeedsDeferredPass(_settings);
+    stats.storageCompositeAvailable = stats.probeCompositeAvailable && stats.probeStorageAvailable;
     const auto* ddgiProbeUpdatePass = FindPass<DdgiProbeUpdatePass>("ddgi-probe-update");
     stats.rayUpdateAvailable = stats.requested && stats.probeStorageAvailable && _scene.HasRayTracingScene()
         && ddgiProbeUpdatePass != nullptr && ddgiProbeUpdatePass->IsBackendAvailable();
     stats.temporalBlendAvailable = stats.rayUpdateAvailable && stats.hysteresis > 0.0f;
     stats.backendAvailable =
-        stats.requested && stats.probeStorageAvailable && (stats.probeCompositeAvailable || stats.rayUpdateAvailable);
+        stats.requested && stats.probeStorageAvailable && (stats.storageCompositeAvailable || stats.rayUpdateAvailable);
     stats.overlayEnabled = _settings.showGiProbeOverlay;
     return stats;
 }

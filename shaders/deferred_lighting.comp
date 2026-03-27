@@ -33,11 +33,16 @@ struct DeferredLightingConstants {
     vec4 areaColor;
     uvec4 ddgiGrid;
     vec4 ddgiParams;
+    uvec4 ddgiBufferIndices;
 };
 
 layout(set = 0, binding = 2, std430) readonly buffer DeferredLightingConstantsBuffer {
     DeferredLightingConstants values;
 } lightingConstantsBuffers[];
+
+layout(set = 0, binding = 2, std430) readonly buffer StorageBufferVec4 {
+    vec4 values[];
+} storageBuffersVec4[];
 
 layout(push_constant) uniform DeferredLightingPushConstants {
     uint albedoImageIndex;
@@ -375,6 +380,35 @@ vec3 ddgiProbePosition(ivec3 probe, uvec3 grid, float spacing)
     return (vec3(probe) - center) * spacing;
 }
 
+uint ddgiProbeIndex(ivec3 probe, uvec3 grid)
+{
+    uvec3 p = uvec3(max(probe, ivec3(0)));
+    return p.x + p.y * grid.x + p.z * grid.x * grid.y;
+}
+
+vec3 sampleDdgiStoredIrradiance(DeferredLightingConstants constants, ivec3 probe, uvec3 grid, vec3 normal, vec3 fallback)
+{
+    if (constants.ddgiBufferIndices.x == INVALID_BUFFER_INDEX) {
+        return fallback;
+    }
+
+    uint probeIndex = ddgiProbeIndex(probe, grid);
+    vec4 storedIrradiance = storageBuffersVec4[nonuniformEXT(int(constants.ddgiBufferIndices.x))].values[probeIndex];
+    if (storedIrradiance.a <= 0.0) {
+        return fallback;
+    }
+
+    float confidence = 1.0;
+    if (constants.ddgiBufferIndices.y != INVALID_BUFFER_INDEX) {
+        vec4 visibility = storageBuffersVec4[nonuniformEXT(int(constants.ddgiBufferIndices.y))].values[probeIndex];
+        confidence = mix(0.45, 1.0, clamp(visibility.z, 0.0, 1.0)) * clamp(visibility.a, 0.0, 1.0);
+    }
+
+    float normalWeight = mix(0.55, 1.0, clamp(normal.y * 0.5 + 0.5, 0.0, 1.0));
+    vec3 stored = max(storedIrradiance.rgb, vec3(0.0)) * confidence * normalWeight;
+    return mix(fallback, stored, 0.82);
+}
+
 vec3 computeDdgiProbeIrradiance(DeferredLightingConstants constants, ivec3 probe, uvec3 grid, vec3 worldPosition, vec3 normal)
 {
     vec3 probePosition = ddgiProbePosition(probe, grid, constants.ddgiParams.x);
@@ -388,7 +422,8 @@ vec3 computeDdgiProbeIrradiance(DeferredLightingConstants constants, ivec3 probe
     vec3 probeTint = mix(vec3(0.04, 0.055, 0.075), diffuseIbl, 0.72);
     vec3 bouncedLight = probeTint * (0.22 + 0.28 * sky)
         + max(constants.directionalColor.rgb, vec3(0.0)) * directional * 0.08;
-    return bouncedLight * mix(0.6, 1.0, distanceWeight) * mix(0.55, 1.0, normalWeight);
+    vec3 fallback = bouncedLight * mix(0.6, 1.0, distanceWeight) * mix(0.55, 1.0, normalWeight);
+    return sampleDdgiStoredIrradiance(constants, probe, grid, normal, fallback);
 }
 
 vec3 computeDdgiComposite(DeferredLightingConstants constants, vec3 worldPosition, vec3 normal, vec3 baseColor, float metallic)

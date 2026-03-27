@@ -172,6 +172,16 @@ void DdgiProbeUpdatePass::Execute(const RenderGraphContext& context)
 
     const uint32_t totalRays = _probeCountX * _probeCountY * _probeCountZ * _raysPerProbe;
     vkCmdDispatch(commandBuffer, (totalRays + 127u) / 128u, 1, 1);
+
+    VkMemoryBarrier2 barrier{ VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
+    barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    barrier.srcAccessMask = VK_ACCESS_2_SHADER_WRITE_BIT;
+    barrier.dstStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+    barrier.dstAccessMask = VK_ACCESS_2_SHADER_READ_BIT;
+    VkDependencyInfo dependencyInfo{ VK_STRUCTURE_TYPE_DEPENDENCY_INFO };
+    dependencyInfo.memoryBarrierCount = 1;
+    dependencyInfo.pMemoryBarriers = &barrier;
+    vkCmdPipelineBarrier2(commandBuffer, &dependencyInfo);
 }
 
 void DdgiProbeUpdatePass::Shutdown(RenderDevice& device)

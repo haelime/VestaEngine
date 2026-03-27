@@ -39,7 +39,15 @@ public:
     void SetAmbientOcclusion(bool enabled, float radius, float intensity);
     void SetScreenSpaceReflections(bool enabled, float maxDistance, float thickness, float intensity);
     void SetScreenSpaceGlobalIllumination(bool enabled, float radius, float intensity, uint32_t sampleCount);
-    void SetDdgi(bool enabled, uint32_t probeCountX, uint32_t probeCountY, uint32_t probeCountZ, float spacing, float hysteresis, float intensity);
+    void SetDdgi(bool enabled,
+        uint32_t probeCountX,
+        uint32_t probeCountY,
+        uint32_t probeCountZ,
+        float spacing,
+        float hysteresis,
+        float intensity,
+        BufferHandle irradianceBuffer,
+        BufferHandle visibilityBuffer);
     void SetContactShadows(bool enabled, float length, float intensity);
     void SetShadowMap(GraphTextureHandle shadowMap,
         const std::array<DirectionalShadowCascade, 4>& cascades,
@@ -95,6 +103,8 @@ private:
     glm::vec4 _ssgiParams{ 1.0f, 1.4f, 0.32f, 10.0f };
     glm::uvec4 _ddgiGrid{ 8u, 4u, 8u, 0u };
     glm::vec4 _ddgiParams{ 2.0f, 0.95f, 0.28f, 0.0f };
+    BufferHandle _ddgiIrradianceBuffer{};
+    BufferHandle _ddgiVisibilityBuffer{};
     glm::vec4 _contactShadowParams{ 1.0f, 1.2f, 0.35f, 0.0f };
     std::array<DirectionalShadowCascade, 4> _shadowCascades{};
     uint32_t _shadowCascadeCount{ 1 };
