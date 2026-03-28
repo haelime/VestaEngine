@@ -25,6 +25,18 @@ void RestirDiPass::SetReservoirBuffers(BufferHandle current, BufferHandle histor
     _historyReservoir = history;
 }
 
+void RestirDiPass::SetGiReservoirBuffers(BufferHandle current, BufferHandle history)
+{
+    _giCurrentReservoir = current;
+    _giHistoryReservoir = history;
+}
+
+void RestirDiPass::SetPtReservoirBuffers(BufferHandle current, BufferHandle history)
+{
+    _ptCurrentReservoir = current;
+    _ptHistoryReservoir = history;
+}
+
 void RestirDiPass::SetControls(uint32_t frameIndex,
     uint32_t width,
     uint32_t height,
@@ -89,21 +101,9 @@ void RestirDiPass::Setup(RenderGraphBuilder&)
 
 void RestirDiPass::Execute(const RenderGraphContext& context)
 {
-    if (_pipeline == VK_NULL_HANDLE || !_currentReservoir) {
+    if (_pipeline == VK_NULL_HANDLE || (!_currentReservoir && !_giCurrentReservoir && !_ptCurrentReservoir)) {
         return;
     }
-
-    const auto& current = context.GetDevice().GetBufferResource(_currentReservoir);
-    const bool writeHistory = _temporalReuse && _historyReservoir;
-    const uint32_t historyIndex = writeHistory
-        ? context.GetDevice().GetBufferResource(_historyReservoir).bindless.storageBuffer
-        : kInvalidResourceIndex;
-    const RestirDiPushConstants pushConstants{
-        .bufferIndices = glm::uvec4(current.bindless.storageBuffer, historyIndex, 0u, 0u),
-        .dispatchParams = glm::uvec4(_width, _height, _reservoirCount, _candidateLightCount),
-        .lightParams = glm::uvec4(_activeLightCount, _localLightCount, _emissiveTriangleCount, _spatialSamples),
-        .flags = glm::uvec4(_frameIndex, _temporalReuse ? 1u : 0u, _spatialReuse ? 1u : 0u, writeHistory ? 1u : 0u),
-    };
 
     VkCommandBuffer commandBuffer = context.GetCommandBuffer();
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, _pipeline);
@@ -118,15 +118,36 @@ void RestirDiPass::Execute(const RenderGraphContext& context)
         descriptorSets.data(),
         0,
         nullptr);
-    vkCmdPushConstants(commandBuffer,
-        _pipelineLayout,
-        VK_SHADER_STAGE_COMPUTE_BIT,
-        0,
-        sizeof(RestirDiPushConstants),
-        &pushConstants);
 
     const uint64_t totalReservoirs = static_cast<uint64_t>(_width) * _height * _reservoirCount;
-    vkCmdDispatch(commandBuffer, static_cast<uint32_t>((totalReservoirs + 255u) / 256u), 1, 1);
+    const uint32_t groupCount = static_cast<uint32_t>((totalReservoirs + 255u) / 256u);
+    auto dispatchReservoirWrite = [&](BufferHandle currentHandle, BufferHandle historyHandle, uint32_t modeSeedOffset) {
+        if (!currentHandle) {
+            return;
+        }
+        const auto& current = context.GetDevice().GetBufferResource(currentHandle);
+        const bool writeHistory = _temporalReuse && static_cast<bool>(historyHandle);
+        const uint32_t historyIndex = writeHistory
+            ? context.GetDevice().GetBufferResource(historyHandle).bindless.storageBuffer
+            : kInvalidResourceIndex;
+        const RestirDiPushConstants pushConstants{
+            .bufferIndices = glm::uvec4(current.bindless.storageBuffer, historyIndex, 0u, 0u),
+            .dispatchParams = glm::uvec4(_width, _height, _reservoirCount, _candidateLightCount),
+            .lightParams = glm::uvec4(_activeLightCount, _localLightCount, _emissiveTriangleCount, _spatialSamples),
+            .flags = glm::uvec4(_frameIndex + modeSeedOffset, _temporalReuse ? 1u : 0u, _spatialReuse ? 1u : 0u, writeHistory ? 1u : 0u),
+        };
+        vkCmdPushConstants(commandBuffer,
+            _pipelineLayout,
+            VK_SHADER_STAGE_COMPUTE_BIT,
+            0,
+            sizeof(RestirDiPushConstants),
+            &pushConstants);
+        vkCmdDispatch(commandBuffer, groupCount, 1, 1);
+    };
+
+    dispatchReservoirWrite(_currentReservoir, _historyReservoir, 0u);
+    dispatchReservoirWrite(_giCurrentReservoir, _giHistoryReservoir, 104729u);
+    dispatchReservoirWrite(_ptCurrentReservoir, _ptHistoryReservoir, 209759u);
 
     VkMemoryBarrier2 barrier{ VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
     barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;

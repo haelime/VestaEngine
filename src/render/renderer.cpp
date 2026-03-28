@@ -900,6 +900,8 @@ void ConfigureRestirDiPass(Renderer& renderer, IRenderPass& pass, const Renderer
     const auto stats = renderer.GetRestirStats();
     const auto extent = renderer.GetRenderDevice().GetSwapchainExtent();
     restirPass.SetReservoirBuffers(renderer.GetRestirReservoirBuffer(), renderer.GetRestirHistoryReservoirBuffer());
+    restirPass.SetGiReservoirBuffers(renderer.GetRestirGiReservoirBuffer(), renderer.GetRestirGiHistoryReservoirBuffer());
+    restirPass.SetPtReservoirBuffers(renderer.GetRestirPtReservoirBuffer(), renderer.GetRestirPtHistoryReservoirBuffer());
     restirPass.SetControls(renderer.GetPathTraceFrameIndex(),
         extent.width,
         extent.height,
@@ -2583,15 +2585,19 @@ RestirStats Renderer::GetRestirStats() const
     const auto* restirResolvePass = FindPass<RestirDiResolvePass>("restir-di-resolve");
     stats.candidateSamplingAvailable = stats.requestedDi && stats.diReservoirBuffersAvailable
         && restirPass != nullptr && restirPass->IsBackendAvailable();
+    stats.giCandidatePassAvailable = stats.requestedGi && stats.giReservoirBuffersAvailable
+        && restirPass != nullptr && restirPass->IsBackendAvailable();
+    stats.ptCandidatePassAvailable = stats.requestedPt && stats.ptReservoirBuffersAvailable
+        && restirPass != nullptr && restirPass->IsBackendAvailable();
     stats.temporalReusePassAvailable = stats.candidateSamplingAvailable && stats.temporalReuse && stats.historyAvailable;
     stats.lightingResolveAvailable = stats.requestedDi && stats.candidateSamplingAvailable
         && NeedsDeferredPass(_settings) && restirResolvePass != nullptr && restirResolvePass->IsBackendAvailable();
     stats.spatialReusePassAvailable =
         stats.lightingResolveAvailable && stats.spatialReuse && _settings.restirSpatialSamples > 0u;
-    stats.giReservoirBackendAvailable = stats.requestedGi && stats.giReservoirBuffersAvailable;
-    stats.ptReservoirBackendAvailable = stats.requestedPt && stats.ptReservoirBuffersAvailable;
+    stats.giReservoirBackendAvailable = stats.giCandidatePassAvailable;
+    stats.ptReservoirBackendAvailable = stats.ptCandidatePassAvailable;
     stats.backendAvailable = requested && stats.reservoirBuffersAvailable
-        && (stats.candidateSamplingAvailable || stats.giReservoirBackendAvailable || stats.ptReservoirBackendAvailable);
+        && (stats.candidateSamplingAvailable || stats.giCandidatePassAvailable || stats.ptCandidatePassAvailable);
     return stats;
 }
 
@@ -2989,8 +2995,10 @@ std::vector<RenderPassDebugInfo> Renderer::GetRenderPassDebugInfo() const
             info.rayCount = info.shadowRayCount + info.diffuseRayCount + info.specularRayCount;
         } else if (entry.id == "restir-di") {
             const RestirStats restirStats = GetRestirStats();
-            info.dispatchCount = IsRestirRequested(_settings) ? 1u : 0u;
-            info.rayCount = restirStats.reservoirPixels * restirStats.candidateLightCount;
+            info.dispatchCount = (restirStats.candidateSamplingAvailable ? 1u : 0u)
+                + (restirStats.giCandidatePassAvailable ? 1u : 0u)
+                + (restirStats.ptCandidatePassAvailable ? 1u : 0u);
+            info.rayCount = restirStats.reservoirPixels * restirStats.candidateLightCount * info.dispatchCount;
         } else if (entry.id == "restir-di-resolve") {
             const RestirStats restirStats = GetRestirStats();
             info.dispatchCount = restirStats.lightingResolveAvailable ? 1u : 0u;
@@ -4214,8 +4222,9 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
     const bool useDeferredPass = NeedsDeferredPass(_settings);
     const bool useRayEffectsPass = useDeferredPass && IsRayEffectsRequested(_settings)
         && _device.GetRayTracingSupport().rayQueryFeatures.rayQuery == VK_TRUE && _scene.HasRayTracingScene();
-    const bool useRestirPass = IsRestirRequested(_settings) && _restirReservoirBuffer;
-    const bool useRestirResolvePass = useDeferredPass && _settings.enableRestirDi && useRestirPass;
+    const bool useRestirPass = IsRestirRequested(_settings)
+        && (_restirReservoirBuffer || _restirGiReservoirBuffer || _restirPtReservoirBuffer);
+    const bool useRestirResolvePass = useDeferredPass && _settings.enableRestirDi && _restirReservoirBuffer && useRestirPass;
     const bool useDdgiProbeUpdatePass = _settings.enableDdgi && _ddgiIrradianceBuffer && _ddgiVisibilityBuffer
         && _device.GetRayTracingSupport().rayQueryFeatures.rayQuery == VK_TRUE && _scene.HasRayTracingScene();
     const bool useGaussianPass = NeedsGaussianPass(_settings);

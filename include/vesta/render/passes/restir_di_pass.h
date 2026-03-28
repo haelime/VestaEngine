@@ -6,12 +6,15 @@
 #include <vesta/render/resources/resource_handles.h>
 
 namespace vesta::render {
-// Lightweight ReSTIR DI candidate pass. It does not shade the final image yet;
-// it writes deterministic current/history reservoir records for profiler,
-// resource-inspector, and future resolve integration.
+// Lightweight ReSTIR candidate pass. It writes deterministic DI/GI/PT
+// current/history reservoir records for profiler, resource-inspector, and
+// resolve integration. DI has a lighting resolve; GI/PT shading resolves remain
+// a separate backend step.
 class RestirDiPass final : public IRenderPass {
 public:
     void SetReservoirBuffers(BufferHandle current, BufferHandle history);
+    void SetGiReservoirBuffers(BufferHandle current, BufferHandle history);
+    void SetPtReservoirBuffers(BufferHandle current, BufferHandle history);
     void SetControls(uint32_t frameIndex,
         uint32_t width,
         uint32_t height,
@@ -35,6 +38,10 @@ public:
 private:
     BufferHandle _currentReservoir{};
     BufferHandle _historyReservoir{};
+    BufferHandle _giCurrentReservoir{};
+    BufferHandle _giHistoryReservoir{};
+    BufferHandle _ptCurrentReservoir{};
+    BufferHandle _ptHistoryReservoir{};
     uint32_t _frameIndex{ 0 };
     uint32_t _width{ 1 };
     uint32_t _height{ 1 };

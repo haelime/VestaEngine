@@ -1914,7 +1914,7 @@ void VestaEngine::finish_benchmark()
                << "debug_view,path_trace_debug_view,gaussian_debug_view,compare_mode,compare_split,compare_difference_scale,"
                << "ssao,ssao_radius,ssao_intensity,"
                << "taa,taa_feedback,temporal_upscaler,temporal_upscaler_backend,temporal_upscaler_input,temporal_upscaler_output,temporal_upscaler_scale,temporal_upscaler_sharpness,temporal_upscaler_history,temporal_upscaler_reactive_mask,temporal_upscaler_material_reactive_mask,temporal_upscaler_authored_alpha_reactive_mask,temporal_upscaler_reactive_strength,"
-               << "restir_di,restir_gi,restir_pt,restir_backend,restir_reservoir_storage,restir_di_storage,restir_gi_storage,restir_pt_storage,restir_gi_backend,restir_pt_backend,restir_lights,restir_emissive_lights,restir_candidates,restir_reservoirs,restir_reservoir_mb,restir_di_reservoir_mb,restir_gi_reservoir_mb,restir_pt_reservoir_mb,restir_temporal_reuse,restir_spatial_reuse,restir_history,restir_candidate_pass,restir_temporal_pass,restir_spatial_pass,restir_resolve,"
+               << "restir_di,restir_gi,restir_pt,restir_backend,restir_reservoir_storage,restir_di_storage,restir_gi_storage,restir_pt_storage,restir_gi_backend,restir_pt_backend,restir_gi_candidate_pass,restir_pt_candidate_pass,restir_lights,restir_emissive_lights,restir_candidates,restir_reservoirs,restir_reservoir_mb,restir_di_reservoir_mb,restir_gi_reservoir_mb,restir_pt_reservoir_mb,restir_temporal_reuse,restir_spatial_reuse,restir_history,restir_candidate_pass,restir_temporal_pass,restir_spatial_pass,restir_resolve,"
                << "rt_hybrid_backend,rt_hybrid_ray_query,rt_hybrid_tlas,rt_hybrid_resolution,rt_shadow_requested,rt_ao_requested,rt_reflection_requested,rt_gi_requested,rt_shadow_samples,rt_ao_samples,rt_reflection_samples,rt_gi_samples,rt_shadow_rays,rt_ao_rays,rt_reflection_rays,rt_gi_rays,rt_denoiser,rt_gi_spatial_denoise,rt_temporal,"
                << "ssr,ssr_max_distance,ssr_thickness,ssr_intensity,"
                << "ssgi,ssgi_radius,ssgi_intensity,ssgi_samples,"
@@ -2043,6 +2043,8 @@ void VestaEngine::finish_benchmark()
            << (restirStats.ptReservoirBuffersAvailable ? "true" : "false") << ','
            << (restirStats.giReservoirBackendAvailable ? "true" : "false") << ','
            << (restirStats.ptReservoirBackendAvailable ? "true" : "false") << ','
+           << (restirStats.giCandidatePassAvailable ? "true" : "false") << ','
+           << (restirStats.ptCandidatePassAvailable ? "true" : "false") << ','
            << restirStats.activeLightCount << ','
            << restirStats.emissiveTriangleCount << ','
            << restirStats.candidateLightCount << ','
@@ -2347,6 +2349,8 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "    \"pt_reservoir_buffers_available\": " << (restirStats.ptReservoirBuffersAvailable ? "true" : "false") << ",\n"
            << "    \"gi_reservoir_backend_available\": " << (restirStats.giReservoirBackendAvailable ? "true" : "false") << ",\n"
            << "    \"pt_reservoir_backend_available\": " << (restirStats.ptReservoirBackendAvailable ? "true" : "false") << ",\n"
+           << "    \"gi_candidate_pass_available\": " << (restirStats.giCandidatePassAvailable ? "true" : "false") << ",\n"
+           << "    \"pt_candidate_pass_available\": " << (restirStats.ptCandidatePassAvailable ? "true" : "false") << ",\n"
            << "    \"active_light_count\": " << restirStats.activeLightCount << ",\n"
            << "    \"emissive_triangle_count\": " << restirStats.emissiveTriangleCount << ",\n"
            << "    \"candidate_light_count\": " << restirStats.candidateLightCount << ",\n"
@@ -6569,12 +6573,15 @@ void VestaEngine::draw_advanced_portfolio_panel()
         restirStats.diReservoirBuffersAvailable ? "ready" : "staged",
         restirStats.giReservoirBuffersAvailable ? "ready" : "staged",
         restirStats.ptReservoirBuffersAvailable ? "ready" : "staged");
-    ImGui::Text("Passes Candidate %s  Temporal %s  Spatial %s  Resolve %s",
+    ImGui::Text("Passes DI Candidate %s  GI Candidate %s  PT Candidate %s  Resolve %s",
         restirStats.candidateSamplingAvailable ? "live" : "staged",
-        restirStats.temporalReusePassAvailable ? "live" : "staged",
-        restirStats.spatialReusePassAvailable ? "live" : "staged",
+        restirStats.giCandidatePassAvailable ? "live" : "staged",
+        restirStats.ptCandidatePassAvailable ? "live" : "staged",
         restirStats.lightingResolveAvailable ? "live" : "staged");
-    ImGui::TextDisabled("DI candidate sampling and lighting resolve are live; GI/PT reservoir storage is allocated when requested, while GI/PT shading resolve remains staged.");
+    ImGui::Text("Reuse Temporal %s  Spatial %s",
+        restirStats.temporalReusePassAvailable ? "live" : "staged",
+        restirStats.spatialReusePassAvailable ? "live" : "staged");
+    ImGui::TextDisabled("DI/GI/PT candidate reservoir updates are live when requested; DI lighting resolve is live, while GI/PT shading resolve remains staged.");
 
     ImGui::SeparatorText("GPU-driven Rendering");
     ImGui::Checkbox("Indirect Draw", &settings.useIndirectDraw);
