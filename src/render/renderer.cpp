@@ -2629,6 +2629,7 @@ DdgiStats Renderer::GetDdgiStats() const
     const auto* ddgiProbeUpdatePass = FindPass<DdgiProbeUpdatePass>("ddgi-probe-update");
     stats.rayUpdateAvailable = stats.requested && stats.probeStorageAvailable && _scene.HasRayTracingScene()
         && ddgiProbeUpdatePass != nullptr && ddgiProbeUpdatePass->IsBackendAvailable();
+    stats.momentValidationAvailable = stats.storageCompositeAvailable && stats.rayUpdateAvailable;
     stats.temporalBlendAvailable = stats.rayUpdateAvailable && stats.hysteresis > 0.0f;
     stats.backendAvailable =
         stats.requested && stats.probeStorageAvailable && (stats.storageCompositeAvailable || stats.rayUpdateAvailable);
