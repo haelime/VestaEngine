@@ -170,8 +170,8 @@ void ApplyPresetSettings(RendererSettings& settings, const RenderDevice& device,
     settings.enableRaster = true;
     settings.enableGaussian = true;
     settings.enablePathTracing = true;
-    settings.gaussianPointSize = 8.0f;
-    settings.gaussianOpacity = 0.35f;
+    settings.gaussianOpacity = 1.0f;
+    settings.gaussianShDegree = 0u;
 
     const bool hardwareRtPreferred = device.IsRayTracingSupported();
     settings.pathTraceBackend = hardwareRtPreferred ? PathTraceBackend::Auto : PathTraceBackend::Compute;
@@ -271,9 +271,7 @@ void ConfigureGaussianPass(Renderer& renderer, IRenderPass& pass, const Renderer
     gaussianPass.SetCamera(&renderer.GetCamera());
     const uint32_t effectiveShDegree =
         std::min(renderer.GetSettings().gaussianShDegree, renderer.GetScene().GetGaussianShDegree());
-    gaussianPass.SetParams(renderer.GetSettings().gaussianPointSize,
-        renderer.GetSettings().gaussianOpacity,
-        renderer.GetSettings().gaussianAlphaCutoff,
+    gaussianPass.SetParams(renderer.GetSettings().gaussianOpacity,
         renderer.GetSettings().enableGaussian,
         effectiveShDegree,
         renderer.GetSettings().gaussianViewDependentColor,
@@ -293,7 +291,6 @@ void ConfigureOfficialGaussianPass(Renderer& renderer, IRenderPass& pass, const 
     const uint32_t effectiveShDegree =
         std::min(renderer.GetSettings().gaussianShDegree, renderer.GetScene().GetGaussianShDegree());
     gaussianPass.SetParams(renderer.GetSettings().gaussianOpacity,
-        renderer.GetSettings().gaussianAlphaCutoff,
         effectiveShDegree,
         renderer.GetSettings().gaussianViewDependentColor,
         renderer.GetSettings().gaussianAntialiasing,

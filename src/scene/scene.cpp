@@ -91,19 +91,18 @@ glm::vec4 ApplyGaussianImportTransform(glm::vec4 rotation)
 
 glm::vec3 NormalizeGaussianScaleForScene(glm::vec3 scale, float sceneRadius)
 {
-    constexpr float kAbsoluteMinScale = 1.5e-3f;
-    constexpr float kRelativeMinScale = 1.0e-5f;
-    constexpr float kAbsoluteMaxScale = 0.12f;
-    constexpr float kRelativeMaxScale = 0.08f;
-    constexpr float kMaxAnisotropy = 24.0f;
+    constexpr float kAbsoluteMinScale = 1.0e-6f;
+    constexpr float kRelativeMinScale = 1.0e-7f;
 
     const float minScale = std::max(kAbsoluteMinScale, sceneRadius * kRelativeMinScale);
-    const float maxScale = std::max(kAbsoluteMaxScale, sceneRadius * kRelativeMaxScale);
-    scale = glm::clamp(glm::abs(scale), glm::vec3(minScale), glm::vec3(maxScale));
-
-    const float minAxis = std::max(std::min(scale.x, std::min(scale.y, scale.z)), minScale);
-    const float anisotropicMaxScale = std::min(maxScale, minAxis * kMaxAnisotropy);
-    return glm::min(scale, glm::vec3(anisotropicMaxScale));
+    for (int axis = 0; axis < 3; ++axis) {
+        if (!std::isfinite(scale[axis]) || scale[axis] <= 0.0f) {
+            scale[axis] = minScale;
+        } else {
+            scale[axis] = std::max(scale[axis], minScale);
+        }
+    }
+    return scale;
 }
 
 std::vector<glm::vec3> ReadVec3Accessor(const fastgltf::Asset& asset, const fastgltf::Accessor& accessor)
@@ -806,7 +805,7 @@ bool ParseGaussianPly(const std::filesystem::path& path, ParsedScene& parsedScen
         gaussian.positionOpacity = glm::vec4(getValue("x"), getValue("y"), getValue("z"), 1.0f);
 
         if (propertyIndex.contains("opacity")) {
-            gaussian.positionOpacity.w = glm::clamp(Sigmoid(getValue("opacity")), 0.01f, 1.0f);
+            gaussian.positionOpacity.w = Sigmoid(getValue("opacity"));
         }
 
         if (propertyIndex.contains("scale_0") && propertyIndex.contains("scale_1") && propertyIndex.contains("scale_2")) {
@@ -959,7 +958,7 @@ bool ParseGaussianPly(const std::filesystem::path& path, ParsedScene& parsedScen
             }
 
             if (indices.opacity >= 0) {
-                const float opacity = glm::clamp(Sigmoid(readValueFast(indices.opacity)), 0.01f, 1.0f);
+                const float opacity = Sigmoid(readValueFast(indices.opacity));
                 vertex.splatParams.y = opacity;
                 gaussian.positionOpacity.w = opacity;
             } else {
@@ -1465,11 +1464,13 @@ bool Scene::PrepareParsedScene()
                 vertex.position = ApplyGaussianImportTransform(vertex.position);
                 vertex.normal = NormalizeGaussianScaleForScene(vertex.normal, gaussianSceneRadius);
                 vertex.splatParams.x = (vertex.normal.x + vertex.normal.y + vertex.normal.z) / 3.0f;
-                vertex.splatParams.y = glm::clamp(vertex.splatParams.y, 0.05f, 1.0f);
+                vertex.splatParams.y = glm::clamp(vertex.splatParams.y, 0.0f, 1.0f);
                 if (gaussianIndex < sceneData.gaussians.size()) {
                     sceneData.gaussians[gaussianIndex].positionOpacity =
                         glm::vec4(ApplyGaussianImportTransform(glm::vec3(sceneData.gaussians[gaussianIndex].positionOpacity)),
                             sceneData.gaussians[gaussianIndex].positionOpacity.w);
+                    sceneData.gaussians[gaussianIndex].rotation =
+                        ApplyGaussianImportTransform(sceneData.gaussians[gaussianIndex].rotation);
                     sceneData.gaussians[gaussianIndex].scale =
                         glm::vec4(NormalizeGaussianScaleForScene(glm::vec3(sceneData.gaussians[gaussianIndex].scale), gaussianSceneRadius), 1.0f);
                     sceneData.gaussians[gaussianIndex].positionOpacity.w = vertex.splatParams.y;

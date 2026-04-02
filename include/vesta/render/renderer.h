@@ -156,11 +156,9 @@ struct RendererSettings {
     uint32_t maxUploadBytesPerFrame{ 4u * 1024u * 1024u };
     uint32_t maxTextureUploadBytesPerFrame{ 8u * 1024u * 1024u };
     float distanceCullScale{ 6.0f };
-    float gaussianPointSize{ 8.0f };
-    float gaussianOpacity{ 0.35f };
-    float gaussianAlphaCutoff{ 0.001f };
+    float gaussianOpacity{ 1.0f };
     float gaussianMix{ 0.28f };
-    uint32_t gaussianShDegree{ 3 };
+    uint32_t gaussianShDegree{ 0 };
     bool gaussianViewDependentColor{ true };
     bool gaussianAntialiasing{ true };
     bool gaussianFastCulling{ true };

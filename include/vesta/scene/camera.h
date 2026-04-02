@@ -12,6 +12,8 @@ class Camera {
 public:
     void SetViewport(uint32_t width, uint32_t height);
     void Focus(glm::vec3 center, float radius);
+    void SetPosition(glm::vec3 position);
+    void SetRotationDegrees(glm::vec3 rotationDegrees);
     void HandleEvent(const SDL_Event& event);
     void Update(float deltaSeconds);
     [[nodiscard]] bool ConsumeMoved();
@@ -21,17 +23,19 @@ public:
     [[nodiscard]] glm::mat4 GetViewProjection() const;
     [[nodiscard]] glm::mat4 GetInverseViewProjection() const;
     [[nodiscard]] glm::vec3 GetPosition() const { return _position; }
+    [[nodiscard]] glm::vec3 GetRotationDegrees() const { return { _yawDegrees, _pitchDegrees, _rollDegrees }; }
     [[nodiscard]] glm::vec3 GetForward() const;
     [[nodiscard]] glm::vec3 GetUp() const { return _up; }
 
 private:
-    void UpdateDirectionFromAngles();
+    void UpdateOrientationFromAngles();
 
     glm::vec3 _position{ 0.0f, 1.5f, 5.0f };
     glm::vec3 _forward{ 0.0f, 0.0f, -1.0f };
     glm::vec3 _up{ 0.0f, 1.0f, 0.0f };
     float _yawDegrees{ -90.0f };
     float _pitchDegrees{ 0.0f };
+    float _rollDegrees{ 0.0f };
     float _fovDegrees{ 60.0f };
     float _aspectRatio{ 16.0f / 9.0f };
     float _nearPlane{ 0.05f };
