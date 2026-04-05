@@ -266,6 +266,8 @@ struct RestirStats {
     bool temporalReusePassAvailable{ false };
     bool spatialReusePassAvailable{ false };
     bool lightingResolveAvailable{ false };
+    bool giResolveAvailable{ false };
+    bool ptResolveAvailable{ false };
     bool giCandidatePassAvailable{ false };
     bool ptCandidatePassAvailable{ false };
     bool giReservoirBackendAvailable{ false };

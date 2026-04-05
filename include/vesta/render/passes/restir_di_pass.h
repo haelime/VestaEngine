@@ -8,8 +8,7 @@
 namespace vesta::render {
 // Lightweight ReSTIR candidate pass. It writes deterministic DI/GI/PT
 // current/history reservoir records for profiler, resource-inspector, and
-// resolve integration. DI has a lighting resolve; GI/PT shading resolves remain
-// a separate backend step.
+// screen-space DI/GI/PT resolve integration.
 class RestirDiPass final : public IRenderPass {
 public:
     void SetReservoirBuffers(BufferHandle current, BufferHandle history);

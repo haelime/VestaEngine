@@ -14,6 +14,7 @@ public:
     void SetInputs(GraphTextureHandle albedo, GraphTextureHandle normal, GraphTextureHandle material, GraphTextureHandle depth);
     void SetOutput(GraphTextureHandle output);
     void SetReservoirBuffer(BufferHandle reservoir);
+    void SetReservoirBuffers(BufferHandle diReservoir, BufferHandle giReservoir, BufferHandle ptReservoir);
     void SetCamera(const Camera* camera);
     void SetLight(glm::vec4 lightDirectionAndIntensity);
     void SetLightColors(glm::vec4 directional, glm::vec4 point, glm::vec4 spot, glm::vec4 area);
@@ -46,6 +47,8 @@ private:
     GraphTextureHandle _depth{};
     GraphTextureHandle _output{};
     BufferHandle _reservoir{};
+    BufferHandle _giReservoir{};
+    BufferHandle _ptReservoir{};
     BufferHandle _resolveConstantsBuffer{};
     const Camera* _camera{ nullptr };
     uint32_t _frameIndex{ 0 };

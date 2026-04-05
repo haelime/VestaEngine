@@ -19,6 +19,7 @@ struct RestirDiResolvePushConstants {
     glm::uvec4 dispatchParams{ 1u, 1u, 1u, 1u };
     glm::uvec4 lightParams{ 1u, 1u, 0u, 0u };
     glm::uvec4 reuseParams{ 0u, 1u, 0u, 0u };
+    glm::uvec4 resolveParams{ kInvalidResourceIndex, kInvalidResourceIndex, kInvalidResourceIndex, 0u };
 };
 
 static_assert(sizeof(RestirDiResolvePushConstants) <= 128, "ReSTIR resolve push constants must stay compact.");
@@ -64,7 +65,14 @@ void RestirDiResolvePass::SetOutput(GraphTextureHandle output)
 
 void RestirDiResolvePass::SetReservoirBuffer(BufferHandle reservoir)
 {
-    _reservoir = reservoir;
+    SetReservoirBuffers(reservoir, {}, {});
+}
+
+void RestirDiResolvePass::SetReservoirBuffers(BufferHandle diReservoir, BufferHandle giReservoir, BufferHandle ptReservoir)
+{
+    _reservoir = diReservoir;
+    _giReservoir = giReservoir;
+    _ptReservoir = ptReservoir;
 }
 
 void RestirDiResolvePass::SetCamera(const Camera* camera)
@@ -199,7 +207,8 @@ void RestirDiResolvePass::Setup(RenderGraphBuilder& builder)
 
 void RestirDiResolvePass::Execute(const RenderGraphContext& context)
 {
-    if (_pipeline == VK_NULL_HANDLE || !_reservoir || !_resolveConstantsBuffer || _camera == nullptr) {
+    if (_pipeline == VK_NULL_HANDLE || (!_reservoir && !_giReservoir && !_ptReservoir) || !_resolveConstantsBuffer
+        || _camera == nullptr) {
         ClearResolveOutput(context, _output);
         return;
     }
@@ -233,14 +242,22 @@ void RestirDiResolvePass::Execute(const RenderGraphContext& context)
     const ImageHandle materialHandle = context.GetTextureHandle(_material);
     const ImageHandle depthHandle = context.GetTextureHandle(_depth);
     const ImageHandle outputHandle = context.GetTextureHandle(_output);
-    const AllocatedBuffer& reservoirBuffer = context.GetDevice().GetBufferResource(_reservoir);
+    const uint32_t diReservoirIndex = _reservoir
+        ? context.GetDevice().GetBufferResource(_reservoir).bindless.storageBuffer
+        : kInvalidResourceIndex;
+    const uint32_t giReservoirIndex = _giReservoir
+        ? context.GetDevice().GetBufferResource(_giReservoir).bindless.storageBuffer
+        : kInvalidResourceIndex;
+    const uint32_t ptReservoirIndex = _ptReservoir
+        ? context.GetDevice().GetBufferResource(_ptReservoir).bindless.storageBuffer
+        : kInvalidResourceIndex;
     const RestirDiResolvePushConstants pushConstants{
         .imageIndices = glm::uvec4(context.GetDevice().GetImageResource(albedoHandle).bindless.storageImage,
             context.GetDevice().GetImageResource(normalHandle).bindless.storageImage,
             context.GetDevice().GetImageResource(materialHandle).bindless.storageImage,
             context.GetDevice().GetImageResource(depthHandle).bindless.sampledImage),
         .outputIndices = glm::uvec4(context.GetDevice().GetImageResource(outputHandle).bindless.storageImage,
-            reservoirBuffer.bindless.storageBuffer,
+            diReservoirIndex,
             constantsBuffer.bindless.storageBuffer,
             _frameIndex),
         .dispatchParams = glm::uvec4(context.GetTextureExtent(_output).width,
@@ -252,6 +269,10 @@ void RestirDiResolvePass::Execute(const RenderGraphContext& context)
             _emissiveTriangleCount,
             (_pointLightEnabled ? 1u : 0u) | (_spotLightEnabled ? 2u : 0u) | (_areaLightEnabled ? 4u : 0u)),
         .reuseParams = glm::uvec4(_spatialSamples, _spatialReuse ? 1u : 0u, 0u, 0u),
+        .resolveParams = glm::uvec4(diReservoirIndex,
+            giReservoirIndex,
+            ptReservoirIndex,
+            (_reservoir ? 1u : 0u) | (_giReservoir ? 2u : 0u) | (_ptReservoir ? 4u : 0u)),
     };
 
     VkCommandBuffer commandBuffer = context.GetCommandBuffer();
