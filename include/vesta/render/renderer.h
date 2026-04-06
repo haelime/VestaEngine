@@ -896,7 +896,7 @@ private:
     [[nodiscard]] RegisteredPassEntry* FindPassEntry(std::string_view id);
     [[nodiscard]] const RegisteredPassEntry* FindPassEntry(std::string_view id) const;
     void CreateIblBrdfLut();
-    void CreateEnvironmentCubemapAtlas(std::span<const float> rgbaPixels, uint32_t width, uint32_t height);
+    void CreateEnvironmentCubemapImage(std::span<const float> rgbaPixels, uint32_t width, uint32_t height);
     void CreateDiffuseIrradianceEquirect(std::span<const float> rgbaPixels, uint32_t width, uint32_t height);
     void CreateSpecularPrefilterEquirectAtlas(std::span<const float> rgbaPixels, uint32_t width, uint32_t height);
     void DestroyIblResources();

@@ -80,6 +80,7 @@ struct ImageDesc {
     VmaMemoryUsage memoryUsage{ VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE };
     uint32_t mipLevels{ 1 };
     uint32_t arrayLayers{ 1 };
+    bool cubeCompatible{ false };
     bool registerBindlessSampled{ false };
     bool registerBindlessStorage{ false };
     std::string debugName;

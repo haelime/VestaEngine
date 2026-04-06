@@ -369,6 +369,9 @@ ImageHandle RenderDevice::CreateImage(const ImageDesc& desc)
     VkImageCreateInfo imageInfo = vkinit::image_create_info(desc.format, desc.usage, desc.extent);
     imageInfo.mipLevels = desc.mipLevels;
     imageInfo.arrayLayers = desc.arrayLayers;
+    if (desc.cubeCompatible) {
+        imageInfo.flags |= VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
+    }
     imageInfo.initialLayout = desc.initialLayout;
     std::array<uint32_t, 2> queueFamilies{ _graphicsQueueFamily, _transferQueueFamily };
     if (_transferQueue != VK_NULL_HANDLE && _transferQueueFamily != _graphicsQueueFamily) {
@@ -383,6 +386,11 @@ ImageHandle RenderDevice::CreateImage(const ImageDesc& desc)
     VK_CHECK(vmaCreateImage(_allocator, &imageInfo, &allocInfo, &image.image, &image.allocation, &image.allocationInfo));
 
     VkImageViewCreateInfo viewInfo = vkinit::imageview_create_info(desc.format, image.image, desc.aspectFlags);
+    if (desc.cubeCompatible) {
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_CUBE;
+    } else if (desc.arrayLayers > 1u) {
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+    }
     viewInfo.subresourceRange.levelCount = desc.mipLevels;
     viewInfo.subresourceRange.layerCount = desc.arrayLayers;
     VK_CHECK(vkCreateImageView(_device, &viewInfo, nullptr, &image.defaultView));
@@ -664,7 +672,8 @@ void RenderDevice::UploadImageData(ImageHandle destination, std::span<const std:
     _uploadBatchStats.pendingCopies = 1;
 
     ImmediateSubmit([&](VkCommandBuffer commandBuffer) {
-        const VkImageSubresourceRange colorRange = vkutil::make_image_subresource_range(VK_IMAGE_ASPECT_COLOR_BIT);
+        const VkImageSubresourceRange colorRange =
+            vkutil::make_image_subresource_range(VK_IMAGE_ASPECT_COLOR_BIT, image.desc.mipLevels, image.desc.arrayLayers);
         vkutil::transition_image(commandBuffer,
             image.image,
             VK_IMAGE_LAYOUT_UNDEFINED,
@@ -678,7 +687,7 @@ void RenderDevice::UploadImageData(ImageHandle destination, std::span<const std:
         VkBufferImageCopy copyRegion{};
         copyRegion.bufferOffset = 0;
         copyRegion.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        copyRegion.imageSubresource.layerCount = 1;
+        copyRegion.imageSubresource.layerCount = image.desc.arrayLayers;
         copyRegion.imageExtent = image.desc.extent;
         vkCmdCopyBufferToImage(
             commandBuffer, GetBuffer(_uploadContext.stagingBuffer), image.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyRegion);

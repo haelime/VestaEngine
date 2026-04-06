@@ -1975,7 +1975,7 @@ void VestaEngine::finish_benchmark()
     if (iblStats.environmentMapUploaded) {
         iblBackendLabel = "EquirectSampling";
         if (iblStats.environmentCubemapAvailable) {
-            iblBackendLabel += "+CubemapAtlas";
+            iblBackendLabel += "+CubeImage";
         }
         if (iblStats.diffuseIrradianceAvailable) {
             iblBackendLabel += "+DiffuseIrradiance";
@@ -4686,12 +4686,12 @@ void VestaEngine::build_debug_ui()
                         MiB(iblStats.estimatedSpecularBytes),
                         MiB(iblStats.estimatedBrdfLutBytes));
                     ImGui::Text("Cube %s  Diffuse %s  Prefilter %s  BRDF LUT %s",
-                        iblStats.environmentCubemapAvailable ? "atlas" : (iblStats.environmentMapUploaded ? "staged" : "procedural fallback"),
+                        iblStats.environmentCubemapAvailable ? "cube image" : (iblStats.environmentMapUploaded ? "staged" : "procedural fallback"),
                         iblStats.diffuseIrradianceAvailable ? "irradiance texture" : (iblStats.environmentMapUploaded ? "equirect sample" : (iblStats.diffuseBackendAvailable ? "procedural live" : "staged")),
                         iblStats.specularPrefilterAvailable ? "prefilter atlas" : "staged",
                         iblStats.brdfLutAvailable ? "live" : "staged");
                     ImGui::TextDisabled(iblStats.environmentMapUploaded
-                        ? "External HDRI is sampled directly, converted into a cubemap atlas, and convolved into diffuse irradiance plus a roughness-sliced specular prefilter atlas."
+                        ? "External HDRI is sampled directly, converted into a Vulkan cube image, and convolved into diffuse irradiance plus a roughness-sliced specular prefilter atlas."
                         : "Procedural sky is live; external HDRI irradiance/prefilter generation is available after an HDRI is loaded.");
                     ImGui::EndTabItem();
                 }
@@ -4882,17 +4882,17 @@ void VestaEngine::build_debug_ui()
                 .previewable = static_cast<bool>(_renderer.GetExternalEnvironmentImage()),
             });
             engineTextures.push_back(EngineTextureRow{
-                .name = "Environment Cubemap Atlas",
+                .name = "Environment Cubemap",
                 .image = _renderer.GetIblEnvironmentCubemapImage(),
                 .resolution = iblStats.environmentCubemapAvailable
-                    ? fmt::format("{}x{} atlas", iblStats.environmentCubemapResolution * 3u, iblStats.environmentCubemapResolution * 2u)
+                    ? fmt::format("{}x{}x6 cube", iblStats.environmentCubemapResolution, iblStats.environmentCubemapResolution)
                     : fmt::format("{}x{}x6", iblStats.environmentCubemapResolution, iblStats.environmentCubemapResolution),
                 .format = "RGBA32F",
-                .usage = "sampled cubemap conversion atlas",
+                .usage = "sampled cubemap conversion image",
                 .memoryBytes = iblStats.estimatedEnvironmentCubemapBytes,
                 .bindlessIndex = _renderer.GetIblEnvironmentCubemapSampledImageIndex(),
                 .state = iblStats.environmentCubemapAvailable ? "live" : "staged",
-                .previewable = static_cast<bool>(_renderer.GetIblEnvironmentCubemapImage()),
+                .previewable = false,
             });
             engineTextures.push_back(EngineTextureRow{
                 .name = "IBL BRDF LUT",
