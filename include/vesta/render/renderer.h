@@ -295,6 +295,7 @@ struct DdgiStats {
     bool probeCompositeAvailable{ false };
     bool storageCompositeAvailable{ false };
     bool momentValidationAvailable{ false };
+    bool spatialFilteringAvailable{ false };
     bool rayUpdateAvailable{ false };
     bool temporalBlendAvailable{ false };
     bool overlayEnabled{ false };

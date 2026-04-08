@@ -424,8 +424,42 @@ vec3 sampleDdgiStoredIrradiance(
     }
 
     float normalWeight = mix(0.55, 1.0, clamp(normal.y * 0.5 + 0.5, 0.0, 1.0));
-    vec3 stored = max(storedIrradiance.rgb, vec3(0.0)) * confidence * normalWeight;
-    return mix(fallback, stored, 0.82);
+    vec3 filtered = max(storedIrradiance.rgb, vec3(0.0)) * confidence;
+    float filterWeight = max(confidence, 0.05);
+    const ivec3 offsets[6] = ivec3[](
+        ivec3(1, 0, 0),
+        ivec3(-1, 0, 0),
+        ivec3(0, 1, 0),
+        ivec3(0, -1, 0),
+        ivec3(0, 0, 1),
+        ivec3(0, 0, -1));
+    for (uint offsetIndex = 0u; offsetIndex < 6u; ++offsetIndex) {
+        ivec3 neighborProbe = clamp(probe + offsets[offsetIndex], ivec3(0), ivec3(grid) - ivec3(1));
+        if (all(equal(neighborProbe, probe))) {
+            continue;
+        }
+        uint neighborIndex = ddgiProbeIndex(neighborProbe, grid);
+        vec4 neighborIrradiance = storageBuffersVec4[nonuniformEXT(int(constants.ddgiBufferIndices.x))].values[neighborIndex];
+        if (neighborIrradiance.a <= 0.0) {
+            continue;
+        }
+        vec3 neighborPosition = ddgiProbePosition(neighborProbe, grid, constants.ddgiParams.x);
+        float neighborConfidence = 1.0;
+        if (constants.ddgiBufferIndices.y != INVALID_BUFFER_INDEX) {
+            vec4 neighborVisibility = storageBuffersVec4[nonuniformEXT(int(constants.ddgiBufferIndices.y))].values[neighborIndex];
+            neighborConfidence = evaluateDdgiVisibilityMoment(neighborVisibility, neighborPosition, worldPosition, constants.ddgiParams.x)
+                * clamp(neighborVisibility.a, 0.0, 1.0);
+        }
+        vec3 toNeighbor = worldPosition - neighborPosition;
+        float distanceWeight = smoothstep(constants.ddgiParams.x * 2.75, 0.0, length(toNeighbor));
+        float directionWeight = length(toNeighbor) > 1.0e-4 ? mix(0.35, 1.0, max(dot(normal, normalize(toNeighbor)), 0.0)) : 1.0;
+        float weight = neighborConfidence * distanceWeight * directionWeight * 0.35;
+        filtered += max(neighborIrradiance.rgb, vec3(0.0)) * weight;
+        filterWeight += weight;
+    }
+
+    vec3 stored = (filtered / max(filterWeight, 1.0e-4)) * normalWeight;
+    return mix(fallback, stored, 0.84);
 }
 
 vec3 computeDdgiProbeIrradiance(DeferredLightingConstants constants, ivec3 probe, uvec3 grid, vec3 worldPosition, vec3 normal)
