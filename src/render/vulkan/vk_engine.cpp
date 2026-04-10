@@ -72,6 +72,8 @@ void VestaEngine::init()
         _windowExtent.height,
         window_flags);
 
+    // The renderer owns Vulkan. The engine layer only orchestrates windowing,
+    // input, and debug UI around it.
     init_renderer();
     init_imgui();
 
@@ -105,6 +107,8 @@ void VestaEngine::cleanup()
 
 void VestaEngine::draw(float deltaSeconds)
 {
+    // Build ImGui before rendering the frame so its draw data is ready when the
+    // renderer records the overlay callback near the end of command recording.
     _renderer.Update(deltaSeconds);
     begin_imgui_frame(deltaSeconds);
     _renderer.RenderFrame();
@@ -146,6 +150,8 @@ void VestaEngine::run()
                 continue;
             }
 
+            // ImGui gets first chance at the event. Only forward it to the
+            // renderer when the UI is not actively capturing that input stream.
             if (should_forward_event_to_renderer(e)) {
                 _renderer.HandleEvent(e);
             }
@@ -171,6 +177,8 @@ void VestaEngine::init_imgui()
 {
     auto& device = _renderer.GetRenderDevice();
 
+    // ImGui needs its own descriptor pool because the backend allocates font and
+    // UI resources independently from the renderer's bindless heap.
     constexpr std::array<VkDescriptorPoolSize, 1> poolSizes{
         VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 256 },
     };
@@ -237,6 +245,8 @@ void VestaEngine::init_imgui()
     initInfo.CheckVkResultFn = CheckImGuiVkResult;
     ImGui_ImplVulkan_Init(&initInfo);
 
+    // The renderer exposes a late overlay hook so the engine can keep ImGui
+    // ownership without making the renderer depend on ImGui types.
     _renderer.SetOverlayCallbacks(
         [this](VkCommandBuffer commandBuffer) {
             if (!_imguiInitialized) {

@@ -1,5 +1,7 @@
 #include <vesta/render/vulkan/vk_descriptors.h>
 
+// These helpers are intentionally thin wrappers. They keep sample code short
+// while still mapping almost one-to-one onto Vulkan descriptor concepts.
 VkDescriptorSetLayout vkutil::create_descriptor_set_layout(VkDevice device,
     std::span<const VkDescriptorSetLayoutBinding> bindings,
     std::span<const VkDescriptorBindingFlags> bindingFlags)

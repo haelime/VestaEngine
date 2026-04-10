@@ -18,6 +18,8 @@
 
 namespace vesta::render {
 namespace {
+// The compute backend writes straight into a storage image and brute-forces the
+// flattened triangle buffer. It stays in the project as a readable fallback path.
 struct ComputePathTracePushConstants {
     glm::mat4 inverseViewProjection{ 1.0f };
     glm::vec4 cameraPositionAndFrame{ 0.0f };
@@ -43,6 +45,8 @@ uint32_t AlignUp(uint32_t value, uint32_t alignment)
 
 void ClearOutput(const RenderGraphContext& context, GraphTextureHandle output)
 {
+    // Clearing disabled paths keeps the composite pass simple because every
+    // input image still contains valid data even when a pass is effectively off.
     VkClearColorValue clearValue{};
     clearValue.float32[3] = 1.0f;
     const VkImageSubresourceRange clearRange = vkutil::make_image_subresource_range(VK_IMAGE_ASPECT_COLOR_BIT);
@@ -229,6 +233,8 @@ void PathTracerPass::Initialize(RenderDevice& device)
     });
 
     AllocatedBuffer sbtBuffer = device.GetBufferResource(_shaderBindingTable);
+    // Shader group handles are copied into one Shader Binding Table buffer.
+    // Each region later points at the portion used for raygen/miss/hit groups.
     auto* mappedSbt = static_cast<std::byte*>(sbtBuffer.allocationInfo.pMappedData);
     for (uint32_t groupIndex = 0; groupIndex < groupCount; ++groupIndex) {
         std::memcpy(mappedSbt + static_cast<size_t>(groupStride) * groupIndex,
@@ -252,6 +258,8 @@ void PathTracerPass::Execute(const RenderGraphContext& context)
 {
     _activeBackend = PathTraceBackend::Compute;
 
+    // Empty output is still preferable to leaving stale accumulation around when
+    // the pass is disabled or the scene has not finished loading.
     if (!_enabled || _scene == nullptr || _camera == nullptr || !_scene->IsLoaded() || !_scene->GetTriangleBuffer()) {
         ClearOutput(context, _output);
         return;
@@ -294,6 +302,8 @@ void PathTracerPass::Execute(const RenderGraphContext& context)
         writes[0].descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
         writes[1] =
             vkinit::write_descriptor_image(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, rtDescriptorSet, &outputImageInfo, 1);
+        // The output storage image changes with the graph each frame, so the RT
+        // descriptor set is updated per frame slot before tracing.
         vkUpdateDescriptorSets(context.GetDevice().GetDevice(), static_cast<uint32_t>(writes.size()), writes.data(), 0, nullptr);
 
         VkCommandBuffer commandBuffer = context.GetCommandBuffer();
@@ -351,6 +361,7 @@ void PathTracerPass::Execute(const RenderGraphContext& context)
     vkCmdPushConstants(
         commandBuffer, _pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ComputePathTracePushConstants), &pushConstants);
 
+    // Compute backend traces one 8x8 tile per workgroup.
     const VkExtent3D outputExtent = context.GetTextureExtent(_output);
     vkCmdDispatch(commandBuffer, (outputExtent.width + 7) / 8, (outputExtent.height + 7) / 8, 1);
 }

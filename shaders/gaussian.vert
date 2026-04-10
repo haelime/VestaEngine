@@ -1,5 +1,7 @@
 #version 460
 
+// Expands each input vertex into a screen-space point sprite.
+
 layout(location = 0) in vec3 inPosition;
 layout(location = 2) in vec4 inColor;
 

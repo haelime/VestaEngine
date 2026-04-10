@@ -1,6 +1,8 @@
 #version 460
 #extension GL_EXT_ray_tracing : require
 
+// Miss shader returns a simple sky gradient when no triangle was hit.
+
 layout(location = 0) rayPayloadInEXT vec3 payloadColor;
 
 void main() {

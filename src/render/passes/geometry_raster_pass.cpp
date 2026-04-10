@@ -11,6 +11,8 @@
 
 namespace vesta::render {
 namespace {
+// Geometry pass only needs a camera matrix because all mesh data already lives
+// in world space after Scene::LoadFromFile flattens the node hierarchy.
 struct GeometryPushConstants {
     glm::mat4 viewProjection{ 1.0f };
 };
@@ -53,6 +55,8 @@ void GeometryRasterPass::Initialize(RenderDevice& device)
     };
     _pipelineLayout = vkutil::create_pipeline_layout(vkDevice, descriptorSetLayouts, pushConstants);
 
+    // Vertex input matches SceneVertex exactly. The pass writes albedo and normal
+    // into separate targets so later passes can choose how to consume them.
     VkVertexInputBindingDescription binding{};
     binding.binding = 0;
     binding.stride = sizeof(vesta::scene::SceneVertex);
@@ -174,6 +178,8 @@ void GeometryRasterPass::Execute(const RenderGraphContext& context)
         vkCmdBindVertexBuffers(commandBuffer, 0, 1, &vertexBuffer, &vertexOffset);
         vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
+        // Keeping surfaces separate leaves room for future material/state splits
+        // even though the current sample shades them with one simple material path.
         for (const vesta::scene::SceneSurface& surface : _scene->GetSurfaces()) {
             vkCmdDrawIndexed(commandBuffer, surface.indexCount, 1, surface.firstIndex, 0, 0);
         }

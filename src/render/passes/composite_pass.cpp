@@ -9,6 +9,8 @@
 
 namespace vesta::render {
 namespace {
+// mode selects which intermediate result to visualize. params.x is currently
+// used for gaussian blending strength in composite mode.
 struct CompositePushConstants {
     uint32_t deferredImageIndex{ 0 };
     uint32_t pathTraceImageIndex{ 0 };
@@ -130,6 +132,7 @@ void CompositePass::Execute(const RenderGraphContext& context)
         commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _pipelineLayout, 0, 1, &bindlessSet, 0, nullptr);
     vkCmdPushConstants(
         commandBuffer, _pipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(CompositePushConstants), &pushConstants);
+    // The full-screen triangle covers the entire frame without needing a vertex buffer.
     vkCmdDraw(commandBuffer, 3, 1, 0, 0);
 
     vkCmdEndRendering(commandBuffer);

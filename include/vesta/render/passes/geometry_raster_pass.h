@@ -9,6 +9,8 @@ class Scene;
 }
 
 namespace vesta::render {
+// First pass of the frame. It rasterizes scene meshes into GBuffer targets so
+// later passes can light or debug the scene without re-drawing geometry.
 class GeometryRasterPass final : public IRenderPass {
 public:
     void SetTargets(GraphTextureHandle albedo, GraphTextureHandle normal, GraphTextureHandle depth);

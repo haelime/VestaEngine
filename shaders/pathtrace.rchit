@@ -2,6 +2,9 @@
 #extension GL_EXT_ray_tracing : require
 #extension GL_EXT_nonuniform_qualifier : enable
 
+// Closest-hit shader shades the hit triangle using the same simple lighting
+// idea as the compute fallback so both backends stay visually comparable.
+
 struct Triangle {
     vec4 p0;
     vec4 p1;

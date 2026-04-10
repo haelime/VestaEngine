@@ -6,6 +6,8 @@
 
 union SDL_Event;
 
+// Simple fly camera used by all passes. Keeping one shared camera guarantees
+// that raster, splat, and path tracing views line up exactly.
 class Camera {
 public:
     void SetViewport(uint32_t width, uint32_t height);

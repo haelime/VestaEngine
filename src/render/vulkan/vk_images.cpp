@@ -2,6 +2,8 @@
 
 #include <vesta/render/vulkan/vk_initializers.h>
 
+// Centralizing layout transitions helps the rest of the renderer stay focused
+// on pass logic instead of repeating barrier setup everywhere.
 VkImageSubresourceRange vkutil::make_image_subresource_range(
     VkImageAspectFlags aspectMask, uint32_t mipLevels, uint32_t layers)
 {
