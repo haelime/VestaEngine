@@ -16,23 +16,49 @@ layout(push_constant) uniform CompositePushConstants {
 
 layout(location = 0) out vec4 outColor;
 
+const uint INVALID_IMAGE_INDEX = 0xffffffffu;
+
 vec3 tonemap(vec3 value) {
     return value / (value + vec3(1.0));
 }
 
+bool hasImage(uint index) {
+    return index != INVALID_IMAGE_INDEX;
+}
+
 void main() {
     ivec2 pixel = ivec2(gl_FragCoord.xy);
-    ivec2 deferredSize = imageSize(storageImages[nonuniformEXT(int(pc.deferredImageIndex))]);
-    ivec2 pathTraceSize = imageSize(storageImages[nonuniformEXT(int(pc.pathTraceImageIndex))]);
-    ivec2 gaussianSize = imageSize(storageImages[nonuniformEXT(int(pc.gaussianImageIndex))]);
-    vec2 uv = (vec2(pixel) + 0.5) / vec2(deferredSize);
+    ivec2 baseSize = ivec2(1);
+    if (hasImage(pc.deferredImageIndex)) {
+        baseSize = imageSize(storageImages[nonuniformEXT(int(pc.deferredImageIndex))]);
+    } else if (hasImage(pc.pathTraceImageIndex)) {
+        baseSize = imageSize(storageImages[nonuniformEXT(int(pc.pathTraceImageIndex))]);
+    } else if (hasImage(pc.gaussianImageIndex)) {
+        baseSize = imageSize(storageImages[nonuniformEXT(int(pc.gaussianImageIndex))]);
+    }
 
-    ivec2 pathTracePixel = clamp(ivec2(uv * vec2(pathTraceSize)), ivec2(0), pathTraceSize - ivec2(1));
-    ivec2 gaussianPixel = clamp(ivec2(uv * vec2(gaussianSize)), ivec2(0), gaussianSize - ivec2(1));
+    vec2 uv = (vec2(pixel) + 0.5) / vec2(baseSize);
 
-    vec3 deferredColor = imageLoad(storageImages[nonuniformEXT(int(pc.deferredImageIndex))], clamp(pixel, ivec2(0), deferredSize - ivec2(1))).rgb;
-    vec3 pathTraceColor = imageLoad(storageImages[nonuniformEXT(int(pc.pathTraceImageIndex))], pathTracePixel).rgb;
-    vec4 gaussianColor = imageLoad(storageImages[nonuniformEXT(int(pc.gaussianImageIndex))], gaussianPixel);
+    vec3 deferredColor = vec3(0.0);
+    if (hasImage(pc.deferredImageIndex)) {
+        ivec2 deferredSize = imageSize(storageImages[nonuniformEXT(int(pc.deferredImageIndex))]);
+        ivec2 deferredPixel = clamp(pixel, ivec2(0), deferredSize - ivec2(1));
+        deferredColor = imageLoad(storageImages[nonuniformEXT(int(pc.deferredImageIndex))], deferredPixel).rgb;
+    }
+
+    vec3 pathTraceColor = vec3(0.0);
+    if (hasImage(pc.pathTraceImageIndex)) {
+        ivec2 pathTraceSize = imageSize(storageImages[nonuniformEXT(int(pc.pathTraceImageIndex))]);
+        ivec2 pathTracePixel = clamp(ivec2(uv * vec2(pathTraceSize)), ivec2(0), pathTraceSize - ivec2(1));
+        pathTraceColor = imageLoad(storageImages[nonuniformEXT(int(pc.pathTraceImageIndex))], pathTracePixel).rgb;
+    }
+
+    vec4 gaussianColor = vec4(0.0);
+    if (hasImage(pc.gaussianImageIndex)) {
+        ivec2 gaussianSize = imageSize(storageImages[nonuniformEXT(int(pc.gaussianImageIndex))]);
+        ivec2 gaussianPixel = clamp(ivec2(uv * vec2(gaussianSize)), ivec2(0), gaussianSize - ivec2(1));
+        gaussianColor = imageLoad(storageImages[nonuniformEXT(int(pc.gaussianImageIndex))], gaussianPixel);
+    }
 
     vec3 composite = deferredColor;
     if (pc.mode == 1u) {

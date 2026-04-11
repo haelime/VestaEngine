@@ -9,6 +9,8 @@
 
 namespace vesta::render {
 namespace {
+constexpr uint32_t kInvalidImageIndex = kInvalidResourceIndex;
+
 // mode selects which intermediate result to visualize. params.x is currently
 // used for gaussian blending strength in composite mode.
 struct CompositePushConstants {
@@ -70,9 +72,15 @@ void CompositePass::Initialize(RenderDevice& device)
 
 void CompositePass::Setup(RenderGraphBuilder& builder)
 {
-    builder.Read(_deferredLighting, ResourceUsage::StorageRead);
-    builder.Read(_pathTrace, ResourceUsage::StorageRead);
-    builder.Read(_gaussian, ResourceUsage::StorageRead);
+    if (_deferredLighting) {
+        builder.Read(_deferredLighting, ResourceUsage::StorageRead);
+    }
+    if (_pathTrace) {
+        builder.Read(_pathTrace, ResourceUsage::StorageRead);
+    }
+    if (_gaussian) {
+        builder.Read(_gaussian, ResourceUsage::StorageRead);
+    }
     builder.Write(_output, ResourceUsage::ColorAttachmentWrite);
 }
 
@@ -82,17 +90,26 @@ void CompositePass::Execute(const RenderGraphContext& context)
         return;
     }
 
-    const ImageHandle deferredHandle = context.GetTextureHandle(_deferredLighting);
-    const ImageHandle pathTraceHandle = context.GetTextureHandle(_pathTrace);
-    const ImageHandle gaussianHandle = context.GetTextureHandle(_gaussian);
-
     CompositePushConstants pushConstants{
-        .deferredImageIndex = context.GetDevice().GetImageResource(deferredHandle).bindless.storageImage,
-        .pathTraceImageIndex = context.GetDevice().GetImageResource(pathTraceHandle).bindless.storageImage,
-        .gaussianImageIndex = context.GetDevice().GetImageResource(gaussianHandle).bindless.storageImage,
+        .deferredImageIndex = kInvalidImageIndex,
+        .pathTraceImageIndex = kInvalidImageIndex,
+        .gaussianImageIndex = kInvalidImageIndex,
         .mode = _mode,
         .params = glm::vec4(_gaussianMix, 0.0f, 0.0f, 0.0f),
     };
+
+    if (_deferredLighting) {
+        const ImageHandle deferredHandle = context.GetTextureHandle(_deferredLighting);
+        pushConstants.deferredImageIndex = context.GetDevice().GetImageResource(deferredHandle).bindless.storageImage;
+    }
+    if (_pathTrace) {
+        const ImageHandle pathTraceHandle = context.GetTextureHandle(_pathTrace);
+        pushConstants.pathTraceImageIndex = context.GetDevice().GetImageResource(pathTraceHandle).bindless.storageImage;
+    }
+    if (_gaussian) {
+        const ImageHandle gaussianHandle = context.GetTextureHandle(_gaussian);
+        pushConstants.gaussianImageIndex = context.GetDevice().GetImageResource(gaussianHandle).bindless.storageImage;
+    }
 
     VkClearValue clearValue{};
     clearValue.color = { { 0.02f, 0.02f, 0.03f, 1.0f } };

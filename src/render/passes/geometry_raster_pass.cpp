@@ -35,6 +35,11 @@ void GeometryRasterPass::SetCamera(const Camera* camera)
     _camera = camera;
 }
 
+void GeometryRasterPass::SetVisibleSurfaceIndices(const std::vector<uint32_t>* visibleSurfaceIndices)
+{
+    _visibleSurfaceIndices = visibleSurfaceIndices;
+}
+
 void GeometryRasterPass::Initialize(RenderDevice& device)
 {
     if (_pipeline != VK_NULL_HANDLE || device.GetDevice() == VK_NULL_HANDLE) {
@@ -179,9 +184,17 @@ void GeometryRasterPass::Execute(const RenderGraphContext& context)
         vkCmdBindIndexBuffer(commandBuffer, indexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
         // Keeping surfaces separate leaves room for future material/state splits
-        // even though the current sample shades them with one simple material path.
-        for (const vesta::scene::SceneSurface& surface : _scene->GetSurfaces()) {
-            vkCmdDrawIndexed(commandBuffer, surface.indexCount, 1, surface.firstIndex, 0, 0);
+        // and for CPU-side visibility culling to trim the draw list before it reaches Vulkan.
+        if (_visibleSurfaceIndices != nullptr) {
+            const auto& surfaces = _scene->GetSurfaces();
+            for (uint32_t surfaceIndex : *_visibleSurfaceIndices) {
+                const vesta::scene::SceneSurface& surface = surfaces.at(surfaceIndex);
+                vkCmdDrawIndexed(commandBuffer, surface.indexCount, 1, surface.firstIndex, 0, 0);
+            }
+        } else {
+            for (const vesta::scene::SceneSurface& surface : _scene->GetSurfaces()) {
+                vkCmdDrawIndexed(commandBuffer, surface.indexCount, 1, surface.firstIndex, 0, 0);
+            }
         }
     }
 
