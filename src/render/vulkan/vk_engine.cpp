@@ -1935,7 +1935,7 @@ void VestaEngine::finish_benchmark()
                << "aperture_radius,focal_distance,"
                << "avg_frame_ms,p95_frame_ms,min_frame_ms,max_frame_ms,avg_fps,frame_count,"
                << "vertices,triangles,surfaces,textures_total,textures_resident,"
-               << "bindless_sampled_images,bindless_sampled_image_capacity,bindless_storage_images,bindless_storage_image_capacity,"
+               << "bindless_sampled_images,bindless_sampled_image_capacity,bindless_sampled_cube_images,bindless_sampled_cube_image_capacity,bindless_storage_images,bindless_storage_image_capacity,"
                << "bindless_storage_buffers,bindless_storage_buffer_capacity,parse_ms,prepare_ms,"
                << "geometry_upload_ms,texture_upload_ms,blas_ms,tlas_ms,"
                << "gaussian_projected,gaussian_duplicates,gaussian_padded_duplicates,gaussian_tiles,gaussian_avg_tiles_touched,gaussian_rebuilds,"
@@ -2214,6 +2214,8 @@ void VestaEngine::finish_benchmark()
            << _renderer.GetResidentTextureCount() << ','
            << bindlessStats.sampledImagesUsed << ','
            << bindlessStats.sampledImagesCapacity << ','
+           << bindlessStats.sampledCubeImagesUsed << ','
+           << bindlessStats.sampledCubeImagesCapacity << ','
            << bindlessStats.storageImagesUsed << ','
            << bindlessStats.storageImagesCapacity << ','
            << bindlessStats.storageBuffersUsed << ','
@@ -2545,6 +2547,8 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "    \"textures_resident\": " << scene.GetResidentTextureCount() << ",\n"
            << "    \"bindless_sampled_images\": " << bindlessStats.sampledImagesUsed << ",\n"
            << "    \"bindless_sampled_image_capacity\": " << bindlessStats.sampledImagesCapacity << ",\n"
+           << "    \"bindless_sampled_cube_images\": " << bindlessStats.sampledCubeImagesUsed << ",\n"
+           << "    \"bindless_sampled_cube_image_capacity\": " << bindlessStats.sampledCubeImagesCapacity << ",\n"
            << "    \"bindless_storage_images\": " << bindlessStats.storageImagesUsed << ",\n"
            << "    \"bindless_storage_image_capacity\": " << bindlessStats.storageImagesCapacity << ",\n"
            << "    \"bindless_storage_buffers\": " << bindlessStats.storageBuffersUsed << ",\n"
@@ -3646,9 +3650,11 @@ void VestaEngine::build_debug_ui()
             ImGui::Text("Splats rendered %u", _renderer.GetOfficialGaussianDuplicateCount());
             ImGui::Text("VRAM Dedicated %u MiB", device.GetDedicatedVideoMemoryMiB());
             const auto bindlessStats = device.GetBindlessStats();
-            ImGui::Text("Bindless Srv/StorageImg/StorageBuf %u/%u  %u/%u  %u/%u",
+            ImGui::Text("Bindless Srv/Cube/StorageImg/StorageBuf %u/%u  %u/%u  %u/%u  %u/%u",
                 bindlessStats.sampledImagesUsed,
                 bindlessStats.sampledImagesCapacity,
+                bindlessStats.sampledCubeImagesUsed,
+                bindlessStats.sampledCubeImagesCapacity,
                 bindlessStats.storageImagesUsed,
                 bindlessStats.storageImagesCapacity,
                 bindlessStats.storageBuffersUsed,
@@ -4978,9 +4984,11 @@ void VestaEngine::build_debug_ui()
                         ImGui::ProgressBar(fraction, ImVec2(-1.0f, 0.0f));
                     };
                     bindlessUsageRow("Sampled Images", bindlessStats.sampledImagesUsed, bindlessStats.sampledImagesCapacity);
+                    bindlessUsageRow("Sampled Cubes", bindlessStats.sampledCubeImagesUsed, bindlessStats.sampledCubeImagesCapacity);
                     bindlessUsageRow("Storage Images", bindlessStats.storageImagesUsed, bindlessStats.storageImagesCapacity);
                     bindlessUsageRow("Storage Buffers", bindlessStats.storageBuffersUsed, bindlessStats.storageBuffersCapacity);
                     if (bindlessStats.sampledImagesUsed > bindlessStats.sampledImagesCapacity * 8u / 10u
+                        || bindlessStats.sampledCubeImagesUsed > bindlessStats.sampledCubeImagesCapacity * 8u / 10u
                         || bindlessStats.storageImagesUsed > bindlessStats.storageImagesCapacity * 8u / 10u
                         || bindlessStats.storageBuffersUsed > bindlessStats.storageBuffersCapacity * 8u / 10u) {
                         ImGui::TextColored(ImVec4(1.0f, 0.72f, 0.18f, 1.0f), "Warning: bindless heap usage is above 80%%.");
@@ -6656,6 +6664,7 @@ void VestaEngine::draw_advanced_portfolio_panel()
     const auto bindlessStats = device.GetBindlessStats();
     ImGui::Text("Textures %zu  Resident %u", scene.GetTextures().size(), _renderer.GetResidentTextureCount());
     ImGui::Text("Sampled image descriptors %u / %u", bindlessStats.sampledImagesUsed, bindlessStats.sampledImagesCapacity);
+    ImGui::Text("Sampled cube descriptors %u / %u", bindlessStats.sampledCubeImagesUsed, bindlessStats.sampledCubeImagesCapacity);
     ImGui::Text("Storage image descriptors %u / %u", bindlessStats.storageImagesUsed, bindlessStats.storageImagesCapacity);
     ImGui::Text("Storage buffer descriptors %u / %u", bindlessStats.storageBuffersUsed, bindlessStats.storageBuffersCapacity);
     ImGui::Text("Device local memory %u MiB", device.GetDedicatedVideoMemoryMiB());

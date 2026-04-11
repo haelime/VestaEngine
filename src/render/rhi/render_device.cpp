@@ -90,7 +90,7 @@ void BindlessDescriptorManager::Initialize(VkDevice device, VkSampler defaultSam
     _defaultSampler = defaultSampler;
 
     const std::array<VkDescriptorPoolSize, 3> poolSizes{
-        VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxSampledImages },
+        VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxSampledImages + kMaxSampledCubeImages },
         VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kMaxStorageImages },
         VkDescriptorPoolSize{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kMaxStorageBuffers },
     };
@@ -103,12 +103,14 @@ void BindlessDescriptorManager::Initialize(VkDevice device, VkSampler defaultSam
     poolInfo.pPoolSizes = poolSizes.data();
     VK_CHECK(vkCreateDescriptorPool(device, &poolInfo, nullptr, &_pool));
 
-    std::array<VkDescriptorSetLayoutBinding, 3> bindings{
+    std::array<VkDescriptorSetLayoutBinding, 4> bindings{
         make_bindless_binding(0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxSampledImages),
         make_bindless_binding(1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kMaxStorageImages),
         make_bindless_binding(2, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kMaxStorageBuffers),
+        make_bindless_binding(3, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, kMaxSampledCubeImages),
     };
-    std::array<VkDescriptorBindingFlags, 3> bindingFlags{
+    std::array<VkDescriptorBindingFlags, 4> bindingFlags{
+        VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
         VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
         VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
         VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT,
@@ -149,6 +151,7 @@ void BindlessDescriptorManager::Shutdown(VkDevice device)
     _set = VK_NULL_HANDLE;
     _defaultSampler = VK_NULL_HANDLE;
     _nextSampledImage = 0;
+    _nextSampledCubeImage = 0;
     _nextStorageImage = 0;
     _nextStorageBuffer = 0;
 }
@@ -171,6 +174,33 @@ uint32_t BindlessDescriptorManager::RegisterSampledImage(VkDevice device, VkImag
     write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     write.dstSet = _set;
     write.dstBinding = 0;
+    write.dstArrayElement = slot;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &imageInfo;
+    vkUpdateDescriptorSets(device, 1, &write, 0, nullptr);
+
+    return slot;
+}
+
+uint32_t BindlessDescriptorManager::RegisterSampledCubeImage(VkDevice device, VkImageView view, VkImageLayout layout)
+{
+    if (_nextSampledCubeImage >= kMaxSampledCubeImages) {
+        fmt::println("Bindless sampled cube image heap overflow: {} / {}", _nextSampledCubeImage, kMaxSampledCubeImages);
+        std::abort();
+    }
+
+    const uint32_t slot = _nextSampledCubeImage++;
+
+    VkDescriptorImageInfo imageInfo{};
+    imageInfo.sampler = _defaultSampler;
+    imageInfo.imageView = view;
+    imageInfo.imageLayout = layout;
+
+    VkWriteDescriptorSet write{};
+    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    write.dstSet = _set;
+    write.dstBinding = 3;
     write.dstArrayElement = slot;
     write.descriptorCount = 1;
     write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
@@ -238,6 +268,8 @@ BindlessDescriptorManager::Stats BindlessDescriptorManager::GetStats() const
     return Stats{
         .sampledImagesUsed = _nextSampledImage,
         .sampledImagesCapacity = kMaxSampledImages,
+        .sampledCubeImagesUsed = _nextSampledCubeImage,
+        .sampledCubeImagesCapacity = kMaxSampledCubeImages,
         .storageImagesUsed = _nextStorageImage,
         .storageImagesCapacity = kMaxStorageImages,
         .storageBuffersUsed = _nextStorageBuffer,
@@ -398,8 +430,13 @@ ImageHandle RenderDevice::CreateImage(const ImageDesc& desc)
     // Registering in the bindless heap stores the slot index once so passes can
     // push only integers instead of full descriptor updates every frame.
     if (desc.registerBindlessSampled) {
-        image.bindless.sampledImage =
-            _bindless.RegisterSampledImage(_device, image.defaultView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        if (desc.cubeCompatible) {
+            image.bindless.sampledCubeImage =
+                _bindless.RegisterSampledCubeImage(_device, image.defaultView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        } else {
+            image.bindless.sampledImage =
+                _bindless.RegisterSampledImage(_device, image.defaultView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        }
     }
     if (desc.registerBindlessStorage) {
         image.bindless.storageImage = _bindless.RegisterStorageImage(_device, image.defaultView, VK_IMAGE_LAYOUT_GENERAL);

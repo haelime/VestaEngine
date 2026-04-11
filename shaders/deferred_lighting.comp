@@ -7,6 +7,7 @@ layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(set = 0, binding = 0) uniform sampler2D sampledImages[];
 layout(rgba16f, set = 0, binding = 1) uniform image2D storageImages[];
+layout(set = 0, binding = 3) uniform samplerCube sampledCubeImages[];
 
 struct DeferredLightingConstants {
     mat4 lightViewProjection;
@@ -18,6 +19,7 @@ struct DeferredLightingConstants {
     vec4 contactShadowParams;
     uvec4 shadowIndices;
     uvec4 iblIndices;
+    uvec4 iblCubeIndices;
     uvec4 rayEffects;
     uvec4 rayReflection;
     uvec4 rayGlobalIllumination;
@@ -79,6 +81,11 @@ vec3 sampleEnvironmentMap(uint imageIndex, vec3 direction)
     return texture(sampledImages[nonuniformEXT(int(imageIndex))], vec2(u, v)).rgb * pc.environmentParams.x;
 }
 
+vec3 sampleEnvironmentCube(uint imageIndex, vec3 direction)
+{
+    return texture(sampledCubeImages[nonuniformEXT(int(imageIndex))], direction).rgb * pc.environmentParams.x;
+}
+
 vec3 sampleSpecularPrefilterAtlas(uint imageIndex, vec3 direction, float roughness)
 {
     float u = atan(direction.z, direction.x) / (2.0 * PI) + 0.5;
@@ -128,6 +135,12 @@ vec3 sampleSky(vec3 direction)
     uint environmentImageIndex = pc.lightingConstantsBufferIndex != INVALID_BUFFER_INDEX
         ? lightingConstantsBuffers[nonuniformEXT(int(pc.lightingConstantsBufferIndex))].values.shadowIndices.y
         : INVALID_IMAGE_INDEX;
+    uvec4 environmentCube = pc.lightingConstantsBufferIndex != INVALID_BUFFER_INDEX
+        ? lightingConstantsBuffers[nonuniformEXT(int(pc.lightingConstantsBufferIndex))].values.iblCubeIndices
+        : uvec4(INVALID_IMAGE_INDEX, 0u, 0u, 0u);
+    if (environmentCube.y != 0u && environmentCube.x != INVALID_IMAGE_INDEX) {
+        return sampleEnvironmentCube(environmentCube.x, direction);
+    }
     if (environmentImageIndex != INVALID_IMAGE_INDEX) {
         return sampleEnvironmentMap(environmentImageIndex, direction);
     }

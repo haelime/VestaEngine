@@ -23,6 +23,7 @@ public:
     void SetAreaLight(bool enabled, glm::vec4 positionAndIntensity, glm::vec4 normalAndSize);
     void SetEnvironment(glm::vec4 environmentParams);
     void SetEnvironmentImage(uint32_t sampledImageIndex);
+    void SetEnvironmentCubeImage(uint32_t sampledCubeImageIndex);
     void SetIblDiffuseIrradianceImage(uint32_t sampledImageIndex);
     void SetIblBrdfLutImage(uint32_t sampledImageIndex);
     void SetIblSpecularPrefilterImage(uint32_t sampledImageIndex);
@@ -91,6 +92,7 @@ private:
     glm::vec4 _areaLightColor{ 0.86f, 0.92f, 1.0f, 0.0f };
     glm::vec4 _environmentParams{ 1.0f, 0.0f, 0.0f, 0.0f };
     uint32_t _environmentImageIndex{ kInvalidResourceIndex };
+    uint32_t _environmentCubeImageIndex{ kInvalidResourceIndex };
     uint32_t _iblDiffuseIrradianceImageIndex{ kInvalidResourceIndex };
     uint32_t _iblBrdfLutImageIndex{ kInvalidResourceIndex };
     uint32_t _iblSpecularPrefilterImageIndex{ kInvalidResourceIndex };

@@ -19,6 +19,7 @@ namespace vesta::render {
 class BindlessDescriptorManager {
 public:
     static constexpr uint32_t kMaxSampledImages = 1024;
+    static constexpr uint32_t kMaxSampledCubeImages = 256;
     static constexpr uint32_t kMaxStorageImages = 1024;
     static constexpr uint32_t kMaxStorageBuffers = 1024;
 
@@ -26,6 +27,7 @@ public:
     void Shutdown(VkDevice device);
 
     [[nodiscard]] uint32_t RegisterSampledImage(VkDevice device, VkImageView view, VkImageLayout layout);
+    [[nodiscard]] uint32_t RegisterSampledCubeImage(VkDevice device, VkImageView view, VkImageLayout layout);
     [[nodiscard]] uint32_t RegisterStorageImage(VkDevice device, VkImageView view, VkImageLayout layout);
     [[nodiscard]] uint32_t RegisterStorageBuffer(VkDevice device, VkBuffer buffer, VkDeviceSize range);
 
@@ -35,6 +37,8 @@ public:
     struct Stats {
         uint32_t sampledImagesUsed{ 0 };
         uint32_t sampledImagesCapacity{ kMaxSampledImages };
+        uint32_t sampledCubeImagesUsed{ 0 };
+        uint32_t sampledCubeImagesCapacity{ kMaxSampledCubeImages };
         uint32_t storageImagesUsed{ 0 };
         uint32_t storageImagesCapacity{ kMaxStorageImages };
         uint32_t storageBuffersUsed{ 0 };
@@ -48,6 +52,7 @@ private:
     VkDescriptorSet _set{ VK_NULL_HANDLE };
     VkSampler _defaultSampler{ VK_NULL_HANDLE };
     uint32_t _nextSampledImage{ 0 };
+    uint32_t _nextSampledCubeImage{ 0 };
     uint32_t _nextStorageImage{ 0 };
     uint32_t _nextStorageBuffer{ 0 };
 };
@@ -88,6 +93,7 @@ struct ImageDesc {
 
 struct BindlessResourceIndices {
     uint32_t sampledImage{ kInvalidResourceIndex };
+    uint32_t sampledCubeImage{ kInvalidResourceIndex };
     uint32_t storageImage{ kInvalidResourceIndex };
     uint32_t storageBuffer{ kInvalidResourceIndex };
 };

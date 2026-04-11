@@ -810,6 +810,7 @@ void ConfigureDeferredLightingPass(Renderer& renderer, IRenderPass& pass, const 
         static_cast<float>(settings.environmentPreset),
         settings.environmentDiffuseStrength));
     lightingPass.SetEnvironmentImage(renderer.GetEnvironmentSampledImageIndex());
+    lightingPass.SetEnvironmentCubeImage(renderer.GetIblEnvironmentCubemapSampledImageIndex());
     lightingPass.SetIblDiffuseIrradianceImage(renderer.GetIblDiffuseIrradianceSampledImageIndex());
     lightingPass.SetIblBrdfLutImage(renderer.GetIblBrdfLutSampledImageIndex());
     lightingPass.SetIblSpecularPrefilterImage(renderer.GetIblSpecularPrefilterSampledImageIndex());
@@ -2176,7 +2177,7 @@ void Renderer::CreateEnvironmentCubemapImage(std::span<const float> rgbaPixels, 
     });
     _device.UploadImageData(_iblEnvironmentCubemapImage,
         std::span<const std::byte>(reinterpret_cast<const std::byte*>(cubePixels.data()), cubePixels.size() * sizeof(float)));
-    _iblEnvironmentCubemapSampledImageIndex = _device.GetImageResource(_iblEnvironmentCubemapImage).bindless.sampledImage;
+    _iblEnvironmentCubemapSampledImageIndex = _device.GetImageResource(_iblEnvironmentCubemapImage).bindless.sampledCubeImage;
 }
 
 void Renderer::CreateDiffuseIrradianceEquirect(std::span<const float> rgbaPixels, uint32_t width, uint32_t height)

@@ -55,6 +55,7 @@ struct DeferredLightingConstants {
     glm::vec4 contactShadowParams{ 1.0f, 1.2f, 0.35f, 0.0f }; // enabled, length, intensity
     glm::uvec4 shadowIndices{ kInvalidResourceIndex, 0u, 0u, 0u };
     glm::uvec4 iblIndices{ kInvalidResourceIndex, kInvalidResourceIndex, kInvalidResourceIndex, kInvalidResourceIndex };
+    glm::uvec4 iblCubeIndices{ kInvalidResourceIndex, 0u, 0u, 0u };
     glm::uvec4 rayEffects{ kInvalidResourceIndex, 0u, 0u, 0u };
     glm::uvec4 rayReflection{ kInvalidResourceIndex, 0u, 0u, 0u };
     glm::uvec4 rayGlobalIllumination{ kInvalidResourceIndex, 0u, 0u, 0u };
@@ -155,6 +156,11 @@ void DeferredLightingPass::SetEnvironment(glm::vec4 environmentParams)
 void DeferredLightingPass::SetEnvironmentImage(uint32_t sampledImageIndex)
 {
     _environmentImageIndex = sampledImageIndex;
+}
+
+void DeferredLightingPass::SetEnvironmentCubeImage(uint32_t sampledCubeImageIndex)
+{
+    _environmentCubeImageIndex = sampledCubeImageIndex;
 }
 
 void DeferredLightingPass::SetIblDiffuseIrradianceImage(uint32_t sampledImageIndex)
@@ -406,6 +412,10 @@ void DeferredLightingPass::Execute(const RenderGraphContext& context)
             .contactShadowParams = _contactShadowParams,
             .shadowIndices = glm::uvec4(shadowMapIndex, _environmentImageIndex, _shadowCascadeCount, _iblBrdfLutImageIndex),
             .iblIndices = glm::uvec4(_environmentImageIndex, _iblDiffuseIrradianceImageIndex, _iblBrdfLutImageIndex, _iblSpecularPrefilterImageIndex),
+            .iblCubeIndices = glm::uvec4(_environmentCubeImageIndex,
+                _environmentCubeImageIndex != kInvalidResourceIndex ? 1u : 0u,
+                0u,
+                0u),
             .rayEffects = glm::uvec4(rayEffectsImageIndex, _rayEffectsFlags.x, _rayEffectsFlags.y, _rayEffectsFlags.z),
             .rayReflection = glm::uvec4(rayReflectionImageIndex,
                 _rayEffectsFlags.z != 0u && rayReflectionImageIndex != kInvalidResourceIndex ? 1u : 0u,
