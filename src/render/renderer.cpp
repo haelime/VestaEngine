@@ -12,8 +12,10 @@
 
 #include <SDL.h>
 #include <SDL_vulkan.h>
+#include <fmt/format.h>
 #include <glm/glm.hpp>
 
+#include <vesta/core/debug.h>
 #include <vesta/render/passes/composite_pass.h>
 #include <vesta/render/passes/deferred_lighting_pass.h>
 #include <vesta/render/passes/gaussian_splat_pass.h>
@@ -43,6 +45,9 @@ bool IsRtx5060Ti(const RenderDevice& device)
 
 bool NeedsGeometryPass(const RendererSettings& settings)
 {
+    if (!settings.enableRaster) {
+        return false;
+    }
     if (!settings.optimizeInactivePasses) {
         return true;
     }
@@ -52,6 +57,9 @@ bool NeedsGeometryPass(const RendererSettings& settings)
 
 bool NeedsDeferredPass(const RendererSettings& settings)
 {
+    if (!settings.enableRaster) {
+        return false;
+    }
     if (!settings.optimizeInactivePasses) {
         return true;
     }
@@ -86,6 +94,23 @@ bool NeedsPathTracePass(const RendererSettings& settings)
 bool UsesStreamingUpload(const RendererSettings& settings)
 {
     return settings.sceneUploadMode == SceneUploadMode::Streaming && settings.useDeviceLocalSceneBuffers;
+}
+
+void ValidateSceneLoadTransition(const SceneLoadStatus& status, SceneLoadState nextState, std::string_view context)
+{
+    VESTA_ASSERT_STATE(IsValidSceneLoadTransition(status.state, nextState),
+        fmt::format("Invalid scene load transition {} -> {} in {} for '{}'",
+            static_cast<uint32_t>(status.state),
+            static_cast<uint32_t>(nextState),
+            context,
+            status.path.string()));
+}
+
+void ApplySceneLoadState(SceneLoadStatus& status, SceneLoadState nextState, std::string message, std::string_view context)
+{
+    ValidateSceneLoadTransition(status, nextState, context);
+    status.state = nextState;
+    status.message = std::move(message);
 }
 
 float ClampPathTraceScale(float scale)
@@ -125,7 +150,8 @@ RendererPreset ChooseRecommendedPreset(const RenderDevice& device)
 
 void ApplyPresetSettings(RendererSettings& settings, const RenderDevice& device, RendererPreset preset)
 {
-    settings.displayMode = RendererDisplayMode::Composite;
+    settings.displayMode = RendererDisplayMode::DeferredLighting;
+    settings.enableRaster = true;
     settings.enableGaussian = true;
     settings.enablePathTracing = true;
     settings.gaussianPointSize = 8.0f;
@@ -188,20 +214,35 @@ bool IsSurfaceVisible(const vesta::scene::SceneSurfaceBounds& bounds, const std:
     return true;
 }
 
+bool IsSurfaceWithinDistance(const vesta::scene::SceneSurfaceBounds& bounds,
+    const glm::vec3& cameraPosition,
+    float sceneRadius,
+    float distanceCullScale)
+{
+    const float distance = glm::distance(cameraPosition, bounds.center);
+    const float allowedDistance = std::max(bounds.radius * 12.0f, sceneRadius * distanceCullScale);
+    return distance <= allowedDistance;
+}
+
 void ConfigureGeometryRasterPass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
 {
     auto& rasterPass = static_cast<GeometryRasterPass&>(pass);
-    rasterPass.SetTargets(resources.gbufferAlbedo, resources.gbufferNormal, resources.sceneDepth);
+    rasterPass.SetTargets(resources.gbufferAlbedo, resources.gbufferNormal, resources.gbufferMaterial, resources.sceneDepth);
     rasterPass.SetScene(&renderer.GetScene());
     rasterPass.SetCamera(&renderer.GetCamera());
-    const bool useVisibilitySet = renderer.GetSettings().enableFrustumCulling && renderer.HasValidVisibilitySet();
+    const bool useVisibilitySet =
+        (renderer.GetSettings().enableFrustumCulling || renderer.GetSettings().enableDistanceCulling)
+        && renderer.HasValidVisibilitySet();
     rasterPass.SetVisibleSurfaceIndices(useVisibilitySet ? &renderer.GetVisibleSurfaceIndices() : nullptr);
+    rasterPass.SetUseIndirectDraw(renderer.GetSettings().useIndirectDraw);
 }
 
 void ConfigureDeferredLightingPass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
 {
     auto& lightingPass = static_cast<DeferredLightingPass&>(pass);
-    lightingPass.SetInputs(resources.gbufferAlbedo, resources.gbufferNormal);
+    lightingPass.SetInputs(resources.gbufferAlbedo, resources.gbufferNormal, resources.gbufferMaterial, resources.sceneDepth);
+    lightingPass.SetCamera(&renderer.GetCamera());
+    lightingPass.SetLight(renderer.GetSettings().lightDirectionAndIntensity);
     lightingPass.SetOutput(resources.deferredLighting);
 }
 
@@ -227,6 +268,7 @@ void ConfigurePathTracerPass(Renderer& renderer, IRenderPass& pass, const Render
     pathTracerPass.SetFrameSlot(renderer.GetFrameSlot());
     pathTracerPass.SetEnabled(renderer.GetSettings().enablePathTracing);
     pathTracerPass.SetBackendPreference(renderer.GetSettings().pathTraceBackend);
+    pathTracerPass.SetLight(renderer.GetSettings().lightDirectionAndIntensity);
 }
 
 void ConfigureCompositePass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
@@ -306,7 +348,6 @@ bool Renderer::Initialize(SDL_Window* window, VkExtent2D initialExtent, bool ena
     ApplyPreset(RendererPreset::Recommended);
 
     _camera.SetViewport(initialExtent.width, initialExtent.height);
-    LoadDefaultScene();
     InitializeCommands();
     InitializeSyncStructures();
     InitializeDefaultPasses();
@@ -354,21 +395,51 @@ void Renderer::HandleEvent(const SDL_Event& event)
     }
 
     if (event.type != SDL_KEYDOWN || event.key.repeat != 0) {
+        if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_LEFT) {
+            if (_selection.kind != SelectionKind::DirectionalLight) {
+                _selection = PickSelection(glm::vec2(static_cast<float>(event.button.x), static_cast<float>(event.button.y)));
+            }
+            _selectionDragging = _selection.kind != SelectionKind::None;
+            _selectionEditedSinceDragStart = false;
+            _lastDragMousePosition = glm::vec2(static_cast<float>(event.button.x), static_cast<float>(event.button.y));
+
+            if (_selection.kind == SelectionKind::Object && _selection.objectIndex < _scene.GetObjects().size()) {
+                const auto& object = _scene.GetObjects()[_selection.objectIndex];
+                _dragPlaneOrigin = object.bounds.center;
+                _dragPlaneNormal = _camera.GetForward();
+                _dragGrabOffset = object.bounds.center - _dragPlaneOrigin;
+            } else if (_selection.kind == SelectionKind::DirectionalLight) {
+                _dragPlaneOrigin = _scene.GetBounds().center;
+                _dragPlaneNormal = _camera.GetForward();
+                _dragGrabOffset = glm::vec3(0.0f);
+            }
+            return;
+        }
+
+        if (event.type == SDL_MOUSEMOTION && _selectionDragging) {
+            UpdateSceneEditDrag(glm::vec2(static_cast<float>(event.motion.x), static_cast<float>(event.motion.y)));
+            return;
+        }
+
+        if (event.type == SDL_MOUSEBUTTONUP && event.button.button == SDL_BUTTON_LEFT) {
+            EndSceneEditDrag();
+            return;
+        }
         return;
     }
 
     switch (event.key.keysym.sym) {
     case SDLK_1:
-        _settings.displayMode = RendererDisplayMode::Composite;
-        break;
-    case SDLK_2:
         _settings.displayMode = RendererDisplayMode::DeferredLighting;
         break;
-    case SDLK_3:
+    case SDLK_2:
         _settings.displayMode = RendererDisplayMode::Gaussian;
         break;
-    case SDLK_4:
+    case SDLK_3:
         _settings.displayMode = RendererDisplayMode::PathTrace;
+        break;
+    case SDLK_4:
+        _settings.displayMode = RendererDisplayMode::Composite;
         break;
     case SDLK_g:
         _settings.enableGaussian = !_settings.enableGaussian;
@@ -376,13 +447,26 @@ void Renderer::HandleEvent(const SDL_Event& event)
     case SDLK_p:
         _settings.enablePathTracing = !_settings.enablePathTracing;
         break;
+    case SDLK_r:
+        _settings.enableRaster = !_settings.enableRaster;
+        break;
+    case SDLK_ESCAPE:
+        ClearSelection();
+        break;
+    case SDLK_l:
+        SelectDirectionalLight();
+        break;
     default:
         break;
     }
+
+    ResetAccumulation();
 }
 
 void Renderer::Update(float deltaSeconds)
 {
+    _sceneLoadStatus.pendingUploadBytes = static_cast<uint64_t>(_device.GetUploadBatchStats().pendingBytes);
+    _sceneLoadStatus.pendingUploadCopies = _device.GetUploadBatchStats().pendingCopies;
     PumpSceneLoadRequests();
     PumpPendingSceneUpload();
     PumpVisibilityResults();
@@ -509,10 +593,165 @@ RendererPreset Renderer::GetRecommendedPreset() const
     return ChooseRecommendedPreset(_device);
 }
 
+vesta::scene::SceneKind Renderer::GetRecommendedSceneKind() const
+{
+    return _scene.GetSceneKind();
+}
+
+RendererDisplayMode Renderer::GetRecommendedDisplayModeForScene() const
+{
+    switch (_scene.GetSceneKind()) {
+    case vesta::scene::SceneKind::Gaussian:
+    case vesta::scene::SceneKind::PointCloud:
+        return RendererDisplayMode::Gaussian;
+    case vesta::scene::SceneKind::Mesh:
+    case vesta::scene::SceneKind::Empty:
+    default:
+        return RendererDisplayMode::DeferredLighting;
+    }
+}
+
+std::string Renderer::GetSelectionLabel() const
+{
+    switch (_selection.kind) {
+    case SelectionKind::Object: {
+        const auto& objects = _scene.GetObjects();
+        if (_selection.objectIndex < objects.size()) {
+            return objects[_selection.objectIndex].name;
+        }
+        return "Object";
+    }
+    case SelectionKind::DirectionalLight:
+        return "Directional Light";
+    case SelectionKind::None:
+    default:
+        return "None";
+    }
+}
+
 void Renderer::ApplyPreset(RendererPreset preset)
 {
     ApplyPresetSettings(_settings, _device, preset);
     ResetAccumulation();
+}
+
+void Renderer::SelectDirectionalLight()
+{
+    _selection = EditorSelection{
+        .kind = SelectionKind::DirectionalLight,
+        .objectIndex = 0,
+    };
+}
+
+void Renderer::ClearSelection()
+{
+    _selection = {};
+    _selectionDragging = false;
+    _selectionEditedSinceDragStart = false;
+}
+
+std::pair<glm::vec3, glm::vec3> Renderer::ComputeMouseRay(glm::vec2 mousePosition) const
+{
+    const VkExtent2D extent = _device.GetSwapchainExtent();
+    const glm::vec2 viewportSize(
+        std::max(1.0f, static_cast<float>(extent.width)), std::max(1.0f, static_cast<float>(extent.height)));
+    const glm::vec2 ndc(
+        (mousePosition.x / viewportSize.x) * 2.0f - 1.0f,
+        1.0f - (mousePosition.y / viewportSize.y) * 2.0f);
+
+    const glm::vec4 nearPoint = _camera.GetInverseViewProjection() * glm::vec4(ndc.x, ndc.y, 0.0f, 1.0f);
+    const glm::vec4 farPoint = _camera.GetInverseViewProjection() * glm::vec4(ndc.x, ndc.y, 1.0f, 1.0f);
+    const glm::vec3 worldNear = glm::vec3(nearPoint) / std::max(nearPoint.w, 1.0e-4f);
+    const glm::vec3 worldFar = glm::vec3(farPoint) / std::max(farPoint.w, 1.0e-4f);
+    return { _camera.GetPosition(), glm::normalize(worldFar - worldNear) };
+}
+
+EditorSelection Renderer::PickSelection(glm::vec2 mousePosition) const
+{
+    const auto [rayOrigin, rayDirection] = ComputeMouseRay(mousePosition);
+    if (const std::optional<uint32_t> objectIndex = _scene.PickObject(rayOrigin, rayDirection); objectIndex.has_value()) {
+        return EditorSelection{
+            .kind = SelectionKind::Object,
+            .objectIndex = *objectIndex,
+        };
+    }
+    return {};
+}
+
+void Renderer::OnSceneEdited(bool rebuildRayTracing)
+{
+    ResetAccumulation();
+    _visibilityDirty = true;
+    _visibleSurfaceIndices.clear();
+    _visibleSceneToken.reset();
+    _frameSnapshot = {};
+
+    if (rebuildRayTracing && _scene.HasRayTracingScene()) {
+        _scene.RebuildRayTracing(_device);
+    }
+}
+
+void Renderer::UpdateSceneEditDrag(const glm::vec2& mousePosition)
+{
+    if (!_selectionDragging || _selection.kind == SelectionKind::None) {
+        return;
+    }
+
+    const auto [rayOrigin, rayDirection] = ComputeMouseRay(mousePosition);
+    if (_selection.kind == SelectionKind::Object) {
+        const auto& objects = _scene.GetObjects();
+        if (_selection.objectIndex >= objects.size()) {
+            return;
+        }
+
+        const vesta::scene::SceneObject& object = objects[_selection.objectIndex];
+        const float denominator = glm::dot(rayDirection, _dragPlaneNormal);
+        if (std::abs(denominator) < 1.0e-4f) {
+            return;
+        }
+
+        const float t = glm::dot(object.bounds.center - rayOrigin, _dragPlaneNormal) / denominator;
+        if (t <= 0.0f) {
+            return;
+        }
+
+        const glm::vec3 hitPoint = rayOrigin + rayDirection * t;
+        const glm::vec3 delta = hitPoint - object.bounds.center;
+        if (_scene.TranslateObject(_device, _selection.objectIndex, delta)) {
+            _selectionEditedSinceDragStart = true;
+            OnSceneEdited(false);
+        }
+        return;
+    }
+
+    if (_selection.kind == SelectionKind::DirectionalLight) {
+        const glm::vec2 delta = mousePosition - _lastDragMousePosition;
+        glm::vec3 cameraRight = glm::cross(_camera.GetForward(), glm::vec3(0.0f, 1.0f, 0.0f));
+        if (glm::length(cameraRight) < 1.0e-4f) {
+            cameraRight = glm::vec3(1.0f, 0.0f, 0.0f);
+        } else {
+            cameraRight = glm::normalize(cameraRight);
+        }
+        glm::vec3 direction = glm::normalize(-glm::vec3(_settings.lightDirectionAndIntensity));
+        direction = glm::normalize(
+            direction + _camera.GetForward() * (-delta.y * 0.01f) + cameraRight * (-delta.x * 0.01f));
+        _settings.lightDirectionAndIntensity = glm::vec4(-direction, _settings.lightDirectionAndIntensity.w);
+        _selectionEditedSinceDragStart = true;
+        OnSceneEdited(false);
+    }
+
+    _lastDragMousePosition = mousePosition;
+}
+
+void Renderer::EndSceneEditDrag()
+{
+    if (_selectionDragging && _selectionEditedSinceDragStart) {
+        const bool rebuildRayTracing = _selection.kind == SelectionKind::Object && _scene.HasRayTracingScene()
+            && _settings.enablePathTracing && GetActivePathTraceBackend() == PathTraceBackend::HardwareRT;
+        OnSceneEdited(rebuildRayTracing);
+    }
+    _selectionDragging = false;
+    _selectionEditedSinceDragStart = false;
 }
 
 SceneUploadOptions Renderer::GetSceneUploadOptions() const
@@ -520,6 +759,8 @@ SceneUploadOptions Renderer::GetSceneUploadOptions() const
     return SceneUploadOptions{
         .useDeviceLocalSceneBuffers = _settings.useDeviceLocalSceneBuffers,
         .buildRayTracingStructuresOnLoad = _settings.buildRayTracingStructuresOnLoad,
+        .textureStreamingEnabled = _settings.textureStreamingEnabled,
+        .useDeviceLocalTextures = _settings.useDeviceLocalTextures,
     };
 }
 
@@ -560,7 +801,7 @@ bool Renderer::LoadSceneAsync(const std::filesystem::path& path)
     _sceneLoadStatus = SceneLoadStatus{
         .state = SceneLoadState::Parsing,
         .path = resolvedPath,
-        .message = "Parsing " + resolvedPath.filename().string() + "...",
+        .message = "Parsing and preparing " + resolvedPath.filename().string() + "...",
     };
     _sceneLoadInProgress = true;
     _sceneLoadFuture = _jobs.Submit(vesta::core::JobPriority::Background, [resolvedPath]() {
@@ -570,11 +811,18 @@ bool Renderer::LoadSceneAsync(const std::filesystem::path& path)
 
         try {
             vesta::scene::Scene loadedScene;
-            result.success = loadedScene.LoadFromFile(resolvedPath);
+            result.success = loadedScene.ParseFromFile(resolvedPath);
+            result.parseMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - parseStart).count();
+            if (result.success) {
+                const auto prepareStart = std::chrono::steady_clock::now();
+                result.success = loadedScene.PrepareParsedScene();
+                result.prepareMs =
+                    std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - prepareStart).count();
+            }
             if (result.success) {
                 result.scene = std::move(loadedScene);
             } else {
-                result.errorMessage = "Failed to parse scene file.";
+                result.errorMessage = result.prepareMs > 0.0f ? "Failed to prepare scene file." : "Failed to parse scene file.";
             }
         } catch (const std::exception& exception) {
             result.errorMessage = exception.what();
@@ -582,7 +830,9 @@ bool Renderer::LoadSceneAsync(const std::filesystem::path& path)
             result.errorMessage = "Unknown scene loading error.";
         }
 
-        result.parseMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - parseStart).count();
+        if (result.parseMs <= 0.0f) {
+            result.parseMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - parseStart).count();
+        }
         return result;
     });
     return true;
@@ -949,7 +1199,9 @@ void Renderer::PumpSceneLoadRequests()
         _sceneLoadStatus.state = SceneLoadState::Failed;
         _sceneLoadStatus.path = result.path;
         _sceneLoadStatus.parseMs = result.parseMs;
-        _sceneLoadStatus.uploadMs = 0.0f;
+        _sceneLoadStatus.prepareMs = result.prepareMs;
+        _sceneLoadStatus.geometryUploadMs = 0.0f;
+        _sceneLoadStatus.textureUploadMs = 0.0f;
         _sceneLoadStatus.blasMs = 0.0f;
         _sceneLoadStatus.tlasMs = 0.0f;
         _sceneLoadStatus.message = "Failed to load " + sceneName;
@@ -959,13 +1211,21 @@ void Renderer::PumpSceneLoadRequests()
         return;
     }
 
-    _sceneLoadStatus.state = SceneLoadState::Uploading;
+    ValidateSceneLoadTransition(_sceneLoadStatus, SceneLoadState::UploadingGeometry, "PumpSceneLoadRequests");
+    _sceneLoadStatus.state = SceneLoadState::UploadingGeometry;
     _sceneLoadStatus.path = result.path;
     _sceneLoadStatus.parseMs = result.parseMs;
+    _sceneLoadStatus.prepareMs = result.prepareMs;
     _sceneLoadStatus.message = "Uploading " + result.path.filename().string() + "...";
     if (UsesStreamingUpload(_settings)) {
-        StartPendingSceneUpload(std::move(result.scene), result.parseMs);
+        StartPendingSceneUpload(std::move(result.scene), result.parseMs, result.prepareMs);
     } else {
+        VESTA_ASSERT(!_startupSafeModeActive,
+            "Startup safe mode must not apply loaded scenes synchronously. Force streaming upload instead.");
+        ApplySceneLoadState(_sceneLoadStatus,
+            SceneLoadState::ReadyToSwap,
+            "Finalizing " + result.path.filename().string() + "...",
+            "PumpSceneLoadRequests");
         _sceneLoadInProgress = false;
         ApplyLoadedScene(std::move(result.scene));
     }
@@ -978,6 +1238,31 @@ void Renderer::PumpPendingSceneUpload()
     }
 
     using Stage = PendingSceneUploadStage;
+    const auto stageLabel = [](Stage stage) {
+        switch (stage) {
+        case Stage::AllocateBuffers:
+            return "AllocateBuffers";
+        case Stage::UploadVertices:
+            return "UploadVertices";
+        case Stage::UploadMaterials:
+            return "UploadMaterials";
+        case Stage::UploadIndices:
+            return "UploadIndices";
+        case Stage::UploadTriangles:
+            return "UploadTriangles";
+        case Stage::UploadTextures:
+            return "UploadTextures";
+        case Stage::BuildBLAS:
+            return "BuildBLAS";
+        case Stage::BuildTLAS:
+            return "BuildTLAS";
+        case Stage::SwapScene:
+            return "SwapScene";
+        case Stage::Idle:
+        default:
+            return "Idle";
+        }
+    };
     const auto uploadStart = std::chrono::steady_clock::now();
     const auto uploadOptions = GetSceneUploadOptions();
     const uint32_t uploadChunkBytes = std::max(64u * 1024u, _settings.maxUploadBytesPerFrame);
@@ -990,78 +1275,216 @@ void Renderer::PumpPendingSceneUpload()
         return;
     }
 
-    switch (_pendingSceneUpload.stage) {
-    case Stage::AllocateBuffers:
-        _pendingSceneUpload.scene.AllocateGpuResources(_device, uploadOptions);
-        _pendingSceneUpload.stage = Stage::UploadVertices;
-        _sceneLoadStatus.message = "Uploading vertices for " + _pendingSceneUpload.path.filename().string() + "...";
-        break;
-    case Stage::UploadVertices: {
-        const size_t totalBytes = sizeof(vesta::scene::SceneVertex) * prepared->vertices.size();
-        const size_t chunkBytes = std::min<size_t>(uploadChunkBytes, totalBytes - _pendingSceneUpload.vertexOffsetBytes);
-        _pendingSceneUpload.scene.UploadGpuResourceChunk(
-            _device, vesta::scene::SceneUploadResource::Vertex, _pendingSceneUpload.vertexOffsetBytes, chunkBytes);
-        _pendingSceneUpload.vertexOffsetBytes += chunkBytes;
-        if (_pendingSceneUpload.vertexOffsetBytes >= totalBytes) {
-            _pendingSceneUpload.stage = Stage::UploadIndices;
-            _sceneLoadStatus.message = "Uploading indices for " + _pendingSceneUpload.path.filename().string() + "...";
-        }
-        break;
-    }
-    case Stage::UploadIndices: {
-        const size_t totalBytes = sizeof(uint32_t) * prepared->indices.size();
-        const size_t chunkBytes = std::min<size_t>(uploadChunkBytes, totalBytes - _pendingSceneUpload.indexOffsetBytes);
-        _pendingSceneUpload.scene.UploadGpuResourceChunk(
-            _device, vesta::scene::SceneUploadResource::Index, _pendingSceneUpload.indexOffsetBytes, chunkBytes);
-        _pendingSceneUpload.indexOffsetBytes += chunkBytes;
-        if (_pendingSceneUpload.indexOffsetBytes >= totalBytes) {
-            _pendingSceneUpload.stage = Stage::UploadTriangles;
-            _sceneLoadStatus.message = "Uploading triangles for " + _pendingSceneUpload.path.filename().string() + "...";
-        }
-        break;
-    }
-    case Stage::UploadTriangles: {
-        const size_t totalBytes = sizeof(vesta::scene::SceneTriangle) * prepared->triangles.size();
-        const size_t chunkBytes = std::min<size_t>(uploadChunkBytes, totalBytes - _pendingSceneUpload.triangleOffsetBytes);
-        _pendingSceneUpload.scene.UploadGpuResourceChunk(
-            _device, vesta::scene::SceneUploadResource::Triangle, _pendingSceneUpload.triangleOffsetBytes, chunkBytes);
-        _pendingSceneUpload.triangleOffsetBytes += chunkBytes;
-        if (_pendingSceneUpload.triangleOffsetBytes >= totalBytes) {
-            if (_settings.buildRayTracingStructuresOnLoad && _device.IsRayTracingSupported() && !prepared->indices.empty()) {
-                _pendingSceneUpload.stage = Stage::BuildBLAS;
-                _sceneLoadStatus.message = "Building BLAS for " + _pendingSceneUpload.path.filename().string() + "...";
-            } else {
-                _pendingSceneUpload.stage = Stage::SwapScene;
-                _sceneLoadStatus.message = "Finalizing " + _pendingSceneUpload.path.filename().string() + "...";
+    size_t remainingUploadBudget = uploadChunkBytes;
+    while (_pendingSceneUpload.active) {
+        _sceneLoadStatus.uploadStage = stageLabel(_pendingSceneUpload.stage);
+        switch (_pendingSceneUpload.stage) {
+        case Stage::AllocateBuffers:
+            VESTA_ASSERT_STATE(prepared->IsLoaded(), "AllocateBuffers requires a prepared scene.");
+            _pendingSceneUpload.scene.AllocateGpuResources(_device, uploadOptions);
+            _pendingSceneUpload.stage = Stage::UploadVertices;
+            _sceneLoadStatus.message = "Uploading vertices for " + _pendingSceneUpload.path.filename().string() + "...";
+            continue;
+        case Stage::UploadVertices: {
+            const size_t totalBytes = sizeof(vesta::scene::SceneVertex) * prepared->vertices.size();
+            VESTA_ASSERT_STATE(_pendingSceneUpload.vertexOffsetBytes <= totalBytes, "Vertex upload offset exceeded total vertex bytes.");
+            if (_pendingSceneUpload.vertexOffsetBytes >= totalBytes) {
+                _pendingSceneUpload.stage = Stage::UploadMaterials;
+                _sceneLoadStatus.message = "Uploading materials for " + _pendingSceneUpload.path.filename().string() + "...";
+                continue;
             }
+
+            const size_t chunkBytes =
+                std::min<size_t>(remainingUploadBudget, totalBytes - _pendingSceneUpload.vertexOffsetBytes);
+            _pendingSceneUpload.scene.UploadGpuResourceChunk(
+                _device, vesta::scene::SceneUploadResource::Vertex, _pendingSceneUpload.vertexOffsetBytes, chunkBytes);
+            _pendingSceneUpload.vertexOffsetBytes += chunkBytes;
+            remainingUploadBudget -= chunkBytes;
+            if (remainingUploadBudget == 0) {
+                break;
+            }
+            continue;
+        }
+        case Stage::UploadMaterials: {
+            const size_t totalBytes = sizeof(vesta::scene::SceneMaterial) * prepared->materials.size();
+            VESTA_ASSERT_STATE(_pendingSceneUpload.materialOffsetBytes <= totalBytes, "Material upload offset exceeded total material bytes.");
+            if (_pendingSceneUpload.materialOffsetBytes >= totalBytes) {
+                _pendingSceneUpload.stage = Stage::UploadIndices;
+                _sceneLoadStatus.message = "Uploading indices for " + _pendingSceneUpload.path.filename().string() + "...";
+                continue;
+            }
+
+            const size_t chunkBytes = std::min<size_t>(remainingUploadBudget, totalBytes - _pendingSceneUpload.materialOffsetBytes);
+            _pendingSceneUpload.scene.UploadGpuResourceChunk(
+                _device, vesta::scene::SceneUploadResource::Material, _pendingSceneUpload.materialOffsetBytes, chunkBytes);
+            _pendingSceneUpload.materialOffsetBytes += chunkBytes;
+            remainingUploadBudget -= chunkBytes;
+            if (remainingUploadBudget == 0) {
+                break;
+            }
+            continue;
+        }
+        case Stage::UploadIndices: {
+            const size_t totalBytes = sizeof(uint32_t) * prepared->indices.size();
+            VESTA_ASSERT_STATE(_pendingSceneUpload.indexOffsetBytes <= totalBytes, "Index upload offset exceeded total index bytes.");
+            if (_pendingSceneUpload.indexOffsetBytes >= totalBytes) {
+                _pendingSceneUpload.stage = Stage::UploadTriangles;
+                _sceneLoadStatus.message = "Uploading triangles for " + _pendingSceneUpload.path.filename().string() + "...";
+                continue;
+            }
+
+            const size_t chunkBytes = std::min<size_t>(remainingUploadBudget, totalBytes - _pendingSceneUpload.indexOffsetBytes);
+            _pendingSceneUpload.scene.UploadGpuResourceChunk(
+                _device, vesta::scene::SceneUploadResource::Index, _pendingSceneUpload.indexOffsetBytes, chunkBytes);
+            _pendingSceneUpload.indexOffsetBytes += chunkBytes;
+            remainingUploadBudget -= chunkBytes;
+            if (remainingUploadBudget == 0) {
+                break;
+            }
+            continue;
+        }
+        case Stage::UploadTriangles: {
+            const size_t totalBytes = sizeof(vesta::scene::SceneTriangle) * prepared->triangles.size();
+            VESTA_ASSERT_STATE(
+                _pendingSceneUpload.triangleOffsetBytes <= totalBytes, "Triangle upload offset exceeded total triangle bytes.");
+            if (_pendingSceneUpload.triangleOffsetBytes >= totalBytes) {
+                const SceneUploadContinuation continuation = DecideSceneUploadContinuation(
+                    _settings.textureStreamingEnabled,
+                    !prepared->textures.empty(),
+                    _settings.buildRayTracingStructuresOnLoad,
+                    _device.IsRayTracingSupported(),
+                    !prepared->indices.empty());
+                if (continuation == SceneUploadContinuation::UploadTextures) {
+                    _pendingSceneUpload.stage = Stage::UploadTextures;
+                    ApplySceneLoadState(_sceneLoadStatus,
+                        SceneLoadState::UploadingTextures,
+                        "Uploading textures for " + _pendingSceneUpload.path.filename().string() + "...",
+                        "PumpPendingSceneUpload::UploadTriangles");
+                } else if (continuation == SceneUploadContinuation::BuildBLAS) {
+                    _pendingSceneUpload.stage = Stage::BuildBLAS;
+                    ApplySceneLoadState(_sceneLoadStatus,
+                        SceneLoadState::BuildingBLAS,
+                        "Building BLAS for " + _pendingSceneUpload.path.filename().string() + "...",
+                        "PumpPendingSceneUpload::UploadTriangles");
+                } else {
+                    _pendingSceneUpload.stage = Stage::SwapScene;
+                    ApplySceneLoadState(_sceneLoadStatus,
+                        SceneLoadState::ReadyToSwap,
+                        "Finalizing " + _pendingSceneUpload.path.filename().string() + "...",
+                        "PumpPendingSceneUpload::UploadTriangles");
+                }
+                continue;
+            }
+
+            const size_t chunkBytes =
+                std::min<size_t>(remainingUploadBudget, totalBytes - _pendingSceneUpload.triangleOffsetBytes);
+            _pendingSceneUpload.scene.UploadGpuResourceChunk(
+                _device, vesta::scene::SceneUploadResource::Triangle, _pendingSceneUpload.triangleOffsetBytes, chunkBytes);
+            _pendingSceneUpload.triangleOffsetBytes += chunkBytes;
+            remainingUploadBudget -= chunkBytes;
+            if (remainingUploadBudget == 0) {
+                break;
+            }
+            continue;
+        }
+        case Stage::UploadTextures: {
+            const uint32_t textureBudget = std::max(1u, _settings.maxTextureUploadBytesPerFrame);
+            size_t uploadedBytes = 0;
+            while (_pendingSceneUpload.textureIndex < prepared->textures.size()) {
+                const auto& texture = prepared->textures[_pendingSceneUpload.textureIndex];
+                if (texture.IsValid()) {
+                    const size_t textureBytes = texture.rgba8Pixels.size();
+                    if (uploadedBytes > 0 && uploadedBytes + textureBytes > textureBudget) {
+                        break;
+                    }
+                    const auto textureUploadStart = std::chrono::steady_clock::now();
+                    _pendingSceneUpload.scene.UploadGpuTexture(_device, _pendingSceneUpload.textureIndex);
+                    _pendingSceneUpload.textureUploadMs +=
+                        std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - textureUploadStart).count();
+                    uploadedBytes += textureBytes;
+                }
+                ++_pendingSceneUpload.textureIndex;
+            }
+
+            if (_pendingSceneUpload.textureIndex >= prepared->textures.size()) {
+                const SceneUploadContinuation continuation = DecideSceneUploadContinuation(
+                    false, false, _settings.buildRayTracingStructuresOnLoad, _device.IsRayTracingSupported(), !prepared->indices.empty());
+                if (continuation == SceneUploadContinuation::BuildBLAS) {
+                    _pendingSceneUpload.stage = Stage::BuildBLAS;
+                    ApplySceneLoadState(_sceneLoadStatus,
+                        SceneLoadState::BuildingBLAS,
+                        "Building BLAS for " + _pendingSceneUpload.path.filename().string() + "...",
+                        "PumpPendingSceneUpload::UploadTextures");
+                } else {
+                    _pendingSceneUpload.stage = Stage::SwapScene;
+                    ApplySceneLoadState(_sceneLoadStatus,
+                        SceneLoadState::ReadyToSwap,
+                        "Finalizing " + _pendingSceneUpload.path.filename().string() + "...",
+                        "PumpPendingSceneUpload::UploadTextures");
+                }
+            }
+            break;
+        }
+        case Stage::BuildBLAS:
+            _sceneLoadStatus.lastBlockingWait = "FlushUploadBatch before BLAS";
+            _device.SetDebugWaitContext(
+                "scene=" + _pendingSceneUpload.path.string() + " stage=BuildBLAS state=" + std::to_string(static_cast<uint32_t>(_sceneLoadStatus.state)));
+            _device.FlushUploadBatch();
+            _pendingSceneUpload.scene.BuildBottomLevelAccelerationStructure(_device);
+            _pendingSceneUpload.stage = Stage::BuildTLAS;
+            ApplySceneLoadState(_sceneLoadStatus,
+                SceneLoadState::BuildingTLAS,
+                "Building TLAS for " + _pendingSceneUpload.path.filename().string() + "...",
+                "PumpPendingSceneUpload::BuildBLAS");
+            break;
+        case Stage::BuildTLAS:
+            _sceneLoadStatus.lastBlockingWait = "ImmediateSubmit during TLAS";
+            _device.SetDebugWaitContext(
+                "scene=" + _pendingSceneUpload.path.string() + " stage=BuildTLAS state=" + std::to_string(static_cast<uint32_t>(_sceneLoadStatus.state)));
+            _pendingSceneUpload.scene.BuildTopLevelAccelerationStructure(_device);
+            _pendingSceneUpload.stage = Stage::SwapScene;
+            ApplySceneLoadState(_sceneLoadStatus,
+                SceneLoadState::ReadyToSwap,
+                "Finalizing " + _pendingSceneUpload.path.filename().string() + "...",
+                "PumpPendingSceneUpload::BuildTLAS");
+            break;
+        case Stage::SwapScene:
+            VESTA_ASSERT_STATE(
+                _pendingSceneUpload.vertexOffsetBytes >= sizeof(vesta::scene::SceneVertex) * prepared->vertices.size()
+                    || prepared->vertices.empty(),
+                "SwapScene requires vertex upload completion.");
+            VESTA_ASSERT_STATE(
+                _pendingSceneUpload.materialOffsetBytes >= sizeof(vesta::scene::SceneMaterial) * prepared->materials.size()
+                    || prepared->materials.empty(),
+                "SwapScene requires material upload completion.");
+            _sceneLoadStatus.lastBlockingWait = "FlushUploadBatch before SwapScene";
+            _device.FlushUploadBatch();
+            _pendingSceneUpload.uploadMs +=
+                std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - uploadStart).count();
+            _sceneLoadStatus.geometryUploadMs = _pendingSceneUpload.uploadMs;
+            _sceneLoadStatus.textureUploadMs = _pendingSceneUpload.textureUploadMs;
+            _sceneLoadInProgress = false;
+            ApplyLoadedScene(std::move(_pendingSceneUpload.scene));
+            _pendingSceneUpload = {};
+            return;
+        case Stage::Idle:
+        default:
+            _device.FlushUploadBatch();
+            _pendingSceneUpload.uploadMs +=
+                std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - uploadStart).count();
+            _pendingSceneUpload = {};
+            _sceneLoadInProgress = false;
+            return;
         }
         break;
     }
-    case Stage::BuildBLAS:
-        _pendingSceneUpload.scene.BuildBottomLevelAccelerationStructure(_device);
-        _pendingSceneUpload.stage = Stage::BuildTLAS;
-        _sceneLoadStatus.message = "Building TLAS for " + _pendingSceneUpload.path.filename().string() + "...";
-        break;
-    case Stage::BuildTLAS:
-        _pendingSceneUpload.scene.BuildTopLevelAccelerationStructure(_device);
-        _pendingSceneUpload.stage = Stage::SwapScene;
-        _sceneLoadStatus.message = "Finalizing " + _pendingSceneUpload.path.filename().string() + "...";
-        break;
-    case Stage::SwapScene:
-        _sceneLoadInProgress = false;
-        ApplyLoadedScene(std::move(_pendingSceneUpload.scene));
-        _pendingSceneUpload = {};
-        return;
-    case Stage::Idle:
-    default:
-        _pendingSceneUpload = {};
-        _sceneLoadInProgress = false;
-        return;
-    }
+
+    _device.FlushUploadBatch();
 
     _pendingSceneUpload.uploadMs +=
         std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - uploadStart).count();
-    _sceneLoadStatus.uploadMs = _pendingSceneUpload.uploadMs;
+    _sceneLoadStatus.geometryUploadMs = _pendingSceneUpload.uploadMs;
+    _sceneLoadStatus.textureUploadMs = _pendingSceneUpload.textureUploadMs;
     _sceneLoadStatus.blasMs = _pendingSceneUpload.scene.GetBottomLevelBuildMs();
     _sceneLoadStatus.tlasMs = _pendingSceneUpload.scene.GetTopLevelBuildMs();
 }
@@ -1086,13 +1509,16 @@ void Renderer::PumpVisibilityResults()
 
     _visibleSceneToken = std::move(result.scene);
     _visibleSurfaceIndices = std::move(result.visibleSurfaceIndices);
+    _frameSnapshot.visibleSet.scene = _visibleSceneToken;
+    _frameSnapshot.visibleSet.surfaceIndices = _visibleSurfaceIndices;
 }
 
 void Renderer::DispatchVisibilityCullIfNeeded()
 {
-    if (!_settings.enableFrustumCulling) {
+    if (!_settings.enableFrustumCulling && !_settings.enableDistanceCulling) {
         _visibleSurfaceIndices.clear();
         _visibleSceneToken.reset();
+        _frameSnapshot = {};
         _visibilityDirty = false;
         return;
     }
@@ -1104,6 +1530,8 @@ void Renderer::DispatchVisibilityCullIfNeeded()
     if (!prepared || prepared->surfaces.empty()) {
         _visibleSurfaceIndices.clear();
         _visibleSceneToken = std::move(prepared);
+        _frameSnapshot.visibleSet.scene = _visibleSceneToken;
+        _frameSnapshot.visibleSet.surfaceIndices.clear();
         _visibilityDirty = false;
         return;
     }
@@ -1111,7 +1539,13 @@ void Renderer::DispatchVisibilityCullIfNeeded()
     _visibilityCullInProgress = true;
     _visibilityDirty = false;
     const glm::mat4 viewProjection = _camera.GetViewProjection();
-    _visibilityFuture = _jobs.Submit(vesta::core::JobPriority::Normal, [this, prepared, viewProjection]() {
+    const glm::vec3 cameraPosition = _camera.GetPosition();
+    const bool useFrustumCulling = _settings.enableFrustumCulling;
+    const bool useDistanceCulling = _settings.enableDistanceCulling;
+    const float distanceCullScale = _settings.distanceCullScale;
+    const float sceneRadius = prepared->bounds.radius;
+    _visibilityFuture = _jobs.Submit(vesta::core::JobPriority::Normal,
+        [this, prepared, viewProjection, cameraPosition, useFrustumCulling, useDistanceCulling, distanceCullScale, sceneRadius]() {
         VisibilityCullResult result;
         result.scene = prepared;
 
@@ -1126,7 +1560,9 @@ void Renderer::DispatchVisibilityCullIfNeeded()
         const std::array<glm::vec4, 6> frustumPlanes = ExtractFrustumPlanes(viewProjection);
         if (_jobs.GetWorkerCount() <= 1 || prepared->surfaceBounds.size() < 64) {
             for (uint32_t surfaceIndex = 0; surfaceIndex < static_cast<uint32_t>(prepared->surfaceBounds.size()); ++surfaceIndex) {
-                if (IsSurfaceVisible(prepared->surfaceBounds[surfaceIndex], frustumPlanes)) {
+                const auto& bounds = prepared->surfaceBounds[surfaceIndex];
+                if ((!useFrustumCulling || IsSurfaceVisible(bounds, frustumPlanes))
+                    && (!useDistanceCulling || IsSurfaceWithinDistance(bounds, cameraPosition, sceneRadius, distanceCullScale))) {
                     result.visibleSurfaceIndices.push_back(surfaceIndex);
                 }
             }
@@ -1143,7 +1579,9 @@ void Renderer::DispatchVisibilityCullIfNeeded()
                 std::vector<uint32_t>& chunk = visibleChunks[chunkIndex];
                 chunk.reserve(surfaceEnd - surfaceBegin);
                 for (size_t surfaceIndex = surfaceBegin; surfaceIndex < surfaceEnd; ++surfaceIndex) {
-                    if (IsSurfaceVisible(prepared->surfaceBounds[surfaceIndex], frustumPlanes)) {
+                    const auto& bounds = prepared->surfaceBounds[surfaceIndex];
+                    if ((!useFrustumCulling || IsSurfaceVisible(bounds, frustumPlanes))
+                        && (!useDistanceCulling || IsSurfaceWithinDistance(bounds, cameraPosition, sceneRadius, distanceCullScale))) {
                         chunk.push_back(static_cast<uint32_t>(surfaceIndex));
                     }
                 }
@@ -1174,21 +1612,44 @@ bool Renderer::LoadSceneResolved(const std::filesystem::path& resolvedPath)
     try {
         const auto parseStart = std::chrono::steady_clock::now();
         vesta::scene::Scene loadedScene;
-        if (!loadedScene.LoadFromFile(resolvedPath)) {
+        if (!loadedScene.ParseFromFile(resolvedPath)) {
             _sceneLoadStatus.state = SceneLoadState::Failed;
             _sceneLoadStatus.parseMs =
                 std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - parseStart).count();
             _sceneLoadStatus.message = "Failed to load " + resolvedPath.filename().string();
             return false;
         }
-
-        _sceneLoadStatus.state = SceneLoadState::Uploading;
         _sceneLoadStatus.parseMs =
             std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - parseStart).count();
-        _sceneLoadStatus.message = "Uploading " + resolvedPath.filename().string() + "...";
+
+        ApplySceneLoadState(_sceneLoadStatus,
+            SceneLoadState::Preparing,
+            "Preparing " + resolvedPath.filename().string() + "...",
+            "LoadSceneResolved");
+        const auto prepareStart = std::chrono::steady_clock::now();
+        if (!loadedScene.PrepareParsedScene()) {
+            _sceneLoadStatus.state = SceneLoadState::Failed;
+            _sceneLoadStatus.prepareMs =
+                std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - prepareStart).count();
+            _sceneLoadStatus.message = "Failed to prepare " + resolvedPath.filename().string();
+            return false;
+        }
+        _sceneLoadStatus.prepareMs =
+            std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - prepareStart).count();
+
+        ApplySceneLoadState(_sceneLoadStatus,
+            SceneLoadState::UploadingGeometry,
+            "Uploading " + resolvedPath.filename().string() + "...",
+            "LoadSceneResolved");
         if (UsesStreamingUpload(_settings)) {
-            StartPendingSceneUpload(std::move(loadedScene), _sceneLoadStatus.parseMs);
+            StartPendingSceneUpload(std::move(loadedScene), _sceneLoadStatus.parseMs, _sceneLoadStatus.prepareMs);
         } else {
+            VESTA_ASSERT(!_startupSafeModeActive,
+                "Startup safe mode must not synchronously apply scenes from LoadSceneResolved.");
+            ApplySceneLoadState(_sceneLoadStatus,
+                SceneLoadState::ReadyToSwap,
+                "Finalizing " + resolvedPath.filename().string() + "...",
+                "LoadSceneResolved");
             ApplyLoadedScene(std::move(loadedScene));
         }
         return true;
@@ -1203,34 +1664,44 @@ bool Renderer::LoadSceneResolved(const std::filesystem::path& resolvedPath)
     }
 }
 
-void Renderer::StartPendingSceneUpload(vesta::scene::Scene&& scene, float parseMs)
+void Renderer::StartPendingSceneUpload(vesta::scene::Scene&& scene, float parseMs, float prepareMs)
 {
     _pendingSceneUpload = PendingSceneUpload{
         .scene = std::move(scene),
         .path = _sceneLoadStatus.path,
         .parseMs = parseMs,
+        .prepareMs = prepareMs,
         .uploadMs = 0.0f,
+        .textureUploadMs = 0.0f,
         .stage = PendingSceneUploadStage::AllocateBuffers,
         .active = true,
     };
     _sceneLoadInProgress = true;
-    _sceneLoadStatus.state = SceneLoadState::Uploading;
+    ValidateSceneLoadTransition(_sceneLoadStatus, SceneLoadState::UploadingGeometry, "StartPendingSceneUpload");
+    _sceneLoadStatus.state = SceneLoadState::UploadingGeometry;
     _sceneLoadStatus.parseMs = parseMs;
-    _sceneLoadStatus.uploadMs = 0.0f;
+    _sceneLoadStatus.prepareMs = prepareMs;
+    _sceneLoadStatus.geometryUploadMs = 0.0f;
+    _sceneLoadStatus.textureUploadMs = 0.0f;
     _sceneLoadStatus.blasMs = 0.0f;
     _sceneLoadStatus.tlasMs = 0.0f;
+    _sceneLoadStatus.lastBlockingWait.clear();
     _sceneLoadStatus.message = "Allocating GPU buffers for " + _pendingSceneUpload.path.filename().string() + "...";
 }
 
 void Renderer::ApplyLoadedScene(vesta::scene::Scene&& scene)
 {
+    if (_startupSafeModeActive) {
+        VESTA_ASSERT(UsesStreamingUpload(_settings), "Startup safe mode requires streaming upload before ApplyLoadedScene.");
+    }
     vesta::scene::Scene previousScene = std::move(_scene);
     _scene = std::move(scene);
     if (!_scene.GetVertexBuffer()) {
-        const auto uploadStart = std::chrono::steady_clock::now();
+        _sceneLoadStatus.lastBlockingWait = "Scene::UploadToGpu";
+        _device.SetDebugWaitContext("scene=" + _scene.GetSourcePath().string() + " stage=ApplyLoadedScene::UploadToGpu");
         _scene.UploadToGpu(_device, GetSceneUploadOptions());
-        _sceneLoadStatus.uploadMs =
-            std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - uploadStart).count();
+        _sceneLoadStatus.geometryUploadMs = _scene.GetGeometryUploadMs();
+        _sceneLoadStatus.textureUploadMs = _scene.GetTextureUploadMs();
     }
     _sceneLoadStatus.blasMs = _scene.GetBottomLevelBuildMs();
     _sceneLoadStatus.tlasMs = _scene.GetTopLevelBuildMs();
@@ -1242,6 +1713,8 @@ void Renderer::ApplyLoadedScene(vesta::scene::Scene&& scene)
     _visibilityDirty = true;
     _visibleSurfaceIndices.clear();
     _visibleSceneToken.reset();
+    _frameSnapshot = {};
+    ClearSelection();
 
     if (!previousScene.GetSourcePath().empty()) {
         if (_settings.deferOldSceneDestruction) {
@@ -1255,9 +1728,11 @@ void Renderer::ApplyLoadedScene(vesta::scene::Scene&& scene)
         }
     }
 
-    _sceneLoadStatus.state = SceneLoadState::Ready;
+    ApplySceneLoadState(
+        _sceneLoadStatus, SceneLoadState::Ready, "Loaded " + _scene.GetSourcePath().filename().string(), "ApplyLoadedScene");
     _sceneLoadStatus.path = _scene.GetSourcePath();
-    _sceneLoadStatus.message = "Loaded " + _scene.GetSourcePath().filename().string();
+    _sceneLoadStatus.uploadStage.clear();
+    _sceneLoadStatus.lastBlockingWait.clear();
 }
 
 void Renderer::ReleaseRetiredScenes()
@@ -1303,7 +1778,8 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
     depthDesc.extent = renderExtent;
     depthDesc.format = VK_FORMAT_D32_SFLOAT;
     depthDesc.aspectFlags = VK_IMAGE_ASPECT_DEPTH_BIT;
-    depthDesc.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+    depthDesc.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    depthDesc.registerBindlessSampled = true;
 
     ImageDesc storageDesc{};
     storageDesc.extent = renderExtent;
@@ -1317,7 +1793,8 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
 
     if (useGeometryPass) {
         resources.gbufferAlbedo = graph.CreateTexture("GBuffer.Albedo", gbufferDesc);
-        resources.gbufferNormal = graph.CreateTexture("GBuffer.NormalDepth", gbufferDesc);
+        resources.gbufferNormal = graph.CreateTexture("GBuffer.NormalRoughness", gbufferDesc);
+        resources.gbufferMaterial = graph.CreateTexture("GBuffer.Material", gbufferDesc);
         resources.sceneDepth = graph.CreateTexture("SceneDepth", depthDesc);
     }
     if (useDeferredPass) {
@@ -1371,21 +1848,4 @@ const Renderer::RegisteredPassEntry* Renderer::FindPassEntry(std::string_view id
     return it != _passRegistry.end() ? &(*it) : nullptr;
 }
 
-void Renderer::LoadDefaultScene()
-{
-    try {
-        const std::array<std::filesystem::path, 2> candidates{
-            std::filesystem::path("assets/basicmesh.glb"),
-            std::filesystem::path("assets/structure.glb"),
-        };
-
-        for (const std::filesystem::path& candidate : candidates) {
-            const std::filesystem::path resolved = vkutil::resolve_runtime_path(candidate);
-            if (LoadSceneResolved(resolved)) {
-                break;
-            }
-        }
-    } catch (...) {
-    }
-}
 } // namespace vesta::render

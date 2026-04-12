@@ -71,9 +71,9 @@ void GaussianSplatPass::Initialize(RenderDevice& device)
     binding.stride = sizeof(vesta::scene::SceneVertex);
     binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-    // The splat shaders only need position and color. Normal is intentionally
-    // omitted here so the vertex layout matches the shader exactly.
-    std::array<VkVertexInputAttributeDescription, 2> attributes{};
+    // Gaussian data reuses SceneVertex but reads only position, color, and
+    // splat parameters. Mesh scenes leave splatParams at sane defaults.
+    std::array<VkVertexInputAttributeDescription, 3> attributes{};
     attributes[0] = VkVertexInputAttributeDescription{
         .location = 0,
         .binding = 0,
@@ -85,6 +85,12 @@ void GaussianSplatPass::Initialize(RenderDevice& device)
         .binding = 0,
         .format = VK_FORMAT_R32G32B32A32_SFLOAT,
         .offset = offsetof(vesta::scene::SceneVertex, color),
+    };
+    attributes[2] = VkVertexInputAttributeDescription{
+        .location = 3,
+        .binding = 0,
+        .format = VK_FORMAT_R32G32_SFLOAT,
+        .offset = offsetof(vesta::scene::SceneVertex, splatParams),
     };
 
     vkutil::GraphicsPipelineDesc pipelineDesc{};
@@ -106,7 +112,9 @@ void GaussianSplatPass::Initialize(RenderDevice& device)
 
 void GaussianSplatPass::Setup(RenderGraphBuilder& builder)
 {
-    builder.Read(_depthInput, ResourceUsage::DepthRead);
+    if (_depthInput) {
+        builder.Read(_depthInput, ResourceUsage::DepthRead);
+    }
     builder.Write(_output, ResourceUsage::ColorAttachmentWrite);
 }
 
@@ -128,11 +136,13 @@ void GaussianSplatPass::Execute(const RenderGraphContext& context)
     colorAttachment.clearValue = colorClear;
 
     VkRenderingAttachmentInfo depthAttachment{};
-    depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    depthAttachment.imageView = context.GetTextureView(_depthInput);
-    depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
-    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    if (_depthInput) {
+        depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+        depthAttachment.imageView = context.GetTextureView(_depthInput);
+        depthAttachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    }
 
     VkRenderingInfo renderingInfo{};
     renderingInfo.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
@@ -140,7 +150,7 @@ void GaussianSplatPass::Execute(const RenderGraphContext& context)
     renderingInfo.layerCount = 1;
     renderingInfo.colorAttachmentCount = 1;
     renderingInfo.pColorAttachments = &colorAttachment;
-    renderingInfo.pDepthAttachment = &depthAttachment;
+    renderingInfo.pDepthAttachment = _depthInput ? &depthAttachment : nullptr;
 
     VkCommandBuffer commandBuffer = context.GetCommandBuffer();
     vkCmdBeginRendering(commandBuffer, &renderingInfo);
@@ -155,7 +165,7 @@ void GaussianSplatPass::Execute(const RenderGraphContext& context)
 
     vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
     vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
-    if (_enabled && _scene != nullptr && _camera != nullptr && _scene->IsLoaded()) {
+    if (_enabled && _scene != nullptr && _camera != nullptr && _scene->HasGaussianSplats()) {
         vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _pipeline);
 
         GaussianPushConstants pushConstants{
