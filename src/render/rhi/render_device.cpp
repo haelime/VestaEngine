@@ -746,6 +746,62 @@ void RenderDevice::UploadImageData(ImageHandle destination, std::span<const std:
     _uploadBatchStats.pendingCopies = 0;
 }
 
+void RenderDevice::UploadImageDataRegions(ImageHandle destination,
+    std::span<const std::byte> data,
+    std::span<const VkBufferImageCopy> copyRegions)
+{
+    if (_device == VK_NULL_HANDLE || !destination || data.empty() || copyRegions.empty()) {
+        return;
+    }
+
+    FlushUploadBatch();
+    const AllocatedImage& image = GetImageResource(destination);
+    const VkDeviceSize requiredBytes = data.size_bytes();
+    EnsureUploadCapacity(requiredBytes);
+
+    std::byte* stagingBytes = static_cast<std::byte*>(_uploadContext.mappedData);
+    std::memcpy(stagingBytes, data.data(), data.size_bytes());
+    FlushBuffer(_uploadContext.stagingBuffer, 0, requiredBytes);
+    _uploadBatchStats.pendingBytes = requiredBytes;
+    _uploadBatchStats.pendingCopies = static_cast<uint32_t>(copyRegions.size());
+
+    ImmediateSubmit([&](VkCommandBuffer commandBuffer) {
+        const VkImageSubresourceRange colorRange =
+            vkutil::make_image_subresource_range(VK_IMAGE_ASPECT_COLOR_BIT, image.desc.mipLevels, image.desc.arrayLayers);
+        vkutil::transition_image(commandBuffer,
+            image.image,
+            VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_PIPELINE_STAGE_2_NONE,
+            VK_ACCESS_2_NONE,
+            VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+            VK_ACCESS_2_TRANSFER_WRITE_BIT,
+            colorRange);
+
+        vkCmdCopyBufferToImage(commandBuffer,
+            GetBuffer(_uploadContext.stagingBuffer),
+            image.image,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            static_cast<uint32_t>(copyRegions.size()),
+            copyRegions.data());
+
+        vkutil::transition_image(commandBuffer,
+            image.image,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+            VK_ACCESS_2_TRANSFER_WRITE_BIT,
+            VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+            VK_ACCESS_2_SHADER_SAMPLED_READ_BIT,
+            colorRange);
+    });
+
+    _uploadBatchStats.lastSubmittedBytes = requiredBytes;
+    _uploadBatchStats.totalSubmittedBytes += requiredBytes;
+    _uploadBatchStats.pendingBytes = 0;
+    _uploadBatchStats.pendingCopies = 0;
+}
+
 void RenderDevice::FlushUploadBatch()
 {
     if (_device == VK_NULL_HANDLE || !_uploadContext.recording) {

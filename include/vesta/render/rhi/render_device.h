@@ -173,6 +173,9 @@ public:
     void ImmediateSubmit(const std::function<void(VkCommandBuffer)>& recorder);
     void UploadBufferData(BufferHandle destination, VkDeviceSize destinationOffset, std::span<const std::byte> data);
     void UploadImageData(ImageHandle destination, std::span<const std::byte> data);
+    void UploadImageDataRegions(ImageHandle destination,
+        std::span<const std::byte> data,
+        std::span<const VkBufferImageCopy> copyRegions);
     void FlushUploadBatch();
     void FlushBuffer(BufferHandle handle, VkDeviceSize offset, VkDeviceSize size);
     void InvalidateBuffer(BufferHandle handle, VkDeviceSize offset, VkDeviceSize size);

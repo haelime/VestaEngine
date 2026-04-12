@@ -752,6 +752,7 @@ public:
     [[nodiscard]] uint32_t GetIblEnvironmentCubemapSampledImageIndex() const { return _iblEnvironmentCubemapSampledImageIndex; }
     [[nodiscard]] uint32_t GetIblDiffuseIrradianceSampledImageIndex() const { return _iblDiffuseIrradianceSampledImageIndex; }
     [[nodiscard]] uint32_t GetIblSpecularPrefilterSampledImageIndex() const { return _iblSpecularPrefilterSampledImageIndex; }
+    [[nodiscard]] uint32_t GetIblSpecularPrefilterCubeSampledImageIndex() const { return _iblSpecularPrefilterCubeSampledImageIndex; }
     [[nodiscard]] ImageHandle GetExternalEnvironmentImage() const { return _externalEnvironmentImage; }
     [[nodiscard]] ImageHandle GetIblEnvironmentCubemapImage() const { return _iblEnvironmentCubemapImage; }
     [[nodiscard]] ImageHandle GetIblBrdfLutImage() const { return _iblBrdfLutImage; }
@@ -899,7 +900,7 @@ private:
     void CreateIblBrdfLut();
     void CreateEnvironmentCubemapImage(std::span<const float> rgbaPixels, uint32_t width, uint32_t height);
     void CreateDiffuseIrradianceEquirect(std::span<const float> rgbaPixels, uint32_t width, uint32_t height);
-    void CreateSpecularPrefilterEquirectAtlas(std::span<const float> rgbaPixels, uint32_t width, uint32_t height);
+    void CreateSpecularPrefilterCubemap(std::span<const float> rgbaPixels, uint32_t width, uint32_t height);
     void DestroyIblResources();
     void EnsureDdgiResources();
     void DestroyDdgiResources();
@@ -956,6 +957,7 @@ private:
     uint32_t _iblDiffuseIrradianceSampledImageIndex{ kInvalidResourceIndex };
     ImageHandle _iblSpecularPrefilterImage{};
     uint32_t _iblSpecularPrefilterSampledImageIndex{ kInvalidResourceIndex };
+    uint32_t _iblSpecularPrefilterCubeSampledImageIndex{ kInvalidResourceIndex };
     ImageHandle _iblBrdfLutImage{};
     uint32_t _iblBrdfLutSampledImageIndex{ kInvalidResourceIndex };
     BufferHandle _ddgiIrradianceBuffer{};

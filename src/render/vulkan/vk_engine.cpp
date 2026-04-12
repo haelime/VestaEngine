@@ -1981,7 +1981,7 @@ void VestaEngine::finish_benchmark()
             iblBackendLabel += "+DiffuseIrradiance";
         }
         if (iblStats.specularPrefilterAvailable) {
-            iblBackendLabel += "+SpecularPrefilter";
+            iblBackendLabel += "+SpecularPrefilterCube";
         }
         if (iblStats.brdfLutAvailable) {
             iblBackendLabel += "+BRDFLUT";
@@ -4696,10 +4696,10 @@ void VestaEngine::build_debug_ui()
                     ImGui::Text("Cube %s  Diffuse %s  Prefilter %s  BRDF LUT %s",
                         iblStats.environmentCubemapAvailable ? "cube image" : (iblStats.environmentMapUploaded ? "staged" : "procedural fallback"),
                         iblStats.diffuseIrradianceAvailable ? "irradiance texture" : (iblStats.environmentMapUploaded ? "equirect sample" : (iblStats.diffuseBackendAvailable ? "procedural live" : "staged")),
-                        iblStats.specularPrefilterAvailable ? "prefilter atlas" : "staged",
+                        iblStats.specularPrefilterAvailable ? "prefilter cube mips" : "staged",
                         iblStats.brdfLutAvailable ? "live" : "staged");
                     ImGui::TextDisabled(iblStats.environmentMapUploaded
-                        ? "External HDRI is sampled directly, converted into a Vulkan cube image, and convolved into diffuse irradiance plus a roughness-sliced specular prefilter atlas."
+                        ? "External HDRI is sampled directly, converted into Vulkan cube images, and convolved into diffuse irradiance plus specular prefilter cube mips."
                         : "Procedural sky is live; external HDRI irradiance/prefilter generation is available after an HDRI is loaded.");
                     ImGui::EndTabItem();
                 }
@@ -4925,15 +4925,15 @@ void VestaEngine::build_debug_ui()
                 .previewable = static_cast<bool>(_renderer.GetIblDiffuseIrradianceImage()),
             });
             engineTextures.push_back(EngineTextureRow{
-                .name = iblStats.specularPrefilterAvailable ? "Specular Prefilter Equirect Atlas" : "Specular Prefilter Cubemap",
+                .name = "Specular Prefilter Cubemap",
                 .image = _renderer.GetIblSpecularPrefilterImage(),
-                .resolution = iblStats.specularPrefilterAvailable ? "128x320 atlas" : fmt::format("{}x{}x6 mips {}", iblStats.specularCubemapResolution, iblStats.specularCubemapResolution, iblStats.specularMipCount),
+                .resolution = fmt::format("{}x{}x6 mips {}", iblStats.specularCubemapResolution, iblStats.specularCubemapResolution, iblStats.specularMipCount),
                 .format = iblStats.specularPrefilterAvailable ? "RGBA32F" : "RGBA16F",
-                .usage = iblStats.specularPrefilterAvailable ? "sampled specular IBL" : "future prefiltered IBL",
+                .usage = iblStats.specularPrefilterAvailable ? "sampled specular IBL cube" : "future prefiltered IBL",
                 .memoryBytes = iblStats.estimatedSpecularBytes,
-                .bindlessIndex = _renderer.GetIblSpecularPrefilterSampledImageIndex(),
+                .bindlessIndex = _renderer.GetIblSpecularPrefilterCubeSampledImageIndex(),
                 .state = iblStats.specularPrefilterAvailable ? "live" : "staged",
-                .previewable = static_cast<bool>(_renderer.GetIblSpecularPrefilterImage()),
+                .previewable = false,
             });
             if (_engineTexturePreviewDescriptors.size() != engineTextures.size()) {
                 for (VkDescriptorSet descriptor : _engineTexturePreviewDescriptors) {
@@ -5212,7 +5212,7 @@ void VestaEngine::build_debug_ui()
                             iblStats.sourceIsHdr ? "HDR" : "LDR");
                     }
                     ImGui::Text("Diffuse irradiance: %s", iblStats.diffuseIrradianceAvailable ? "live equirect" : (iblStats.diffuseBackendAvailable ? "staged" : "backend required"));
-                    ImGui::Text("Specular prefilter: %s", iblStats.specularPrefilterAvailable ? "live atlas" : "staged");
+                    ImGui::Text("Specular prefilter: %s", iblStats.specularPrefilterAvailable ? "live cube mips" : "staged");
                     ImGui::Text("BRDF LUT: %s", iblStats.brdfLutAvailable ? "live" : "staged");
                     ImGui::EndTabItem();
                 }

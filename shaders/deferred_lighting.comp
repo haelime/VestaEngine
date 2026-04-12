@@ -100,6 +100,13 @@ vec3 sampleSpecularPrefilterAtlas(uint imageIndex, vec3 direction, float roughne
     return mix(a, b, t) * pc.environmentParams.x;
 }
 
+vec3 sampleSpecularPrefilterCube(uint imageIndex, vec3 direction, float roughness, uint mipCount)
+{
+    float maxLod = float(max(mipCount, 1u) - 1u);
+    return textureLod(sampledCubeImages[nonuniformEXT(int(imageIndex))], direction, clamp(roughness, 0.0, 1.0) * maxLod).rgb
+        * pc.environmentParams.x;
+}
+
 float DistributionGGX(vec3 N, vec3 H, float roughness)
 {
     float a = roughness * roughness;
@@ -188,7 +195,9 @@ vec3 sampleSpecularIbl(vec3 reflectionDirection, vec3 normal, vec3 viewDirection
     vec3 specular = mix(sampleSky(reflectionDirection), sampleSky(blurredDirection), clamp(roughness, 0.0, 1.0)) * strength;
     if (pc.lightingConstantsBufferIndex != INVALID_BUFFER_INDEX) {
         DeferredLightingConstants constants = lightingConstantsBuffers[nonuniformEXT(int(pc.lightingConstantsBufferIndex))].values;
-        if (constants.iblIndices.w != INVALID_IMAGE_INDEX) {
+        if (constants.iblCubeIndices.z != INVALID_IMAGE_INDEX && constants.iblCubeIndices.w > 0u) {
+            specular = sampleSpecularPrefilterCube(constants.iblCubeIndices.z, reflectionDirection, roughness, constants.iblCubeIndices.w) * strength;
+        } else if (constants.iblIndices.w != INVALID_IMAGE_INDEX) {
             specular = sampleSpecularPrefilterAtlas(constants.iblIndices.w, reflectionDirection, roughness) * strength;
         }
         uint brdfImageIndex = constants.iblIndices.z != INVALID_IMAGE_INDEX ? constants.iblIndices.z : constants.shadowIndices.w;

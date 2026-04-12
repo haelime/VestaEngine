@@ -178,6 +178,12 @@ void DeferredLightingPass::SetIblSpecularPrefilterImage(uint32_t sampledImageInd
     _iblSpecularPrefilterImageIndex = sampledImageIndex;
 }
 
+void DeferredLightingPass::SetIblSpecularPrefilterCubeImage(uint32_t sampledCubeImageIndex, uint32_t mipCount)
+{
+    _iblSpecularPrefilterCubeImageIndex = sampledCubeImageIndex;
+    _iblSpecularPrefilterCubeMipCount = sampledCubeImageIndex != kInvalidResourceIndex ? mipCount : 0u;
+}
+
 void DeferredLightingPass::SetEnvironmentSpecularStrength(float strength)
 {
     _environmentSpecularStrength = std::clamp(strength, 0.0f, 2.0f);
@@ -414,8 +420,8 @@ void DeferredLightingPass::Execute(const RenderGraphContext& context)
             .iblIndices = glm::uvec4(_environmentImageIndex, _iblDiffuseIrradianceImageIndex, _iblBrdfLutImageIndex, _iblSpecularPrefilterImageIndex),
             .iblCubeIndices = glm::uvec4(_environmentCubeImageIndex,
                 _environmentCubeImageIndex != kInvalidResourceIndex ? 1u : 0u,
-                0u,
-                0u),
+                _iblSpecularPrefilterCubeImageIndex,
+                _iblSpecularPrefilterCubeMipCount),
             .rayEffects = glm::uvec4(rayEffectsImageIndex, _rayEffectsFlags.x, _rayEffectsFlags.y, _rayEffectsFlags.z),
             .rayReflection = glm::uvec4(rayReflectionImageIndex,
                 _rayEffectsFlags.z != 0u && rayReflectionImageIndex != kInvalidResourceIndex ? 1u : 0u,

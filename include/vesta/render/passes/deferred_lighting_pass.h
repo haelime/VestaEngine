@@ -27,6 +27,7 @@ public:
     void SetIblDiffuseIrradianceImage(uint32_t sampledImageIndex);
     void SetIblBrdfLutImage(uint32_t sampledImageIndex);
     void SetIblSpecularPrefilterImage(uint32_t sampledImageIndex);
+    void SetIblSpecularPrefilterCubeImage(uint32_t sampledCubeImageIndex, uint32_t mipCount);
     void SetEnvironmentSpecularStrength(float strength);
     void SetRayEffects(GraphTextureHandle rayEffects,
         GraphTextureHandle rayReflection,
@@ -96,6 +97,8 @@ private:
     uint32_t _iblDiffuseIrradianceImageIndex{ kInvalidResourceIndex };
     uint32_t _iblBrdfLutImageIndex{ kInvalidResourceIndex };
     uint32_t _iblSpecularPrefilterImageIndex{ kInvalidResourceIndex };
+    uint32_t _iblSpecularPrefilterCubeImageIndex{ kInvalidResourceIndex };
+    uint32_t _iblSpecularPrefilterCubeMipCount{ 0 };
     float _environmentSpecularStrength{ 0.45f };
     glm::uvec4 _rayEffectsFlags{ 0u, 0u, 0u, 0u };
     glm::uvec2 _rayGiFlags{ 0u, 0u };

@@ -814,6 +814,8 @@ void ConfigureDeferredLightingPass(Renderer& renderer, IRenderPass& pass, const 
     lightingPass.SetIblDiffuseIrradianceImage(renderer.GetIblDiffuseIrradianceSampledImageIndex());
     lightingPass.SetIblBrdfLutImage(renderer.GetIblBrdfLutSampledImageIndex());
     lightingPass.SetIblSpecularPrefilterImage(renderer.GetIblSpecularPrefilterSampledImageIndex());
+    lightingPass.SetIblSpecularPrefilterCubeImage(
+        renderer.GetIblSpecularPrefilterCubeSampledImageIndex(), renderer.GetIblStats().specularMipCount);
     lightingPass.SetEnvironmentSpecularStrength(settings.environmentSpecularStrength);
     lightingPass.SetRayEffects(resources.rayEffects,
         resources.rayReflection,
@@ -2228,7 +2230,7 @@ void Renderer::CreateDiffuseIrradianceEquirect(std::span<const float> rgbaPixels
     _iblDiffuseIrradianceSampledImageIndex = _device.GetImageResource(_iblDiffuseIrradianceImage).bindless.sampledImage;
 }
 
-void Renderer::CreateSpecularPrefilterEquirectAtlas(std::span<const float> rgbaPixels, uint32_t width, uint32_t height)
+void Renderer::CreateSpecularPrefilterCubemap(std::span<const float> rgbaPixels, uint32_t width, uint32_t height)
 {
     if (_device.GetDevice() == VK_NULL_HANDLE || rgbaPixels.empty() || width == 0u || height == 0u) {
         return;
@@ -2237,53 +2239,87 @@ void Renderer::CreateSpecularPrefilterEquirectAtlas(std::span<const float> rgbaP
         _device.DestroyImage(_iblSpecularPrefilterImage);
         _iblSpecularPrefilterImage = {};
         _iblSpecularPrefilterSampledImageIndex = kInvalidResourceIndex;
+        _iblSpecularPrefilterCubeSampledImageIndex = kInvalidResourceIndex;
     }
 
-    constexpr uint32_t kPrefilterWidth = 128u;
-    constexpr uint32_t kPrefilterHeight = 64u;
-    constexpr uint32_t kRoughnessLevels = 5u;
+    constexpr uint32_t kFaceSize = 128u;
+    constexpr uint32_t kMipLevels = 8u;
+    constexpr uint32_t kCubeFaces = 6u;
     constexpr uint32_t kSampleCount = 64u;
-    std::vector<float> prefilter(static_cast<size_t>(kPrefilterWidth) * kPrefilterHeight * kRoughnessLevels * 4u, 1.0f);
-    for (uint32_t level = 0; level < kRoughnessLevels; ++level) {
-        const float roughness = static_cast<float>(level) / static_cast<float>(kRoughnessLevels - 1u);
-        for (uint32_t y = 0; y < kPrefilterHeight; ++y) {
-            const float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(kPrefilterHeight);
-            for (uint32_t x = 0; x < kPrefilterWidth; ++x) {
-                const float u = (static_cast<float>(x) + 0.5f) / static_cast<float>(kPrefilterWidth);
-                const glm::vec3 reflection = DirectionFromEquirectUv(u, v);
-                glm::vec3 sum(0.0f);
-                float weightSum = 0.0f;
-                for (uint32_t sampleIndex = 0; sampleIndex < kSampleCount; ++sampleIndex) {
-                    const glm::vec3 halfVector = TangentToWorld(ImportanceSampleGgxYUp(Hammersley(sampleIndex, kSampleCount), roughness), reflection);
-                    const glm::vec3 light = glm::normalize(2.0f * glm::dot(reflection, halfVector) * halfVector - reflection);
-                    const float nDotL = std::max(glm::dot(reflection, light), 0.0f);
-                    if (nDotL > 0.0f) {
-                        sum += SampleEquirect(rgbaPixels, width, height, light) * nDotL;
-                        weightSum += nDotL;
+
+    size_t texelCount = 0;
+    for (uint32_t mip = 0; mip < kMipLevels; ++mip) {
+        const uint32_t mipSize = std::max(1u, kFaceSize >> mip);
+        texelCount += static_cast<size_t>(kCubeFaces) * mipSize * mipSize;
+    }
+
+    std::vector<float> prefilter(texelCount * 4u, 1.0f);
+    std::vector<VkBufferImageCopy> copyRegions;
+    copyRegions.reserve(kMipLevels * kCubeFaces);
+
+    size_t texelOffset = 0;
+    for (uint32_t mip = 0; mip < kMipLevels; ++mip) {
+        const uint32_t mipSize = std::max(1u, kFaceSize >> mip);
+        const float roughness = static_cast<float>(mip) / static_cast<float>(kMipLevels - 1u);
+        for (uint32_t face = 0; face < kCubeFaces; ++face) {
+            const size_t faceTexelOffset = texelOffset;
+            for (uint32_t y = 0; y < mipSize; ++y) {
+                const float v = (static_cast<float>(y) + 0.5f) / static_cast<float>(mipSize);
+                for (uint32_t x = 0; x < mipSize; ++x) {
+                    const float u = (static_cast<float>(x) + 0.5f) / static_cast<float>(mipSize);
+                    const glm::vec3 reflection = DirectionFromCubeFace(face, u, v);
+                    glm::vec3 sum(0.0f);
+                    float weightSum = 0.0f;
+                    for (uint32_t sampleIndex = 0; sampleIndex < kSampleCount; ++sampleIndex) {
+                        const glm::vec3 halfVector =
+                            TangentToWorld(ImportanceSampleGgxYUp(Hammersley(sampleIndex, kSampleCount), roughness), reflection);
+                        const glm::vec3 light = glm::normalize(2.0f * glm::dot(reflection, halfVector) * halfVector - reflection);
+                        const float nDotL = std::max(glm::dot(reflection, light), 0.0f);
+                        if (nDotL > 0.0f) {
+                            sum += SampleEquirect(rgbaPixels, width, height, light) * nDotL;
+                            weightSum += nDotL;
+                        }
                     }
+                    const glm::vec3 value = weightSum > 0.0f ? sum / weightSum : SampleEquirect(rgbaPixels, width, height, reflection);
+                    const size_t offset = (texelOffset + static_cast<size_t>(y) * mipSize + x) * 4u;
+                    prefilter[offset + 0u] = value.r;
+                    prefilter[offset + 1u] = value.g;
+                    prefilter[offset + 2u] = value.b;
+                    prefilter[offset + 3u] = 1.0f;
                 }
-                const glm::vec3 value = weightSum > 0.0f ? sum / weightSum : SampleEquirect(rgbaPixels, width, height, reflection);
-                const size_t offset = ((static_cast<size_t>(level) * kPrefilterHeight + y) * kPrefilterWidth + x) * 4u;
-                prefilter[offset + 0u] = value.r;
-                prefilter[offset + 1u] = value.g;
-                prefilter[offset + 2u] = value.b;
-                prefilter[offset + 3u] = 1.0f;
             }
+
+            VkBufferImageCopy region{};
+            region.bufferOffset = static_cast<VkDeviceSize>(faceTexelOffset * 4u * sizeof(float));
+            region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            region.imageSubresource.mipLevel = mip;
+            region.imageSubresource.baseArrayLayer = face;
+            region.imageSubresource.layerCount = 1u;
+            region.imageExtent = VkExtent3D{ mipSize, mipSize, 1u };
+            copyRegions.push_back(region);
+
+            texelOffset += static_cast<size_t>(mipSize) * mipSize;
         }
     }
 
     _iblSpecularPrefilterImage = _device.CreateImage(ImageDesc{
-        .extent = VkExtent3D{ kPrefilterWidth, kPrefilterHeight * kRoughnessLevels, 1u },
+        .extent = VkExtent3D{ kFaceSize, kFaceSize, 1u },
         .format = VK_FORMAT_R32G32B32A32_SFLOAT,
         .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
         .aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT,
         .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+        .mipLevels = kMipLevels,
+        .arrayLayers = kCubeFaces,
+        .cubeCompatible = true,
         .registerBindlessSampled = true,
-        .debugName = "IblSpecularPrefilterEquirectAtlas",
+        .debugName = "IblSpecularPrefilterCubemap",
     });
-    _device.UploadImageData(_iblSpecularPrefilterImage,
-        std::span<const std::byte>(reinterpret_cast<const std::byte*>(prefilter.data()), prefilter.size() * sizeof(float)));
-    _iblSpecularPrefilterSampledImageIndex = _device.GetImageResource(_iblSpecularPrefilterImage).bindless.sampledImage;
+    _device.UploadImageDataRegions(_iblSpecularPrefilterImage,
+        std::span<const std::byte>(reinterpret_cast<const std::byte*>(prefilter.data()), prefilter.size() * sizeof(float)),
+        std::span<const VkBufferImageCopy>(copyRegions.data(), copyRegions.size()));
+    _iblSpecularPrefilterCubeSampledImageIndex =
+        _device.GetImageResource(_iblSpecularPrefilterImage).bindless.sampledCubeImage;
+    _iblSpecularPrefilterSampledImageIndex = kInvalidResourceIndex;
 }
 
 void Renderer::DestroyIblResources()
@@ -2299,6 +2335,7 @@ void Renderer::DestroyIblResources()
         _iblSpecularPrefilterImage = {};
     }
     _iblSpecularPrefilterSampledImageIndex = kInvalidResourceIndex;
+    _iblSpecularPrefilterCubeSampledImageIndex = kInvalidResourceIndex;
     if (_iblBrdfLutImage) {
         _device.DestroyImage(_iblBrdfLutImage);
         _iblBrdfLutImage = {};
@@ -2342,7 +2379,7 @@ bool Renderer::LoadExternalEnvironmentMap(const std::filesystem::path& path)
         CreateDiffuseIrradianceEquirect(std::span<const float>(pixels, texelCount * 4u),
             static_cast<uint32_t>(width),
             static_cast<uint32_t>(height));
-        CreateSpecularPrefilterEquirectAtlas(std::span<const float>(pixels, texelCount * 4u),
+        CreateSpecularPrefilterCubemap(std::span<const float>(pixels, texelCount * 4u),
             static_cast<uint32_t>(width),
             static_cast<uint32_t>(height));
     }
@@ -2373,6 +2410,7 @@ void Renderer::ClearExternalEnvironmentMap()
         _iblSpecularPrefilterImage = {};
     }
     _iblSpecularPrefilterSampledImageIndex = kInvalidResourceIndex;
+    _iblSpecularPrefilterCubeSampledImageIndex = kInvalidResourceIndex;
     ResetAccumulation();
 }
 
@@ -2827,6 +2865,11 @@ IblStats Renderer::GetIblStats() const
     stats.sourceWidth = _settings.externalHdriWidth;
     stats.sourceHeight = _settings.externalHdriHeight;
     stats.sourceChannels = _settings.externalHdriChannels;
+    if (_iblSpecularPrefilterImage) {
+        const auto& specularImage = _device.GetImageResource(_iblSpecularPrefilterImage);
+        stats.specularCubemapResolution = specularImage.desc.extent.width;
+        stats.specularMipCount = specularImage.desc.mipLevels;
+    }
 
     const uint64_t environmentCubePixels = kCubeFaces * stats.environmentCubemapResolution * stats.environmentCubemapResolution;
     stats.estimatedEnvironmentCubemapBytes = _iblEnvironmentCubemapImage
@@ -2847,15 +2890,25 @@ IblStats Renderer::GetIblStats() const
         specularPixels += kCubeFaces * mipResolution * mipResolution;
     }
     stats.estimatedSpecularBytes = _iblSpecularPrefilterImage
-        ? static_cast<uint64_t>(_device.GetImageExtent(_iblSpecularPrefilterImage).width)
-            * _device.GetImageExtent(_iblSpecularPrefilterImage).height * 4u * sizeof(float)
+        ? [&]() {
+              const auto& image = _device.GetImageResource(_iblSpecularPrefilterImage);
+              uint64_t bytes = 0;
+              for (uint32_t mip = 0; mip < image.desc.mipLevels; ++mip) {
+                  const uint32_t mipWidth = std::max(1u, image.desc.extent.width >> mip);
+                  const uint32_t mipHeight = std::max(1u, image.desc.extent.height >> mip);
+                  bytes += static_cast<uint64_t>(mipWidth) * mipHeight * image.desc.arrayLayers * kRgba32fBytesPerTexel;
+              }
+              return bytes;
+          }()
         : specularPixels * kRgba16fBytesPerTexel;
     stats.estimatedBrdfLutBytes = static_cast<uint64_t>(stats.brdfLutResolution) * stats.brdfLutResolution * kRg32fBytesPerTexel;
 
     stats.diffuseBackendAvailable = true;
-    stats.specularBackendAvailable = _iblSpecularPrefilterSampledImageIndex != kInvalidResourceIndex;
+    stats.specularBackendAvailable = _iblSpecularPrefilterSampledImageIndex != kInvalidResourceIndex
+        || _iblSpecularPrefilterCubeSampledImageIndex != kInvalidResourceIndex;
     stats.diffuseIrradianceAvailable = _iblDiffuseIrradianceSampledImageIndex != kInvalidResourceIndex;
-    stats.specularPrefilterAvailable = _iblSpecularPrefilterSampledImageIndex != kInvalidResourceIndex;
+    stats.specularPrefilterAvailable = _iblSpecularPrefilterSampledImageIndex != kInvalidResourceIndex
+        || _iblSpecularPrefilterCubeSampledImageIndex != kInvalidResourceIndex;
     stats.brdfLutAvailable = _iblBrdfLutSampledImageIndex != kInvalidResourceIndex;
     return stats;
 }
