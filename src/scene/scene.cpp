@@ -32,14 +32,18 @@
 #include <vesta/render/renderer.h>
 #include <vesta/render/rhi/render_device.h>
 #include <vesta/render/vulkan/vk_images.h>
+#include <vesta/scene/camera.h>
 
 namespace vesta::scene {
 namespace {
+constexpr uint32_t kRealtimeGaussianSortLimit = 200000;
+
 constexpr auto kLoadOptions = fastgltf::Options::DontRequireValidAssetMember | fastgltf::Options::LoadGLBBuffers
     | fastgltf::Options::LoadExternalBuffers | fastgltf::Options::LoadExternalImages | fastgltf::Options::GenerateMeshIndices;
 constexpr VmaAllocationCreateFlags kMappedHostFlags =
     VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
 constexpr float kShC0 = 0.28209479177387814f;
+const glm::quat kGaussianImportRotation = glm::angleAxis(glm::radians(180.0f), glm::vec3(1.0f, 0.0f, 0.0f));
 
 bool ShouldAutoLayoutDemoScene(const std::filesystem::path& path, const fastgltf::Scene& scene)
 {
@@ -71,6 +75,35 @@ glm::mat4 NodeToMatrix(const fastgltf::Node& node)
     const glm::vec3 scale(trs->scale[0], trs->scale[1], trs->scale[2]);
 
     return glm::translate(glm::mat4(1.0f), translation) * glm::mat4_cast(rotation) * glm::scale(glm::mat4(1.0f), scale);
+}
+
+glm::vec3 ApplyGaussianImportTransform(glm::vec3 position)
+{
+    return kGaussianImportRotation * position;
+}
+
+glm::vec4 ApplyGaussianImportTransform(glm::vec4 rotation)
+{
+    const glm::quat gaussianRotation(rotation.w, rotation.x, rotation.y, rotation.z);
+    const glm::quat transformed = glm::normalize(kGaussianImportRotation * gaussianRotation);
+    return glm::vec4(transformed.x, transformed.y, transformed.z, transformed.w);
+}
+
+glm::vec3 NormalizeGaussianScaleForScene(glm::vec3 scale, float sceneRadius)
+{
+    constexpr float kAbsoluteMinScale = 1.5e-3f;
+    constexpr float kRelativeMinScale = 1.0e-5f;
+    constexpr float kAbsoluteMaxScale = 0.12f;
+    constexpr float kRelativeMaxScale = 0.08f;
+    constexpr float kMaxAnisotropy = 24.0f;
+
+    const float minScale = std::max(kAbsoluteMinScale, sceneRadius * kRelativeMinScale);
+    const float maxScale = std::max(kAbsoluteMaxScale, sceneRadius * kRelativeMaxScale);
+    scale = glm::clamp(glm::abs(scale), glm::vec3(minScale), glm::vec3(maxScale));
+
+    const float minAxis = std::max(std::min(scale.x, std::min(scale.y, scale.z)), minScale);
+    const float anisotropicMaxScale = std::min(maxScale, minAxis * kMaxAnisotropy);
+    return glm::min(scale, glm::vec3(anisotropicMaxScale));
 }
 
 std::vector<glm::vec3> ReadVec3Accessor(const fastgltf::Asset& asset, const fastgltf::Accessor& accessor)
@@ -568,10 +601,83 @@ bool ParsePlyHeader(const std::filesystem::path& path, PlyVertexLayout& layout)
     return false;
 }
 
+std::optional<std::filesystem::path> ResolveGaussianSourcePath(const std::filesystem::path& path)
+{
+    if (!std::filesystem::exists(path)) {
+        return std::nullopt;
+    }
+
+    if (std::filesystem::is_regular_file(path)) {
+        return path;
+    }
+
+    if (!std::filesystem::is_directory(path)) {
+        return std::nullopt;
+    }
+
+    const std::filesystem::path directPly = path / "point_cloud.ply";
+    if (std::filesystem::exists(directPly)) {
+        return directPly;
+    }
+
+    const std::filesystem::path pointCloudDirectory = std::filesystem::exists(path / "point_cloud") ? path / "point_cloud" : path;
+    std::optional<std::filesystem::path> bestPath;
+    int bestIteration = -1;
+    for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(pointCloudDirectory)) {
+        if (!entry.is_directory()) {
+            continue;
+        }
+
+        const std::string directoryName = entry.path().filename().string();
+        if (!directoryName.starts_with("iteration_")) {
+            continue;
+        }
+
+        int iteration = -1;
+        try {
+            iteration = std::stoi(directoryName.substr(std::string("iteration_").size()));
+        } catch (...) {
+            iteration = -1;
+        }
+
+        const std::filesystem::path candidate = entry.path() / "point_cloud.ply";
+        if (iteration >= 0 && std::filesystem::exists(candidate) && iteration > bestIteration) {
+            bestIteration = iteration;
+            bestPath = candidate;
+        }
+    }
+
+    return bestPath;
+}
+
+uint32_t DetectGaussianShDegree(const std::unordered_map<std::string, size_t>& propertyIndex)
+{
+    size_t restCount = 0;
+    while (propertyIndex.contains(fmt::format("f_rest_{}", restCount))) {
+        ++restCount;
+    }
+
+    if (restCount >= 45) {
+        return 3;
+    }
+    if (restCount >= 24) {
+        return 2;
+    }
+    if (restCount >= 9) {
+        return 1;
+    }
+    return 0;
+}
+
 bool ParseGaussianPly(const std::filesystem::path& path, ParsedScene& parsedScene)
 {
+    const std::optional<std::filesystem::path> gaussianPath = ResolveGaussianSourcePath(path);
+    if (!gaussianPath.has_value()) {
+        return false;
+    }
+
     PlyVertexLayout layout;
-    if (!ParsePlyHeader(path, layout)) {
+    if (!ParsePlyHeader(*gaussianPath, layout)) {
         return false;
     }
 
@@ -581,6 +687,64 @@ bool ParseGaussianPly(const std::filesystem::path& path, ParsedScene& parsedScen
         if (layout.properties[i].type == PlyScalarType::Invalid) {
             return false;
         }
+    }
+
+    parsedScene.gaussianShDegree = DetectGaussianShDegree(propertyIndex);
+
+    const auto findProperty = [&](std::string_view name) -> int {
+        const auto it = propertyIndex.find(std::string(name));
+        return it != propertyIndex.end() ? static_cast<int>(it->second) : -1;
+    };
+
+    struct GaussianPropertyIndices {
+        int x{ -1 };
+        int y{ -1 };
+        int z{ -1 };
+        int red{ -1 };
+        int green{ -1 };
+        int blue{ -1 };
+        int opacity{ -1 };
+        int scale0{ -1 };
+        int scale1{ -1 };
+        int scale2{ -1 };
+        int rot0{ -1 };
+        int rot1{ -1 };
+        int rot2{ -1 };
+        int rot3{ -1 };
+        int fdc0{ -1 };
+        int fdc1{ -1 };
+        int fdc2{ -1 };
+        std::array<std::array<int, 3>, kGaussianMaxShCoefficients> fRest{};
+    } indices;
+    for (auto& triplet : indices.fRest) {
+        triplet = { -1, -1, -1 };
+    }
+
+    indices.x = findProperty("x");
+    indices.y = findProperty("y");
+    indices.z = findProperty("z");
+    indices.red = findProperty("red");
+    indices.green = findProperty("green");
+    indices.blue = findProperty("blue");
+    indices.opacity = findProperty("opacity");
+    indices.scale0 = findProperty("scale_0");
+    indices.scale1 = findProperty("scale_1");
+    indices.scale2 = findProperty("scale_2");
+    indices.rot0 = findProperty("rot_0");
+    indices.rot1 = findProperty("rot_1");
+    indices.rot2 = findProperty("rot_2");
+    indices.rot3 = findProperty("rot_3");
+    indices.fdc0 = findProperty("f_dc_0");
+    indices.fdc1 = findProperty("f_dc_1");
+    indices.fdc2 = findProperty("f_dc_2");
+
+    const uint32_t activeCoefficientCount =
+        std::min<uint32_t>((parsedScene.gaussianShDegree + 1u) * (parsedScene.gaussianShDegree + 1u), kGaussianMaxShCoefficients);
+    for (uint32_t coefficientIndex = 1; coefficientIndex < activeCoefficientCount; ++coefficientIndex) {
+        const uint32_t restBaseIndex = (coefficientIndex - 1u) * 3u;
+        indices.fRest[coefficientIndex][0] = findProperty(fmt::format("f_rest_{}", restBaseIndex + 0u));
+        indices.fRest[coefficientIndex][1] = findProperty(fmt::format("f_rest_{}", restBaseIndex + 1u));
+        indices.fRest[coefficientIndex][2] = findProperty(fmt::format("f_rest_{}", restBaseIndex + 2u));
     }
 
     const auto readVertexFromValues = [&](const std::vector<float>& values) {
@@ -609,17 +773,84 @@ bool ParseGaussianPly(const std::filesystem::path& path, ParsedScene& parsedScen
             const float sx = std::exp(getValue("scale_0"));
             const float sy = std::exp(getValue("scale_1"));
             const float sz = std::exp(getValue("scale_2"));
+            vertex.normal = glm::vec3(sx, sy, sz);
             vertex.splatParams.x = (sx + sy + sz) / 3.0f;
         } else {
             // Plain point clouds do not carry learned Gaussian scale, so use a
             // tiny screen-space baseline that stays readable instead of a huge blur.
+            vertex.normal = glm::vec3(1.0f);
             vertex.splatParams.x = 0.28f;
+        }
+
+        if (propertyIndex.contains("rot_0") && propertyIndex.contains("rot_1") && propertyIndex.contains("rot_2")
+            && propertyIndex.contains("rot_3")) {
+            glm::vec4 rotation(getValue("rot_1"), getValue("rot_2"), getValue("rot_3"), getValue("rot_0", 1.0f));
+            const float rotationLength = glm::length(rotation);
+            vertex.tangent = rotationLength > 1.0e-4f ? rotation / rotationLength : glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+        } else {
+            vertex.tangent = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
         }
 
         vertex.splatParams.y = propertyIndex.contains("opacity") ? Sigmoid(getValue("opacity")) : vertex.color.a;
         vertex.color.a = 1.0f;
-        vertex.normal = glm::vec3(0.0f, 1.0f, 0.0f);
         return vertex;
+    };
+
+    const auto readGaussianFromValues = [&](const std::vector<float>& values) {
+        auto getValue = [&](std::string_view name, float fallback = 0.0f) {
+            const auto it = propertyIndex.find(std::string(name));
+            return it != propertyIndex.end() && it->second < values.size() ? values[it->second] : fallback;
+        };
+
+        GaussianPrimitive gaussian{};
+        gaussian.positionOpacity = glm::vec4(getValue("x"), getValue("y"), getValue("z"), 1.0f);
+
+        if (propertyIndex.contains("opacity")) {
+            gaussian.positionOpacity.w = glm::clamp(Sigmoid(getValue("opacity")), 0.01f, 1.0f);
+        }
+
+        if (propertyIndex.contains("scale_0") && propertyIndex.contains("scale_1") && propertyIndex.contains("scale_2")) {
+            gaussian.scale = glm::vec4(
+                std::exp(getValue("scale_0")),
+                std::exp(getValue("scale_1")),
+                std::exp(getValue("scale_2")),
+                1.0f);
+        } else {
+            gaussian.scale = glm::vec4(1.0f);
+        }
+
+        if (propertyIndex.contains("rot_0") && propertyIndex.contains("rot_1") && propertyIndex.contains("rot_2")
+            && propertyIndex.contains("rot_3")) {
+            gaussian.rotation = glm::vec4(getValue("rot_1"), getValue("rot_2"), getValue("rot_3"), getValue("rot_0", 1.0f));
+            const float length = glm::length(gaussian.rotation);
+            gaussian.rotation = length > 1.0e-4f ? gaussian.rotation / length : glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+        }
+
+        if (propertyIndex.contains("f_dc_0") && propertyIndex.contains("f_dc_1") && propertyIndex.contains("f_dc_2")) {
+            gaussian.shCoefficients[0] = glm::vec4(getValue("f_dc_0"), getValue("f_dc_1"), getValue("f_dc_2"), 0.0f);
+        } else if (propertyIndex.contains("red") && propertyIndex.contains("green") && propertyIndex.contains("blue")) {
+            const float red = getValue("red") > 1.0f ? getValue("red") / 255.0f : getValue("red");
+            const float green = getValue("green") > 1.0f ? getValue("green") / 255.0f : getValue("green");
+            const float blue = getValue("blue") > 1.0f ? getValue("blue") / 255.0f : getValue("blue");
+            gaussian.shCoefficients[0] = glm::vec4(
+                (red - 0.5f) / kShC0,
+                (green - 0.5f) / kShC0,
+                (blue - 0.5f) / kShC0,
+                0.0f);
+        }
+
+        const uint32_t activeCoefficientCount = std::min<uint32_t>((parsedScene.gaussianShDegree + 1u) * (parsedScene.gaussianShDegree + 1u),
+            kGaussianMaxShCoefficients);
+        for (uint32_t coefficientIndex = 1; coefficientIndex < activeCoefficientCount; ++coefficientIndex) {
+            const uint32_t restBaseIndex = (coefficientIndex - 1u) * 3u;
+            gaussian.shCoefficients[coefficientIndex] = glm::vec4(
+                getValue(fmt::format("f_rest_{}", restBaseIndex + 0u), 0.0f),
+                getValue(fmt::format("f_rest_{}", restBaseIndex + 1u), 0.0f),
+                getValue(fmt::format("f_rest_{}", restBaseIndex + 2u), 0.0f),
+                0.0f);
+        }
+
+        return gaussian;
     };
 
     parsedScene.sceneKind = propertyIndex.contains("scale_0") && propertyIndex.contains("scale_1") && propertyIndex.contains("scale_2")
@@ -628,10 +859,12 @@ bool ParseGaussianPly(const std::filesystem::path& path, ParsedScene& parsedScen
     parsedScene.gaussianUsesNativeScale =
         propertyIndex.contains("scale_0") && propertyIndex.contains("scale_1") && propertyIndex.contains("scale_2");
     parsedScene.gaussianVertices.clear();
-    parsedScene.gaussianVertices.reserve(layout.vertexCount);
+    parsedScene.gaussianPrimitives.clear();
+        parsedScene.gaussianVertices.reserve(layout.vertexCount);
+        parsedScene.gaussianPrimitives.reserve(layout.vertexCount);
 
     if (layout.format == PlyFormat::Ascii) {
-        std::ifstream input(path);
+        std::ifstream input(*gaussianPath);
         if (!input.is_open()) {
             return false;
         }
@@ -658,9 +891,10 @@ bool ParseGaussianPly(const std::filesystem::path& path, ParsedScene& parsedScen
                 values.push_back(value);
             }
             parsedScene.gaussianVertices.push_back(readVertexFromValues(values));
+            parsedScene.gaussianPrimitives.push_back(readGaussianFromValues(values));
         }
     } else {
-        std::ifstream input(path, std::ios::binary);
+        std::ifstream input(*gaussianPath, std::ios::binary);
         if (!input.is_open()) {
             return false;
         }
@@ -674,21 +908,99 @@ bool ParseGaussianPly(const std::filesystem::path& path, ParsedScene& parsedScen
             return false;
         }
 
+        std::vector<size_t> propertyOffsets(layout.properties.size(), 0);
+        size_t runningOffset = 0;
+        for (size_t propertyIndexValue = 0; propertyIndexValue < layout.properties.size(); ++propertyIndexValue) {
+            propertyOffsets[propertyIndexValue] = runningOffset;
+            runningOffset += PlyScalarTypeSize(layout.properties[propertyIndexValue].type);
+        }
+
         std::vector<std::byte> rowBytes(stride);
+        const auto readValueFast = [&](int propertySlot, float fallback = 0.0f) {
+            if (propertySlot < 0) {
+                return fallback;
+            }
+            const size_t propertySlotIndex = static_cast<size_t>(propertySlot);
+            return ReadPlyScalarAsFloat(rowBytes.data() + propertyOffsets[propertySlotIndex], layout.properties[propertySlotIndex].type);
+        };
+
+        const bool hasShColor = indices.fdc0 >= 0 && indices.fdc1 >= 0 && indices.fdc2 >= 0;
+        const bool hasRgbColor = indices.red >= 0 && indices.green >= 0 && indices.blue >= 0;
+        const bool hasScales = indices.scale0 >= 0 && indices.scale1 >= 0 && indices.scale2 >= 0;
+        const bool hasRotation = indices.rot0 >= 0 && indices.rot1 >= 0 && indices.rot2 >= 0 && indices.rot3 >= 0;
+
         for (size_t vertexIndex = 0; vertexIndex < layout.vertexCount; ++vertexIndex) {
             input.read(reinterpret_cast<char*>(rowBytes.data()), static_cast<std::streamsize>(rowBytes.size()));
             if (!input) {
                 return false;
             }
 
-            std::vector<float> values;
-            values.reserve(layout.properties.size());
-            size_t offset = 0;
-            for (const PlyProperty& property : layout.properties) {
-                values.push_back(ReadPlyScalarAsFloat(rowBytes.data() + offset, property.type));
-                offset += PlyScalarTypeSize(property.type);
+            SceneVertex vertex{};
+            vertex.position = glm::vec3(readValueFast(indices.x), readValueFast(indices.y), readValueFast(indices.z));
+
+            GaussianPrimitive gaussian{};
+            gaussian.positionOpacity = glm::vec4(vertex.position, 1.0f);
+
+            if (hasShColor) {
+                const float fdc0 = readValueFast(indices.fdc0);
+                const float fdc1 = readValueFast(indices.fdc1);
+                const float fdc2 = readValueFast(indices.fdc2);
+                vertex.color.r = glm::clamp(kShC0 * fdc0 + 0.5f, 0.0f, 1.0f);
+                vertex.color.g = glm::clamp(kShC0 * fdc1 + 0.5f, 0.0f, 1.0f);
+                vertex.color.b = glm::clamp(kShC0 * fdc2 + 0.5f, 0.0f, 1.0f);
+                gaussian.shCoefficients[0] = glm::vec4(fdc0, fdc1, fdc2, 0.0f);
+            } else if (hasRgbColor) {
+                const float red = readValueFast(indices.red) > 1.0f ? readValueFast(indices.red) / 255.0f : readValueFast(indices.red);
+                const float green =
+                    readValueFast(indices.green) > 1.0f ? readValueFast(indices.green) / 255.0f : readValueFast(indices.green);
+                const float blue = readValueFast(indices.blue) > 1.0f ? readValueFast(indices.blue) / 255.0f : readValueFast(indices.blue);
+                vertex.color = glm::vec4(red, green, blue, 1.0f);
+                gaussian.shCoefficients[0] = glm::vec4((red - 0.5f) / kShC0, (green - 0.5f) / kShC0, (blue - 0.5f) / kShC0, 0.0f);
             }
-            parsedScene.gaussianVertices.push_back(readVertexFromValues(values));
+
+            if (indices.opacity >= 0) {
+                const float opacity = glm::clamp(Sigmoid(readValueFast(indices.opacity)), 0.01f, 1.0f);
+                vertex.splatParams.y = opacity;
+                gaussian.positionOpacity.w = opacity;
+            } else {
+                vertex.splatParams.y = 1.0f;
+            }
+
+            if (hasScales) {
+                const float sx = std::exp(readValueFast(indices.scale0));
+                const float sy = std::exp(readValueFast(indices.scale1));
+                const float sz = std::exp(readValueFast(indices.scale2));
+                vertex.normal = glm::vec3(sx, sy, sz);
+                vertex.splatParams.x = (sx + sy + sz) / 3.0f;
+                gaussian.scale = glm::vec4(sx, sy, sz, 1.0f);
+            } else {
+                vertex.normal = glm::vec3(1.0f);
+                vertex.splatParams.x = 0.28f;
+                gaussian.scale = glm::vec4(1.0f);
+            }
+
+            if (hasRotation) {
+                glm::vec4 rotation(
+                    readValueFast(indices.rot1), readValueFast(indices.rot2), readValueFast(indices.rot3), readValueFast(indices.rot0, 1.0f));
+                const float rotationLength = glm::length(rotation);
+                rotation = rotationLength > 1.0e-4f ? rotation / rotationLength : glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+                vertex.tangent = rotation;
+                gaussian.rotation = rotation;
+            } else {
+                vertex.tangent = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+            }
+
+            for (uint32_t coefficientIndex = 1; coefficientIndex < activeCoefficientCount; ++coefficientIndex) {
+                gaussian.shCoefficients[coefficientIndex] = glm::vec4(
+                    readValueFast(indices.fRest[coefficientIndex][0], 0.0f),
+                    readValueFast(indices.fRest[coefficientIndex][1], 0.0f),
+                    readValueFast(indices.fRest[coefficientIndex][2], 0.0f),
+                    0.0f);
+            }
+
+            vertex.color.a = 1.0f;
+            parsedScene.gaussianVertices.push_back(vertex);
+            parsedScene.gaussianPrimitives.push_back(gaussian);
         }
     }
 
@@ -799,7 +1111,7 @@ bool Scene::ParseFromFile(const std::filesystem::path& path)
     parsedScene.sourcePath = path;
     parsedScene.sceneKind = SceneKind::Empty;
 
-    if (path.extension() == ".ply" || path.extension() == ".PLY") {
+    if (std::filesystem::is_directory(path) || path.extension() == ".ply" || path.extension() == ".PLY") {
         if (!ParseGaussianPly(path, parsedScene)) {
             return false;
         }
@@ -1008,6 +1320,7 @@ bool Scene::PrepareParsedScene()
     PreparedScene& sceneData = *prepared;
     sceneData.sceneKind = parsed->sceneKind;
     sceneData.materials = parsed->materials;
+    sceneData.gaussianShDegree = parsed->gaussianShDegree;
     sceneData.objects.resize(parsed->objects.size());
     for (size_t objectIndex = 0; objectIndex < parsed->objects.size(); ++objectIndex) {
         const ParsedSceneObject& parsedObject = parsed->objects[objectIndex];
@@ -1022,6 +1335,7 @@ bool Scene::PrepareParsedScene()
 
     if (parsed->sceneKind == SceneKind::Gaussian || parsed->sceneKind == SceneKind::PointCloud) {
         sceneData.vertices = parsed->gaussianVertices;
+        sceneData.gaussians = parsed->gaussianPrimitives;
         if (!sceneData.objects.empty()) {
             sceneData.objects.front().firstVertex = 0;
             sceneData.objects.front().vertexCount = static_cast<uint32_t>(sceneData.vertices.size());
@@ -1144,23 +1458,51 @@ bool Scene::PrepareParsedScene()
     }
 
     if ((parsed->sceneKind == SceneKind::Gaussian || parsed->sceneKind == SceneKind::PointCloud) && sceneData.bounds.radius > 0.0f) {
+        const float gaussianSceneRadius = sceneData.bounds.radius;
         if (parsed->gaussianUsesNativeScale) {
-            for (SceneVertex& vertex : sceneData.vertices) {
-                vertex.splatParams.x = glm::clamp(vertex.splatParams.x / sceneData.bounds.radius * 220.0f, 0.18f, 6.0f);
-                vertex.splatParams.y = glm::clamp(vertex.splatParams.y, 0.04f, 1.0f);
+            for (size_t gaussianIndex = 0; gaussianIndex < sceneData.vertices.size(); ++gaussianIndex) {
+                SceneVertex& vertex = sceneData.vertices[gaussianIndex];
+                vertex.position = ApplyGaussianImportTransform(vertex.position);
+                vertex.normal = NormalizeGaussianScaleForScene(vertex.normal, gaussianSceneRadius);
+                vertex.splatParams.x = (vertex.normal.x + vertex.normal.y + vertex.normal.z) / 3.0f;
+                vertex.splatParams.y = glm::clamp(vertex.splatParams.y, 0.05f, 1.0f);
+                if (gaussianIndex < sceneData.gaussians.size()) {
+                    sceneData.gaussians[gaussianIndex].positionOpacity =
+                        glm::vec4(ApplyGaussianImportTransform(glm::vec3(sceneData.gaussians[gaussianIndex].positionOpacity)),
+                            sceneData.gaussians[gaussianIndex].positionOpacity.w);
+                    sceneData.gaussians[gaussianIndex].scale =
+                        glm::vec4(NormalizeGaussianScaleForScene(glm::vec3(sceneData.gaussians[gaussianIndex].scale), gaussianSceneRadius), 1.0f);
+                    sceneData.gaussians[gaussianIndex].positionOpacity.w = vertex.splatParams.y;
+                    vertex.tangent = sceneData.gaussians[gaussianIndex].rotation;
+                }
             }
         } else {
             const float pointCloudBaseSize =
                 glm::clamp(120.0f / std::sqrt(static_cast<float>(std::max<size_t>(sceneData.vertices.size(), 1))), 0.16f, 0.42f);
-            for (SceneVertex& vertex : sceneData.vertices) {
+            for (size_t gaussianIndex = 0; gaussianIndex < sceneData.vertices.size(); ++gaussianIndex) {
+                SceneVertex& vertex = sceneData.vertices[gaussianIndex];
+                vertex.normal = glm::vec3(1.0f);
+                vertex.tangent = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
                 vertex.splatParams.x = pointCloudBaseSize;
                 vertex.splatParams.y = glm::clamp(std::max(vertex.splatParams.y, 0.85f), 0.85f, 1.0f);
+                if (gaussianIndex < sceneData.gaussians.size()) {
+                    sceneData.gaussians[gaussianIndex].scale = glm::vec4(pointCloudBaseSize, pointCloudBaseSize, pointCloudBaseSize, 0.0f);
+                    sceneData.gaussians[gaussianIndex].rotation = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+                    sceneData.gaussians[gaussianIndex].positionOpacity.w = vertex.splatParams.y;
+                }
             }
+        }
+
+        sceneData.bounds = {};
+        FinalizeBounds(sceneData.bounds, sceneData.vertices);
+        if (!sceneData.objects.empty()) {
+            sceneData.objects.front().bounds = sceneData.bounds;
         }
     }
     sceneData.sourcePath = parsed->sourcePath;
     sceneData.textures = parsed->textures;
     _prepared = std::move(prepared);
+    ++_contentVersion;
     return IsLoaded();
 }
 
@@ -1175,6 +1517,9 @@ void Scene::UploadToGpu(vesta::render::RenderDevice& device, const vesta::render
 
     if (options.useDeviceLocalSceneBuffers) {
         UploadGpuResourceChunk(device, SceneUploadResource::Vertex, 0, sizeof(SceneVertex) * prepared.vertices.size());
+        if (!prepared.gaussians.empty()) {
+            UploadGpuResourceChunk(device, SceneUploadResource::Gaussian, 0, sizeof(GaussianPrimitive) * prepared.gaussians.size());
+        }
         if (!prepared.materials.empty()) {
             UploadGpuResourceChunk(device, SceneUploadResource::Material, 0, sizeof(SceneMaterial) * prepared.materials.size());
         }
@@ -1225,6 +1570,7 @@ void Scene::AllocateGpuResources(vesta::render::RenderDevice& device, const vest
 
     const VkBufferUsageFlags vertexUsage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
         | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
+    const VkBufferUsageFlags gaussianUsage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     const VkBufferUsageFlags indexUsage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT
         | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
     const VkBufferUsageFlags triangleUsage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
@@ -1255,6 +1601,7 @@ void Scene::AllocateGpuResources(vesta::render::RenderDevice& device, const vest
     }
 
     gpu.rasterVertices = prepared.vertices;
+    gpu.gaussians = prepared.gaussians;
     gpu.triangles = prepared.triangles;
     gpu.materials = prepared.materials;
     if (!options.textureStreamingEnabled) {
@@ -1283,6 +1630,15 @@ void Scene::AllocateGpuResources(vesta::render::RenderDevice& device, const vest
                 .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
                 .registerBindlessStorage = false,
                 .debugName = "SceneVertices",
+            });
+        }
+        if (!gpu.gaussians.empty()) {
+            gpu.gaussianBuffer = device.CreateBuffer(vesta::render::BufferDesc{
+                .size = sizeof(GaussianPrimitive) * gpu.gaussians.size(),
+                .usage = gaussianUsage,
+                .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+                .registerBindlessStorage = true,
+                .debugName = "SceneGaussians",
             });
         }
         if (!prepared.indices.empty()) {
@@ -1317,6 +1673,10 @@ void Scene::AllocateGpuResources(vesta::render::RenderDevice& device, const vest
             gpu.vertexBuffer =
                 CreateHostBufferAndCopy(device, std::span<const SceneVertex>(gpu.rasterVertices), vertexUsage, "SceneVertices", false);
         }
+        if (!gpu.gaussians.empty()) {
+            gpu.gaussianBuffer = CreateHostBufferAndCopy(
+                device, std::span<const GaussianPrimitive>(gpu.gaussians), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, "SceneGaussians", true);
+        }
         if (!prepared.indices.empty()) {
             gpu.indexBuffer =
                 CreateHostBufferAndCopy(device, std::span<const uint32_t>(prepared.indices), indexUsage, "SceneIndices", false);
@@ -1346,6 +1706,10 @@ void Scene::UploadGpuResourceChunk(
     case SceneUploadResource::Vertex:
         sourceBytes = AsBytes(std::span<const SceneVertex>(GetGpuOrEmpty().rasterVertices));
         destinationBuffer = _gpu->vertexBuffer;
+        break;
+    case SceneUploadResource::Gaussian:
+        sourceBytes = AsBytes(std::span<const GaussianPrimitive>(GetGpuOrEmpty().gaussians));
+        destinationBuffer = _gpu->gaussianBuffer;
         break;
     case SceneUploadResource::Material:
         sourceBytes = AsBytes(std::span<const SceneMaterial>(GetGpuOrEmpty().materials));
@@ -1605,6 +1969,10 @@ void Scene::DestroyGpu(vesta::render::RenderDevice& device)
         device.DestroyBuffer(_gpu->materialBuffer);
         _gpu->materialBuffer = {};
     }
+    if (_gpu->gaussianBuffer) {
+        device.DestroyBuffer(_gpu->gaussianBuffer);
+        _gpu->gaussianBuffer = {};
+    }
     for (GpuSceneTexture& texture : _gpu->textures) {
         if (texture.image) {
             device.DestroyImage(texture.image);
@@ -1625,6 +1993,7 @@ void Scene::DestroyGpu(vesta::render::RenderDevice& device)
     _gpu->triangles.clear();
     _gpu->materials.clear();
     _gpu->rasterVertices.clear();
+    _gpu->gaussians.clear();
     _gpu.reset();
 }
 
@@ -1708,6 +2077,11 @@ bool Scene::TranslateObject(render::RenderDevice& device, uint32_t objectIndex, 
     for (uint32_t vertexIndex = object.firstVertex; vertexIndex < vertexEnd; ++vertexIndex) {
         prepared->vertices[vertexIndex].position += deltaWorld;
     }
+    if (prepared->sceneKind == SceneKind::Gaussian || prepared->sceneKind == SceneKind::PointCloud) {
+        for (GaussianPrimitive& gaussian : prepared->gaussians) {
+            gaussian.positionOpacity += glm::vec4(deltaWorld, 0.0f);
+        }
+    }
 
     const uint32_t surfaceEnd =
         std::min<uint32_t>(object.firstSurface + object.surfaceCount, static_cast<uint32_t>(prepared->surfaceBounds.size()));
@@ -1735,6 +2109,11 @@ bool Scene::TranslateObject(render::RenderDevice& device, uint32_t objectIndex, 
     for (uint32_t vertexIndex = object.firstVertex; vertexIndex < gpuVertexEnd; ++vertexIndex) {
         gpu.rasterVertices[vertexIndex].position += deltaWorld;
     }
+    if (prepared->sceneKind == SceneKind::Gaussian || prepared->sceneKind == SceneKind::PointCloud) {
+        for (GaussianPrimitive& gaussian : gpu.gaussians) {
+            gaussian.positionOpacity += glm::vec4(deltaWorld, 0.0f);
+        }
+    }
 
     const uint32_t gpuTriangleEnd =
         std::min<uint32_t>(object.firstTriangle + object.triangleCount, static_cast<uint32_t>(gpu.triangles.size()));
@@ -1756,7 +2135,12 @@ bool Scene::TranslateObject(render::RenderDevice& device, uint32_t objectIndex, 
         const size_t sizeBytes = static_cast<size_t>(object.triangleCount) * sizeof(SceneTriangle);
         device.UploadBufferData(gpu.triangleBuffer, offsetBytes, triangleBytes.subspan(offsetBytes, sizeBytes));
     }
+    if (gpu.gaussianBuffer && !gpu.gaussians.empty()) {
+        const std::span<const std::byte> gaussianBytes = AsBytes(std::span<const GaussianPrimitive>(gpu.gaussians));
+        device.UploadBufferData(gpu.gaussianBuffer, 0, gaussianBytes);
+    }
     device.FlushUploadBatch();
+    ++_contentVersion;
     return true;
 }
 
@@ -1771,5 +2155,34 @@ bool Scene::RebuildRayTracing(render::RenderDevice& device)
     BuildBottomLevelAccelerationStructure(device);
     BuildTopLevelAccelerationStructure(device);
     return _gpu->topLevelAccelerationStructure != VK_NULL_HANDLE;
+}
+
+bool Scene::ResortGaussians(render::RenderDevice& device, const Camera& camera)
+{
+    if (_gpu == nullptr || !_gpu->gaussianBuffer || GetPreparedOrEmpty().sceneKind != SceneKind::Gaussian || _gpu->gaussians.empty()) {
+        return false;
+    }
+
+    if (!SupportsRealtimeGaussianSorting()) {
+        return false;
+    }
+
+    const glm::vec3 cameraPosition = camera.GetPosition();
+    const glm::vec3 cameraForward = camera.GetForward();
+    std::stable_sort(_gpu->gaussians.begin(), _gpu->gaussians.end(), [&](const GaussianPrimitive& lhs, const GaussianPrimitive& rhs) {
+        const float lhsDepth = glm::dot(glm::vec3(lhs.positionOpacity) - cameraPosition, cameraForward);
+        const float rhsDepth = glm::dot(glm::vec3(rhs.positionOpacity) - cameraPosition, cameraForward);
+        return lhsDepth > rhsDepth;
+    });
+
+    const std::span<const std::byte> gaussianBytes = AsBytes(std::span<const GaussianPrimitive>(_gpu->gaussians));
+    device.UploadBufferData(_gpu->gaussianBuffer, 0, gaussianBytes);
+    device.FlushUploadBatch();
+    return true;
+}
+
+bool Scene::SupportsRealtimeGaussianSorting() const
+{
+    return GetPreparedOrEmpty().sceneKind == SceneKind::Gaussian && GetGaussianCount() <= kRealtimeGaussianSortLimit;
 }
 } // namespace vesta::scene

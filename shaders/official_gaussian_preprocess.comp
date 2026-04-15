@@ -1,0 +1,231 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : enable
+
+const float kShC0 = 0.28209479177387814;
+const float kShC1 = 0.4886025119029199;
+const float kShC2_0 = 1.0925484305920792;
+const float kShC2_1 = -1.0925484305920792;
+const float kShC2_2 = 0.31539156525252005;
+const float kShC2_3 = -1.0925484305920792;
+const float kShC2_4 = 0.5462742152960396;
+const float kShC3_0 = -0.5900435899266435;
+const float kShC3_1 = 2.890611442640554;
+const float kShC3_2 = -0.4570457994644658;
+const float kShC3_3 = 0.3731763325901154;
+const float kShC3_4 = -0.4570457994644658;
+const float kShC3_5 = 1.445305721320277;
+const float kShC3_6 = -0.5900435899266435;
+const uint TILE_SIZE = 8u;
+
+struct GaussianPrimitive {
+    vec4 positionOpacity;
+    vec4 scale;
+    vec4 rotation;
+    vec4 shCoefficients[16];
+};
+
+struct ProjectedGaussian {
+    vec4 centerRadiusDepth;
+    vec4 conicOpacity;
+    vec4 color;
+    uvec4 tileRect;
+    uvec4 tileOffset;
+};
+
+layout(set = 0, binding = 2, std430) readonly buffer GaussianBuffer {
+    GaussianPrimitive gaussians[];
+} gaussianBuffers[];
+
+layout(set = 1, binding = 0, std430) buffer ProjectedGaussianBuffer {
+    ProjectedGaussian projected[];
+};
+
+layout(push_constant) uniform GaussianComputePushConstants {
+    uvec4 params0;
+    uvec4 params1;
+    vec4 params2;
+    mat4 viewMatrix;
+    mat4 viewProjection;
+    vec4 cameraPositionAndSceneType;
+} pc;
+
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+
+vec3 quat_rotate(vec4 q, vec3 v)
+{
+    vec3 t = 2.0 * cross(q.xyz, v);
+    return v + q.w * t + cross(q.xyz, t);
+}
+
+vec3 sanitize_scale(vec3 scale)
+{
+    scale = max(abs(scale), vec3(1.0e-4));
+    float minAxis = max(min(scale.x, min(scale.y, scale.z)), 1.0e-4);
+    return min(scale, vec3(minAxis * 24.0));
+}
+
+vec2 projection_scales(mat4 viewProjection)
+{
+    return vec2(
+        length(vec3(viewProjection[0][0], viewProjection[1][0], viewProjection[2][0])),
+        length(vec3(viewProjection[0][1], viewProjection[1][1], viewProjection[2][1])));
+}
+
+vec3 evaluate_sh_color(GaussianPrimitive gaussian, uint degree, bool viewDependent, vec3 viewDir)
+{
+    vec3 result = kShC0 * gaussian.shCoefficients[0].rgb;
+    if (!viewDependent || degree == 0u) {
+        return max(result + 0.5, vec3(0.0));
+    }
+
+    float x = viewDir.x;
+    float y = viewDir.y;
+    float z = viewDir.z;
+    float xx = x * x;
+    float yy = y * y;
+    float zz = z * z;
+
+    result += (-kShC1 * y) * gaussian.shCoefficients[1].rgb;
+    result += ( kShC1 * z) * gaussian.shCoefficients[2].rgb;
+    result += (-kShC1 * x) * gaussian.shCoefficients[3].rgb;
+
+    if (degree >= 2u) {
+        result += (kShC2_0 * x * y) * gaussian.shCoefficients[4].rgb;
+        result += (kShC2_1 * y * z) * gaussian.shCoefficients[5].rgb;
+        result += (kShC2_2 * (2.0 * zz - xx - yy)) * gaussian.shCoefficients[6].rgb;
+        result += (kShC2_3 * x * z) * gaussian.shCoefficients[7].rgb;
+        result += (kShC2_4 * (xx - yy)) * gaussian.shCoefficients[8].rgb;
+    }
+
+    if (degree >= 3u) {
+        result += (kShC3_0 * y * (3.0 * xx - yy)) * gaussian.shCoefficients[9].rgb;
+        result += (kShC3_1 * x * y * z) * gaussian.shCoefficients[10].rgb;
+        result += (kShC3_2 * y * (4.0 * zz - xx - yy)) * gaussian.shCoefficients[11].rgb;
+        result += (kShC3_3 * z * (2.0 * zz - 3.0 * xx - 3.0 * yy)) * gaussian.shCoefficients[12].rgb;
+        result += (kShC3_4 * x * (4.0 * zz - xx - yy)) * gaussian.shCoefficients[13].rgb;
+        result += (kShC3_5 * z * (xx - yy)) * gaussian.shCoefficients[14].rgb;
+        result += (kShC3_6 * x * (xx - 3.0 * yy)) * gaussian.shCoefficients[15].rgb;
+    }
+
+    return max(result + 0.5, vec3(0.0));
+}
+
+void main()
+{
+    uint gaussianIndex = gl_GlobalInvocationID.x;
+    if (gaussianIndex >= pc.params0.x) {
+        return;
+    }
+
+    ProjectedGaussian outGaussian;
+    outGaussian.centerRadiusDepth = vec4(0.0);
+    outGaussian.conicOpacity = vec4(0.0);
+    outGaussian.color = vec4(0.0);
+    outGaussian.tileRect = uvec4(0u);
+    outGaussian.tileOffset = uvec4(0u);
+
+    uint gaussianBufferIndex = pc.params0.w;
+    uint shDegree = pc.params1.x;
+    uint tileCountX = pc.params1.y;
+    uint tileCountY = pc.params1.z;
+    uint flags = pc.params1.w;
+    bool viewDependent = (flags & 1u) != 0u;
+    bool antialiasing = (flags & 2u) != 0u;
+    bool fastCulling = (flags & 4u) != 0u;
+
+    GaussianPrimitive gaussian = gaussianBuffers[nonuniformEXT(gaussianBufferIndex)].gaussians[gaussianIndex];
+    float effectiveOpacity = gaussian.positionOpacity.w * pc.params2.x;
+    if (effectiveOpacity <= 1.0e-4) {
+        projected[gaussianIndex] = outGaussian;
+        return;
+    }
+
+    vec3 centerPosition = gaussian.positionOpacity.xyz;
+    vec4 centerClip = pc.viewProjection * vec4(centerPosition, 1.0);
+    vec3 centerView = (pc.viewMatrix * vec4(centerPosition, 1.0)).xyz;
+    float cameraZ = centerView.z;
+    if (centerClip.w <= 0.0 || cameraZ >= -1.0e-4) {
+        projected[gaussianIndex] = outGaussian;
+        return;
+    }
+
+    vec4 rotation = gaussian.rotation;
+    float rotationLength = length(rotation);
+    rotation = rotationLength > 1.0e-4 ? rotation / rotationLength : vec4(0.0, 0.0, 0.0, 1.0);
+    vec3 scale = sanitize_scale(gaussian.scale.xyz);
+    vec3 axisU = quat_rotate(rotation, vec3(scale.x, 0.0, 0.0));
+    vec3 axisV = quat_rotate(rotation, vec3(0.0, scale.y, 0.0));
+    vec3 axisW = quat_rotate(rotation, vec3(0.0, 0.0, scale.z));
+    mat3 rotationScale = mat3(axisU, axisV, axisW);
+    mat3 covarianceWorld = transpose(rotationScale) * rotationScale;
+
+    vec2 viewportSize = max(vec2(pc.params0.y, pc.params0.z), vec2(1.0));
+    vec2 focal = projection_scales(pc.viewProjection) * viewportSize * 0.5;
+    float invCameraZ = 1.0 / cameraZ;
+    float invCameraZ2 = invCameraZ * invCameraZ;
+    mat3 J = mat3(
+        focal.x * invCameraZ, 0.0, -(focal.x * centerView.x) * invCameraZ2,
+        0.0, -focal.y * invCameraZ, (focal.y * centerView.y) * invCameraZ2,
+        0.0, 0.0, 0.0);
+    mat3 T = transpose(mat3(pc.viewMatrix)) * J;
+    mat3 covarianceScreen = transpose(T) * covarianceWorld * T;
+    mat2 cov = mat2(
+        covarianceScreen[0][0], covarianceScreen[0][1],
+        covarianceScreen[1][0], covarianceScreen[1][1]);
+    cov[0][0] += antialiasing ? 0.3 : 0.0;
+    cov[1][1] += antialiasing ? 0.3 : 0.0;
+
+    float determinant = cov[0][0] * cov[1][1] - cov[0][1] * cov[1][0];
+    if (determinant <= 1.0e-8) {
+        projected[gaussianIndex] = outGaussian;
+        return;
+    }
+
+    float trace = cov[0][0] + cov[1][1];
+    float root = sqrt(max(trace * trace * 0.25 - determinant, 1.0e-8));
+    float lambda0 = max(trace * 0.5 + root, 1.0e-8);
+    float lambda1 = max(trace * 0.5 - root, 1.0e-8);
+    float rawRadiusPixels = ceil(3.0 * sqrt(max(lambda0, lambda1)));
+    float maxRadiusPixels = max(64.0, min(viewportSize.x, viewportSize.y) * 0.45);
+    if (rawRadiusPixels > maxRadiusPixels * 2.0) {
+        projected[gaussianIndex] = outGaussian;
+        return;
+    }
+    float radiusPixels = rawRadiusPixels;
+    if (fastCulling && rawRadiusPixels < 0.75) {
+        projected[gaussianIndex] = outGaussian;
+        return;
+    }
+    radiusPixels = clamp(radiusPixels, 1.0, maxRadiusPixels);
+
+    vec2 centerNdc = centerClip.xy / centerClip.w;
+    vec2 centerPixel = (centerNdc * 0.5 + 0.5) * viewportSize;
+    vec2 extentPixels = vec2(radiusPixels);
+    if (centerPixel.x + extentPixels.x < 0.0 || centerPixel.y + extentPixels.y < 0.0
+        || centerPixel.x - extentPixels.x >= viewportSize.x || centerPixel.y - extentPixels.y >= viewportSize.y) {
+        projected[gaussianIndex] = outGaussian;
+        return;
+    }
+
+    vec3 conic = vec3(cov[1][1], -cov[0][1], cov[0][0]);
+    vec3 inverseConic = conic / determinant;
+    vec3 viewDir = normalize(pc.cameraPositionAndSceneType.xyz - centerPosition);
+    vec3 color = evaluate_sh_color(gaussian, shDegree, viewDependent, viewDir);
+
+    ivec2 tileMin = clamp(ivec2(floor((centerPixel - extentPixels) / float(TILE_SIZE))), ivec2(0), ivec2(int(tileCountX) - 1, int(tileCountY) - 1));
+    ivec2 tileMax = clamp(ivec2(floor((centerPixel + extentPixels) / float(TILE_SIZE))), ivec2(0), ivec2(int(tileCountX) - 1, int(tileCountY) - 1));
+    uint tileWidth = uint(tileMax.x - tileMin.x + 1);
+    uint tileHeight = uint(tileMax.y - tileMin.y + 1);
+    uint tilesTouched = tileWidth * tileHeight;
+    if (tilesTouched == 0u) {
+        projected[gaussianIndex] = outGaussian;
+        return;
+    }
+
+    outGaussian.centerRadiusDepth = vec4(centerPixel, radiusPixels, centerClip.z / centerClip.w);
+    outGaussian.conicOpacity = vec4(inverseConic, effectiveOpacity);
+    outGaussian.color = vec4(color, 1.0);
+    outGaussian.tileRect = uvec4(uint(tileMin.x), uint(tileMin.y), tileWidth, tileHeight);
+    outGaussian.tileOffset = uvec4(0u, tilesTouched, 0u, 0u);
+    projected[gaussianIndex] = outGaussian;
+}

@@ -7,6 +7,7 @@ add_executable(engine
   render/passes/composite_pass.cpp
   render/passes/deferred_lighting_pass.cpp
   render/passes/gaussian_splat_pass.cpp
+  render/passes/official_gaussian_raster_pass.cpp
   render/passes/path_tracer_pass.cpp
   render/passes/geometry_raster_pass.cpp
   render/rhi/render_device.cpp
@@ -27,6 +28,7 @@ add_executable(engine
   ../include/vesta/render/passes/composite_pass.h
   ../include/vesta/render/passes/deferred_lighting_pass.h
   ../include/vesta/render/passes/gaussian_splat_pass.h
+  ../include/vesta/render/passes/official_gaussian_raster_pass.h
   ../include/vesta/render/passes/geometry_raster_pass.h
   ../include/vesta/render/passes/irender_pass.h
   ../include/vesta/render/passes/path_tracer_pass.h

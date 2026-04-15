@@ -1,0 +1,136 @@
+#version 460
+#extension GL_EXT_nonuniform_qualifier : enable
+
+const uint TILE_SIZE = 8u;
+const uint INVALID_IMAGE_INDEX = 0xffffffffu;
+
+struct ProjectedGaussian {
+    vec4 centerRadiusDepth;
+    vec4 conicOpacity;
+    vec4 color;
+    uvec4 tileRect;
+    uvec4 tileOffset;
+};
+
+layout(set = 0, binding = 0) uniform sampler2D sampledImages[];
+
+layout(set = 1, binding = 0, std430) readonly buffer ProjectedGaussianBuffer {
+    ProjectedGaussian projected[];
+};
+
+layout(set = 1, binding = 2, std430) readonly buffer DuplicateValueBuffer {
+    uint duplicateValues[];
+};
+
+layout(set = 1, binding = 7, std430) readonly buffer TileRangeBuffer {
+    uvec2 tileRanges[];
+};
+
+layout(rgba16f, set = 1, binding = 8) uniform writeonly image2D accumOutput;
+layout(rgba16f, set = 1, binding = 9) uniform writeonly image2D revealOutput;
+
+layout(push_constant) uniform GaussianComputePushConstants {
+    uvec4 params0;
+    uvec4 params1;
+    vec4 params2;
+} pc;
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+shared vec4 sCenterRadiusDepth[64];
+shared vec4 sConicOpacity[64];
+shared vec4 sColor[64];
+shared uint sBatchCount;
+
+void main()
+{
+    uvec2 tileCoord = gl_WorkGroupID.xy;
+    if (tileCoord.x >= pc.params0.x || tileCoord.y >= pc.params0.y) {
+        return;
+    }
+
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 renderSize = ivec2(int(pc.params1.x), int(pc.params1.y));
+    if (pixel.x >= renderSize.x || pixel.y >= renderSize.y) {
+        return;
+    }
+
+    bool useDepth = pc.params0.z != INVALID_IMAGE_INDEX;
+    float sceneDepth = 1.0;
+    if (useDepth) {
+        sceneDepth = texelFetch(sampledImages[nonuniformEXT(int(pc.params0.z))], pixel, 0).r;
+    }
+
+    uint tileIndex = tileCoord.y * pc.params0.x + tileCoord.x;
+    uvec2 range = tileRanges[tileIndex];
+    if (range.x == INVALID_IMAGE_INDEX || range.y == INVALID_IMAGE_INDEX || range.y <= range.x) {
+        return;
+    }
+    vec3 color = vec3(0.0);
+    float transmittance = 1.0;
+    vec2 samplePoint = vec2(pixel) + vec2(0.5);
+    bool done = false;
+    uint localIndex = gl_LocalInvocationIndex;
+
+    for (uint batchStart = range.x; batchStart < range.y; batchStart += 64u) {
+        if (localIndex == 0u) {
+            sBatchCount = min(64u, range.y - batchStart);
+        }
+        barrier();
+
+        if (localIndex < sBatchCount) {
+            ProjectedGaussian gaussian = projected[duplicateValues[batchStart + localIndex]];
+            sCenterRadiusDepth[localIndex] = gaussian.centerRadiusDepth;
+            sConicOpacity[localIndex] = gaussian.conicOpacity;
+            sColor[localIndex] = gaussian.color;
+        }
+        barrier();
+
+        if (!done) {
+            for (uint entryIndex = 0u; entryIndex < sBatchCount; ++entryIndex) {
+                vec4 centerRadiusDepth = sCenterRadiusDepth[entryIndex];
+                vec4 conicOpacity = sConicOpacity[entryIndex];
+                float opacity = conicOpacity.w;
+                if (opacity <= 0.0) {
+                    continue;
+                }
+
+                float depth = centerRadiusDepth.w;
+                if (useDepth && depth > sceneDepth + 1.0e-4) {
+                    continue;
+                }
+
+                vec2 center = centerRadiusDepth.xy;
+                float radius = centerRadiusDepth.z;
+                vec2 delta = center - samplePoint;
+                if (abs(delta.x) > radius || abs(delta.y) > radius) {
+                    continue;
+                }
+
+                vec3 conic = conicOpacity.xyz;
+                float power = -0.5 * (conic.x * delta.x * delta.x + conic.z * delta.y * delta.y) - conic.y * delta.x * delta.y;
+                if (power > 0.0) {
+                    continue;
+                }
+
+                float alpha = clamp(opacity * exp(power), 0.0, 0.995);
+                if (alpha < pc.params2.y) {
+                    continue;
+                }
+
+                float contribution = transmittance * alpha;
+                color += sColor[entryIndex].rgb * contribution;
+                transmittance *= (1.0 - alpha);
+                if (transmittance < pc.params2.z) {
+                    done = true;
+                    break;
+                }
+            }
+        }
+        barrier();
+    }
+
+    float finalAlpha = clamp(1.0 - transmittance, 0.0, 1.0);
+    imageStore(accumOutput, pixel, vec4(color, finalAlpha));
+    imageStore(revealOutput, pixel, vec4(1.0 - finalAlpha));
+}

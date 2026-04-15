@@ -7,7 +7,10 @@ namespace vesta::render {
 // several of them together for the portfolio "composite" presentation mode.
 class CompositePass final : public IRenderPass {
 public:
-    void SetInputs(GraphTextureHandle deferredLighting, GraphTextureHandle pathTrace, GraphTextureHandle gaussian);
+    void SetInputs(GraphTextureHandle deferredLighting,
+        GraphTextureHandle pathTrace,
+        GraphTextureHandle gaussianAccum,
+        GraphTextureHandle gaussianReveal);
     void SetOutput(GraphTextureHandle output);
     void SetMode(uint32_t mode, float gaussianMix);
 
@@ -20,7 +23,8 @@ public:
 private:
     GraphTextureHandle _deferredLighting{};
     GraphTextureHandle _pathTrace{};
-    GraphTextureHandle _gaussian{};
+    GraphTextureHandle _gaussianAccum{};
+    GraphTextureHandle _gaussianReveal{};
     GraphTextureHandle _output{};
     uint32_t _mode{ 0 };
     float _gaussianMix{ 0.25f };
