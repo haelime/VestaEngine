@@ -18,11 +18,11 @@ struct RayEffectsPushConstants {
     uint32_t outputImageIndex{ kInvalidResourceIndex };
     uint32_t reflectionOutputImageIndex{ kInvalidResourceIndex };
     uint32_t giOutputImageIndex{ kInvalidResourceIndex };
-    uint32_t reserved1{ 0 };
+    uint32_t giHistoryImageIndex{ kInvalidResourceIndex };
     uint32_t frameIndex{ 0 };
     uint32_t triangleBufferIndex{ kInvalidResourceIndex };
     uint32_t triangleCount{ 0 };
-    uint32_t reserved0{ 0 };
+    uint32_t giHistoryInitialized{ 0 };
     glm::mat4 inverseViewProjection{ 1.0f };
     glm::vec4 cameraPosition{ 0.0f };
     glm::vec4 lightDirectionAndIntensity{ -0.4f, -1.0f, -0.3f, 2.0f };
@@ -120,7 +120,8 @@ void RayEffectsPass::SetControls(bool shadowsEnabled,
     uint32_t giSamples,
     float maxRayDistance,
     float aoRadius,
-    float reflectionRoughnessCutoff)
+    float reflectionRoughnessCutoff,
+    bool temporalAccumulationEnabled)
 {
     _shadowsEnabled = shadowsEnabled;
     _ambientOcclusionEnabled = ambientOcclusionEnabled;
@@ -133,6 +134,38 @@ void RayEffectsPass::SetControls(bool shadowsEnabled,
     _maxRayDistance = std::clamp(maxRayDistance, 0.1f, 10000.0f);
     _aoRadius = std::clamp(aoRadius, 0.05f, 32.0f);
     _reflectionRoughnessCutoff = std::clamp(reflectionRoughnessCutoff, 0.0f, 1.0f);
+    _temporalAccumulationEnabled = temporalAccumulationEnabled;
+}
+
+void RayEffectsPass::EnsureGiHistoryImage(RenderDevice& device, VkExtent3D extent)
+{
+    if (_giHistoryImage && _giHistoryExtent.width == extent.width && _giHistoryExtent.height == extent.height
+        && _giHistoryExtent.depth == extent.depth) {
+        return;
+    }
+
+    DestroyGiHistoryImage(device);
+    _giHistoryImage = device.CreateImage(ImageDesc{
+        .extent = extent,
+        .format = VK_FORMAT_R16G16B16A16_SFLOAT,
+        .usage = VK_IMAGE_USAGE_STORAGE_BIT,
+        .aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT,
+        .registerBindlessStorage = true,
+        .debugName = "RayEffects.GIHistory",
+    });
+    _giHistoryExtent = extent;
+    _giHistoryInitialized = false;
+}
+
+void RayEffectsPass::DestroyGiHistoryImage(RenderDevice& device)
+{
+    if (_giHistoryImage) {
+        device.WaitIdle();
+        device.DestroyImage(_giHistoryImage);
+        _giHistoryImage = {};
+    }
+    _giHistoryExtent = {};
+    _giHistoryInitialized = false;
 }
 
 void RayEffectsPass::Initialize(RenderDevice& device)
@@ -213,6 +246,8 @@ void RayEffectsPass::Execute(const RenderGraphContext& context)
 {
     if (_pipeline == VK_NULL_HANDLE || _scene == nullptr || _camera == nullptr || !_scene->HasRayTracingScene()) {
         ClearRayEffectsOutput(context, _visibilityOutput, _reflectionOutput, _globalIlluminationOutput);
+        _giHistoryInitialized = false;
+        _giTemporalAccumulationAvailable = false;
         return;
     }
 
@@ -225,6 +260,32 @@ void RayEffectsPass::Execute(const RenderGraphContext& context)
     const uint32_t giOutputImageIndex = _globalIlluminationOutput
         ? context.GetDevice().GetImageResource(context.GetTextureHandle(_globalIlluminationOutput)).bindless.storageImage
         : kInvalidResourceIndex;
+    const VkExtent3D outputExtent = context.GetTextureExtent(_visibilityOutput);
+    const bool useGiTemporalAccumulation =
+        _globalIlluminationEnabled && _temporalAccumulationEnabled && _globalIlluminationOutput && giOutputImageIndex != kInvalidResourceIndex;
+    if (useGiTemporalAccumulation) {
+        EnsureGiHistoryImage(context.GetDevice(), context.GetTextureExtent(_globalIlluminationOutput));
+        if (_frameIndex == 0u) {
+            _giHistoryInitialized = false;
+        }
+        const VkImageSubresourceRange colorRange = vkutil::make_image_subresource_range(VK_IMAGE_ASPECT_COLOR_BIT);
+        vkutil::transition_image(context.GetCommandBuffer(),
+            context.GetDevice().GetImage(_giHistoryImage),
+            _giHistoryInitialized ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_IMAGE_LAYOUT_GENERAL,
+            _giHistoryInitialized ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_2_NONE,
+            _giHistoryInitialized ? VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT : VK_ACCESS_2_NONE,
+            VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+            VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+            colorRange);
+    } else {
+        _giHistoryInitialized = false;
+    }
+    const uint32_t giHistoryImageIndex = useGiTemporalAccumulation && _giHistoryImage
+        ? context.GetDevice().GetImageResource(_giHistoryImage).bindless.storageImage
+        : kInvalidResourceIndex;
+    const bool giHistoryWasInitialized = useGiTemporalAccumulation && _giHistoryInitialized;
+    _giTemporalAccumulationAvailable = useGiTemporalAccumulation && giHistoryImageIndex != kInvalidResourceIndex;
     const uint32_t triangleBufferIndex = _scene->GetTriangleBuffer()
         ? context.GetDevice().GetBufferResource(_scene->GetTriangleBuffer()).bindless.storageBuffer
         : kInvalidResourceIndex;
@@ -234,14 +295,16 @@ void RayEffectsPass::Execute(const RenderGraphContext& context)
         .outputImageIndex = context.GetDevice().GetImageResource(outputHandle).bindless.storageImage,
         .reflectionOutputImageIndex = reflectionOutputImageIndex,
         .giOutputImageIndex = giOutputImageIndex,
+        .giHistoryImageIndex = giHistoryImageIndex,
         .frameIndex = _frameIndex,
         .triangleBufferIndex = triangleBufferIndex,
         .triangleCount = static_cast<uint32_t>(_scene->GetTriangles().size()),
+        .giHistoryInitialized = giHistoryWasInitialized ? 1u : 0u,
         .inverseViewProjection = _camera->GetInverseViewProjection(),
         .cameraPosition = glm::vec4(_camera->GetPosition(), 0.0f),
         .lightDirectionAndIntensity = _lightDirectionAndIntensity,
         .sampleCounts = glm::uvec4(_shadowSamples, _aoSamples, _reflectionSamples, _giSamples),
-        .rayParams = glm::vec4(_maxRayDistance, _aoRadius, _reflectionRoughnessCutoff, 0.0f),
+        .rayParams = glm::vec4(_maxRayDistance, _aoRadius, _reflectionRoughnessCutoff, useGiTemporalAccumulation ? 0.88f : 0.0f),
         .flags = glm::uvec4(
             _shadowsEnabled ? 1u : 0u,
             _ambientOcclusionEnabled ? 1u : 0u,
@@ -286,8 +349,10 @@ void RayEffectsPass::Execute(const RenderGraphContext& context)
         sizeof(RayEffectsPushConstants),
         &pushConstants);
 
-    const VkExtent3D outputExtent = context.GetTextureExtent(_visibilityOutput);
     vkCmdDispatch(commandBuffer, (outputExtent.width + 7u) / 8u, (outputExtent.height + 7u) / 8u, 1);
+    if (useGiTemporalAccumulation) {
+        _giHistoryInitialized = true;
+    }
 }
 
 void RayEffectsPass::Shutdown(RenderDevice& device)
@@ -307,7 +372,9 @@ void RayEffectsPass::Shutdown(RenderDevice& device)
         vkDestroyDescriptorSetLayout(vkDevice, _descriptorSetLayout, nullptr);
         _descriptorSetLayout = VK_NULL_HANDLE;
     }
+    DestroyGiHistoryImage(device);
     _descriptorSets = {};
     _backendAvailable = false;
+    _giTemporalAccumulationAvailable = false;
 }
 } // namespace vesta::render

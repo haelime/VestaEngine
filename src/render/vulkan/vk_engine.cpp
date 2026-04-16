@@ -1915,7 +1915,7 @@ void VestaEngine::finish_benchmark()
                << "ssao,ssao_radius,ssao_intensity,"
                << "taa,taa_feedback,temporal_upscaler,temporal_upscaler_backend,temporal_upscaler_input,temporal_upscaler_output,temporal_upscaler_scale,temporal_upscaler_sharpness,temporal_upscaler_history,temporal_upscaler_reactive_mask,temporal_upscaler_material_reactive_mask,temporal_upscaler_authored_alpha_reactive_mask,temporal_upscaler_reactive_strength,"
                << "restir_di,restir_gi,restir_pt,restir_backend,restir_reservoir_storage,restir_di_storage,restir_gi_storage,restir_pt_storage,restir_gi_backend,restir_pt_backend,restir_gi_candidate_pass,restir_pt_candidate_pass,restir_lights,restir_emissive_lights,restir_candidates,restir_reservoirs,restir_reservoir_mb,restir_di_reservoir_mb,restir_gi_reservoir_mb,restir_pt_reservoir_mb,restir_temporal_reuse,restir_spatial_reuse,restir_history,restir_candidate_pass,restir_temporal_pass,restir_spatial_pass,restir_gi_resolve,restir_pt_resolve,restir_resolve,"
-               << "rt_hybrid_backend,rt_hybrid_ray_query,rt_hybrid_tlas,rt_hybrid_resolution,rt_shadow_requested,rt_ao_requested,rt_reflection_requested,rt_gi_requested,rt_shadow_samples,rt_ao_samples,rt_reflection_samples,rt_gi_samples,rt_shadow_rays,rt_ao_rays,rt_reflection_rays,rt_gi_rays,rt_denoiser,rt_gi_spatial_denoise,rt_temporal,"
+               << "rt_hybrid_backend,rt_hybrid_ray_query,rt_hybrid_tlas,rt_hybrid_resolution,rt_shadow_requested,rt_ao_requested,rt_reflection_requested,rt_gi_requested,rt_shadow_samples,rt_ao_samples,rt_reflection_samples,rt_gi_samples,rt_shadow_rays,rt_ao_rays,rt_reflection_rays,rt_gi_rays,rt_denoiser,rt_gi_spatial_denoise,rt_temporal,rt_gi_temporal,"
                << "ssr,ssr_max_distance,ssr_thickness,ssr_intensity,"
                << "ssgi,ssgi_radius,ssgi_intensity,ssgi_samples,"
                << "ddgi,ddgi_backend,ddgi_probes,ddgi_rays_per_update,ddgi_memory_mb,ddgi_probe_spacing,ddgi_hysteresis,ddgi_intensity,ddgi_overlay,ddgi_composite,ddgi_storage_composite,ddgi_moment_validation,ddgi_spatial_filtering,ddgi_ray_update,ddgi_temporal_blend,"
@@ -2083,6 +2083,7 @@ void VestaEngine::finish_benchmark()
            << (rayEffectsStats.denoiserRequested ? "true" : "false") << ','
            << (rayEffectsStats.giSpatialDenoiseAvailable ? "true" : "false") << ','
            << (rayEffectsStats.temporalAccumulation ? "true" : "false") << ','
+           << (rayEffectsStats.giTemporalAccumulationAvailable ? "true" : "false") << ','
            << (settings.enableSsr ? "true" : "false") << ','
            << settings.ssrMaxDistance << ','
            << settings.ssrThickness << ','
@@ -2482,7 +2483,8 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "    \"half_resolution\": " << (rayEffectsStats.halfResolution ? "true" : "false") << ",\n"
            << "    \"denoiser_requested\": " << (rayEffectsStats.denoiserRequested ? "true" : "false") << ",\n"
            << "    \"gi_spatial_denoise_available\": " << (rayEffectsStats.giSpatialDenoiseAvailable ? "true" : "false") << ",\n"
-           << "    \"temporal_accumulation\": " << (rayEffectsStats.temporalAccumulation ? "true" : "false") << "\n"
+           << "    \"temporal_accumulation\": " << (rayEffectsStats.temporalAccumulation ? "true" : "false") << ",\n"
+           << "    \"gi_temporal_accumulation_available\": " << (rayEffectsStats.giTemporalAccumulationAvailable ? "true" : "false") << "\n"
            << "  },\n"
            << "  \"frame_index\": " << _frameNumber << ",\n"
            << "  \"path_trace_frame_index\": " << _renderer.GetPathTraceFrameIndex() << ",\n"
@@ -6344,10 +6346,10 @@ void VestaEngine::draw_ray_tracing_debug_panel()
         static_cast<unsigned long long>(rayEffectsStats.estimatedAoRays),
         static_cast<unsigned long long>(rayEffectsStats.estimatedReflectionRays),
         static_cast<unsigned long long>(rayEffectsStats.estimatedGiRays));
-    ImGui::Text("Denoiser %s  GI Spatial %s  Temporal %s  Resolution %s",
+    ImGui::Text("Denoiser %s  GI Spatial %s  GI Temporal %s  Resolution %s",
         rayEffectsStats.denoiserRequested ? "on" : "off",
         rayEffectsStats.giSpatialDenoiseAvailable ? "live" : "staged",
-        rayEffectsStats.temporalAccumulation ? "on" : "off",
+        rayEffectsStats.giTemporalAccumulationAvailable ? "live" : (rayEffectsStats.temporalAccumulation ? "armed" : "off"),
         rayEffectsStats.halfResolution ? "half" : "full");
 
     ImGui::BeginDisabled(!hybridEffectsSupported);
@@ -6391,7 +6393,7 @@ void VestaEngine::draw_ray_tracing_debug_panel()
     ImGui::BulletText("Hardware path tracing uses RT pipeline when available.");
     ImGui::BulletText("Hybrid RT shadows, AO, and reflection visibility use a ray-query pass when Ray Query and TLAS are available.");
     ImGui::BulletText("RT reflection and RT GI resolve material-colored ray hits from the TLAS-backed scene triangle buffer.");
-    ImGui::BulletText("RT GI spatial denoise is live when the denoiser is enabled; production temporal reuse remains staged.");
+    ImGui::BulletText("RT GI spatial denoise and confidence-weighted temporal reuse are live when the denoiser/temporal toggles are enabled.");
     ImGui::BulletText("Acceleration structure residency and build timing are live in Resource Inspector.");
 }
 

@@ -350,6 +350,7 @@ struct RayEffectsStats {
     bool denoiserRequested{ true };
     bool giSpatialDenoiseAvailable{ false };
     bool temporalAccumulation{ true };
+    bool giTemporalAccumulationAvailable{ false };
 };
 
 // RendererSettings collects the knobs that can safely change at runtime.

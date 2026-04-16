@@ -34,11 +34,11 @@ layout(push_constant) uniform RayEffectsPushConstants {
     uint outputImageIndex;
     uint reflectionOutputImageIndex;
     uint giOutputImageIndex;
-    uint reserved1;
+    uint giHistoryImageIndex;
     uint frameIndex;
     uint triangleBufferIndex;
     uint triangleCount;
-    uint reserved0;
+    uint giHistoryInitialized;
     mat4 inverseViewProjection;
     vec4 cameraPosition;
     vec4 lightDirectionAndIntensity;
@@ -194,6 +194,9 @@ void main()
         }
         if (pc.giOutputImageIndex != INVALID_IMAGE_INDEX) {
             imageStore(storageImages[nonuniformEXT(int(pc.giOutputImageIndex))], pixel, vec4(0.0));
+            if (pc.giHistoryImageIndex != INVALID_IMAGE_INDEX) {
+                imageStore(storageImages[nonuniformEXT(int(pc.giHistoryImageIndex))], pixel, vec4(0.0));
+            }
         }
         return;
     }
@@ -275,8 +278,18 @@ void main()
             }
         }
         float giBlend = clamp(giWeight / max(float(pc.sampleCounts.w), 1.0), 0.0, 1.0);
-        imageStore(storageImages[nonuniformEXT(int(pc.giOutputImageIndex))],
-            pixel,
-            vec4(giWeight > 0.0 ? giColor / giWeight : vec3(0.0), giBlend));
+        vec3 currentGi = giWeight > 0.0 ? giColor / giWeight : vec3(0.0);
+        vec4 outputGi = vec4(currentGi, giBlend);
+        if (pc.giHistoryImageIndex != INVALID_IMAGE_INDEX && pc.giHistoryInitialized != 0u && pc.rayParams.w > 0.0) {
+            vec4 historyGi = imageLoad(storageImages[nonuniformEXT(int(pc.giHistoryImageIndex))], pixel);
+            float temporalWeight = clamp(pc.rayParams.w * min(historyGi.a, 1.0), 0.0, 0.96);
+            temporalWeight *= smoothstep(0.02, 0.35, giBlend);
+            outputGi.rgb = mix(currentGi, historyGi.rgb, temporalWeight);
+            outputGi.a = max(giBlend, historyGi.a * temporalWeight);
+        }
+        imageStore(storageImages[nonuniformEXT(int(pc.giOutputImageIndex))], pixel, outputGi);
+        if (pc.giHistoryImageIndex != INVALID_IMAGE_INDEX) {
+            imageStore(storageImages[nonuniformEXT(int(pc.giHistoryImageIndex))], pixel, outputGi);
+        }
     }
 }

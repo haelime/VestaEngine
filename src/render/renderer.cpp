@@ -894,7 +894,8 @@ void ConfigureRayEffectsPass(Renderer& renderer, IRenderPass& pass, const Render
         settings.rtGiSamples,
         settings.rtMaxRayDistance,
         settings.rtAoRadius,
-        settings.rtReflectionRoughnessCutoff);
+        settings.rtReflectionRoughnessCutoff,
+        settings.rtTemporalAccumulation);
 }
 
 void ConfigureRestirDiPass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources&)
@@ -2941,6 +2942,8 @@ RayEffectsStats Renderer::GetRayEffectsStats() const
     stats.denoiserRequested = _settings.rtDenoiser;
     stats.giSpatialDenoiseAvailable = stats.backendAvailable && stats.giRequested && stats.denoiserRequested;
     stats.temporalAccumulation = _settings.rtTemporalAccumulation;
+    stats.giTemporalAccumulationAvailable =
+        rayEffectsPass != nullptr && rayEffectsPass->IsGiTemporalAccumulationAvailable();
     stats.estimatedShadowRays = stats.shadowsRequested ? pixels * stats.shadowSamples : 0u;
     stats.estimatedAoRays = stats.aoRequested ? pixels * stats.aoSamples : 0u;
     stats.estimatedReflectionRays = stats.reflectionsRequested ? pixels * stats.reflectionSamples : 0u;

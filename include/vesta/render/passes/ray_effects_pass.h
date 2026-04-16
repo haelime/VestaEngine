@@ -35,8 +35,10 @@ public:
         uint32_t giSamples,
         float maxRayDistance,
         float aoRadius,
-        float reflectionRoughnessCutoff);
+        float reflectionRoughnessCutoff,
+        bool temporalAccumulationEnabled);
     [[nodiscard]] bool IsBackendAvailable() const { return _backendAvailable; }
+    [[nodiscard]] bool IsGiTemporalAccumulationAvailable() const { return _giTemporalAccumulationAvailable; }
 
     [[nodiscard]] std::string_view Name() const override { return "RayEffectsPass"; }
     void Initialize(RenderDevice& device) override;
@@ -66,7 +68,12 @@ private:
     float _maxRayDistance{ 100.0f };
     float _aoRadius{ 2.0f };
     float _reflectionRoughnessCutoff{ 0.8f };
+    bool _temporalAccumulationEnabled{ true };
     bool _backendAvailable{ false };
+    bool _giTemporalAccumulationAvailable{ false };
+    ImageHandle _giHistoryImage{};
+    VkExtent3D _giHistoryExtent{};
+    bool _giHistoryInitialized{ false };
 
     VkDescriptorPool _descriptorPool{ VK_NULL_HANDLE };
     VkDescriptorSetLayout _descriptorSetLayout{ VK_NULL_HANDLE };
@@ -74,5 +81,8 @@ private:
     VkPipelineLayout _pipelineLayout{ VK_NULL_HANDLE };
     VkPipeline _pipeline{ VK_NULL_HANDLE };
     VkShaderModule _computeShader{ VK_NULL_HANDLE };
+
+    void EnsureGiHistoryImage(RenderDevice& device, VkExtent3D extent);
+    void DestroyGiHistoryImage(RenderDevice& device);
 };
 } // namespace vesta::render
