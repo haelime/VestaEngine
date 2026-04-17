@@ -34,6 +34,7 @@ constexpr float kShC3_5 = 1.445305721320277f;
 constexpr float kShC3_6 = -0.5900435899266435f;
 constexpr float kGaussianAlphaThreshold = 1.0e-4f;
 constexpr float kGaussianRevealThreshold = 7.5e-4f;
+constexpr VkDeviceSize kSortDispatchIndirectOffset = sizeof(glm::uvec4);
 
 struct GaussianComputePushConstants {
     glm::uvec4 params0{ 0u };
@@ -283,13 +284,17 @@ void OfficialGaussianRasterPass::RebuildFrameDataIfNeeded(VkExtent2D extent)
 void OfficialGaussianRasterPass::EnsureResources(
     RenderDevice& device, VkExtent2D extent, size_t projectedCount, size_t duplicateCount, size_t duplicateCapacity, size_t tileCount)
 {
-    const bool needProjected = !_projectedBuffer || projectedCount > _projectedCapacity;
-    const bool needDuplicates = !_duplicateKeyBuffer || duplicateCapacity > _duplicateCapacity;
+    const bool needProjected = !_projectedBuffer || projectedCount > _projectedCapacity
+        || (_projectedCapacity > 0 && projectedCount < _projectedCapacity / 2u);
+    const bool needDuplicates = !_duplicateKeyBuffer || duplicateCapacity > _duplicateCapacity
+        || (_duplicateCapacity > 0 && duplicateCapacity < _duplicateCapacity / 2u);
     const size_t scanBlockCount = std::max<size_t>((projectedCount + 255u) / 256u, 1u);
-    const bool needScan = !_scanBlockSumBuffer || scanBlockCount > _scanBlockCapacity;
+    const bool needScan = !_scanBlockSumBuffer || scanBlockCount > _scanBlockCapacity
+        || (_scanBlockCapacity > 1 && scanBlockCount < _scanBlockCapacity / 2u);
     const size_t radixBlockCount = std::max<size_t>((duplicateCount + 255u) / 256u, 1u);
-    const bool needRadix = !_radixHistogramBuffer || radixBlockCount > _radixBlockCapacity;
-    const bool needTiles = !_tileRangeBuffer || tileCount > _tileCapacity;
+    const bool needRadix = !_radixHistogramBuffer || radixBlockCount > _radixBlockCapacity
+        || (_radixBlockCapacity > 1 && radixBlockCount < _radixBlockCapacity / 2u);
+    const bool needTiles = !_tileRangeBuffer || tileCount > _tileCapacity || (_tileCapacity > 0 && tileCount < _tileCapacity / 2u);
     if (!needProjected && !needDuplicates && !needScan && !needRadix && !needTiles) {
         return;
     }
@@ -451,9 +456,8 @@ void OfficialGaussianRasterPass::Execute(const RenderGraphContext& context)
 
     RenderDevice& device = context.GetDevice();
     const float estimatedTilesTouched = _statistics.averageTilesTouched > 0.0f ? _statistics.averageTilesTouched : 6.0f;
-    const size_t estimatedDuplicateCapacity = std::max<size_t>(
-        _duplicateCapacity,
-        std::max<size_t>(static_cast<size_t>(std::ceil(double(sourceGaussianCount) * std::max(estimatedTilesTouched * 1.5f, 6.0f))), 1u));
+    const size_t estimatedDuplicateCapacity =
+        std::max<size_t>(static_cast<size_t>(std::ceil(double(sourceGaussianCount) * std::max(estimatedTilesTouched * 1.5f, 6.0f))), 1u);
     EnsureResources(device, context.GetRenderExtent(), sourceGaussianCount, estimatedDuplicateCapacity, estimatedDuplicateCapacity, tileCount);
     if (!_projectedBuffer || !_duplicateKeyBuffer || !_duplicateValueBuffer || !_duplicateScratchKeyBuffer || !_duplicateScratchValueBuffer
         || !_scanBlockSumBuffer || !_duplicateCountBuffer
@@ -583,7 +587,6 @@ void OfficialGaussianRasterPass::Execute(const RenderGraphContext& context)
             VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
 
         if (_duplicateCapacity > 1) {
-            const uint32_t radixBlockCount = static_cast<uint32_t>((_duplicateCapacity + 255u) / 256u);
             vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_COMPUTE, _sortPipeline);
             uint32_t inputIndex = 0u;
             uint32_t outputIndex = 1u;
@@ -592,7 +595,7 @@ void OfficialGaussianRasterPass::Execute(const RenderGraphContext& context)
                 pushConstants.params0 = glm::uvec4(0u, shift, 0u, 0u);
                 pushConstants.params1 = glm::uvec4(inputIndex, outputIndex, 0u, 0u);
                 vkCmdPushConstants(commandBuffer, _pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pushConstants), &pushConstants);
-                vkCmdDispatch(commandBuffer, radixBlockCount, 1, 1);
+                vkCmdDispatchIndirect(commandBuffer, device.GetBuffer(_duplicateCountBuffer), kSortDispatchIndirectOffset);
                 InsertMemoryBarrier(commandBuffer,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                     VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
@@ -619,7 +622,7 @@ void OfficialGaussianRasterPass::Execute(const RenderGraphContext& context)
 
                 pushConstants.params0.w = 3u;
                 vkCmdPushConstants(commandBuffer, _pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pushConstants), &pushConstants);
-                vkCmdDispatch(commandBuffer, radixBlockCount, 1, 1);
+                vkCmdDispatchIndirect(commandBuffer, device.GetBuffer(_duplicateCountBuffer), kSortDispatchIndirectOffset);
                 InsertMemoryBarrier(commandBuffer,
                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                     VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
@@ -634,7 +637,7 @@ void OfficialGaussianRasterPass::Execute(const RenderGraphContext& context)
         pushConstants = {};
         pushConstants.params0 = glm::uvec4(0u, tileCountX * tileCountY, 0u, 0u);
         vkCmdPushConstants(commandBuffer, _pipelineLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pushConstants), &pushConstants);
-        vkCmdDispatch(commandBuffer, static_cast<uint32_t>((_duplicateCapacity + 255u) / 256u), 1, 1);
+        vkCmdDispatchIndirect(commandBuffer, device.GetBuffer(_duplicateCountBuffer), kSortDispatchIndirectOffset);
         InsertMemoryBarrier(commandBuffer,
             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
             VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
