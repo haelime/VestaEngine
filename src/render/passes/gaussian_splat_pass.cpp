@@ -14,13 +14,16 @@
 namespace vesta::render {
 namespace {
 constexpr uint32_t kInvalidImageIndex = kInvalidResourceIndex;
+constexpr float kPointCloudPointSize = 8.0f;
+constexpr float kGaussianAlphaThreshold = 1.0e-4f;
+constexpr float kGaussianRevealThreshold = 7.5e-4f;
 
 struct GaussianGraphicsPushConstants {
     glm::mat4 viewMatrix{ 1.0f };
     glm::mat4 viewProjection{ 1.0f };
     glm::vec4 cameraPositionAndSceneType{ 0.0f, 0.0f, 0.0f, 0.0f };
-    glm::vec4 params0{ 6.0f, 0.35f, 0.0f, 0.0f };
-    glm::vec4 params1{ 0.001f, 0.0015f, 0.0f, 0.0f };
+    glm::vec4 params0{ kPointCloudPointSize, 1.0f, 0.0f, 0.0f };
+    glm::vec4 params1{ kGaussianAlphaThreshold, kGaussianRevealThreshold, 0.0f, 0.0f };
     glm::uvec4 bufferIndices{ 0xFFFFFFFFu, 0u, 0u, 0u };
     glm::uvec4 options{ 0u, 0u, 0u, 0u };
 };
@@ -29,10 +32,10 @@ struct GaussianComputePushConstants {
     glm::mat4 viewMatrix{ 1.0f };
     glm::mat4 viewProjection{ 1.0f };
     glm::vec4 cameraPositionAndSceneType{ 0.0f, 0.0f, 0.0f, 0.0f };
-    glm::vec4 params0{ 6.0f, 0.35f, 0.0f, 0.0f };
+    glm::vec4 params0{ kPointCloudPointSize, 1.0f, 0.0f, 0.0f };
     glm::uvec4 params1{ 0u, 0u, 0u, 0u };
     glm::uvec4 params2{ kInvalidImageIndex, 0u, 0u, 0u };
-    glm::vec4 params3{ 0.001f, 0.0015f, 0.0f, 0.0f };
+    glm::vec4 params3{ kGaussianAlphaThreshold, kGaussianRevealThreshold, 0.0f, 0.0f };
 };
 
 struct ProjectedGaussianGPU {
@@ -116,11 +119,9 @@ void GaussianSplatPass::SetCamera(const Camera* camera)
 }
 
 void GaussianSplatPass::SetParams(
-    float pointSize, float opacity, float alphaCutoff, bool enabled, uint32_t shDegree, bool viewDependentColor, bool antialiasing, bool fastCulling)
+    float opacity, bool enabled, uint32_t shDegree, bool viewDependentColor, bool antialiasing, bool fastCulling)
 {
-    _pointSize = pointSize;
     _opacity = opacity;
-    _alphaCutoff = alphaCutoff;
     _enabled = enabled;
     _shDegree = shDegree;
     _viewDependentColor = viewDependentColor;
@@ -397,11 +398,11 @@ void GaussianSplatPass::ExecuteGraphicsPath(const RenderGraphContext& context)
             .cameraPositionAndSceneType = glm::vec4(
                 _camera->GetPosition(),
                 _scene->HasTrainedGaussians() ? 1.0f : 0.0f),
-            .params0 = glm::vec4(_pointSize,
+            .params0 = glm::vec4(kPointCloudPointSize,
                 _opacity,
                 static_cast<float>(context.GetRenderExtent().width),
                 static_cast<float>(context.GetRenderExtent().height)),
-            .params1 = glm::vec4(_alphaCutoff, std::max(_alphaCutoff * 1.5f, 0.00075f), 0.0f, 0.0f),
+            .params1 = glm::vec4(kGaussianAlphaThreshold, kGaussianRevealThreshold, 0.0f, 0.0f),
             .bufferIndices = glm::uvec4(
                 context.GetDevice().GetBufferResource(_scene->GetGaussianBuffer()).bindless.storageBuffer,
                 static_cast<uint32_t>(_scene->GetGaussianCount()),
@@ -470,10 +471,10 @@ void GaussianSplatPass::ExecuteComputePath(const RenderGraphContext& context)
         .viewProjection = _camera->GetViewProjection(),
         .cameraPositionAndSceneType = glm::vec4(_camera->GetPosition(), 1.0f),
         .params0 = glm::vec4(
-            _pointSize, _opacity, static_cast<float>(context.GetRenderExtent().width), static_cast<float>(context.GetRenderExtent().height)),
+            kPointCloudPointSize, _opacity, static_cast<float>(context.GetRenderExtent().width), static_cast<float>(context.GetRenderExtent().height)),
         .params1 = glm::uvec4(_scene->GetGaussianCount(), tileCountX, tileCountY, std::min(_shDegree, _scene->GetGaussianShDegree())),
         .params2 = glm::uvec4(depthImageIndex, _viewDependentColor ? 1u : 0u, _antialiasing ? 1u : 0u, _fastCulling ? 1u : 0u),
-        .params3 = glm::vec4(_alphaCutoff, std::max(_alphaCutoff * 1.5f, 0.00075f), 0.0f, 0.0f),
+        .params3 = glm::vec4(kGaussianAlphaThreshold, kGaussianRevealThreshold, 0.0f, 0.0f),
     };
 
     VkCommandBuffer commandBuffer = context.GetCommandBuffer();
