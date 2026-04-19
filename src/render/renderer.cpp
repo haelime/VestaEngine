@@ -240,6 +240,15 @@ bool IsSurfaceWithinDistance(const vesta::scene::SceneSurfaceBounds& bounds,
     return distance <= allowedDistance;
 }
 
+float DefaultOrbitDistance(float currentDistance, float targetRadius)
+{
+    const float minimumDistance = std::max(targetRadius * 2.5f, 0.75f);
+    if (currentDistance > 0.0f) {
+        return std::max(currentDistance, minimumDistance);
+    }
+    return minimumDistance;
+}
+
 void ConfigureGeometryRasterPass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
 {
     auto& rasterPass = static_cast<GeometryRasterPass&>(pass);
@@ -522,6 +531,19 @@ void Renderer::Update(float deltaSeconds)
         _frameTimeHistoryMs.fill(0.0f);
     }
 
+    if (!_camera.IsOrbitEnabled()) {
+        _trackSelectedObjectOrbit = false;
+    }
+
+    if (_trackSelectedObjectOrbit) {
+        const auto& objects = _scene.GetObjects();
+        if (_selection.kind == SelectionKind::Object && _selection.objectIndex < objects.size()) {
+            _camera.SetOrbitTarget(objects[_selection.objectIndex].bounds.center);
+        } else {
+            _trackSelectedObjectOrbit = false;
+        }
+    }
+
     _camera.Update(deltaSeconds);
     // Progressive path tracing only makes sense while the viewpoint is stable.
     // As soon as the camera moves, old samples become history from the wrong camera.
@@ -689,6 +711,62 @@ uint64_t Renderer::GetOfficialGaussianRebuildCount() const
     return 0;
 }
 
+float Renderer::GetOfficialGaussianPreprocessMs() const
+{
+    if (const auto* pass = FindPass<OfficialGaussianRasterPass>("official-gaussian-raster")) {
+        return pass->GetStatistics().preprocessMs;
+    }
+    return 0.0f;
+}
+
+float Renderer::GetOfficialGaussianScanMs() const
+{
+    if (const auto* pass = FindPass<OfficialGaussianRasterPass>("official-gaussian-raster")) {
+        return pass->GetStatistics().scanMs;
+    }
+    return 0.0f;
+}
+
+float Renderer::GetOfficialGaussianDuplicateMs() const
+{
+    if (const auto* pass = FindPass<OfficialGaussianRasterPass>("official-gaussian-raster")) {
+        return pass->GetStatistics().duplicateMs;
+    }
+    return 0.0f;
+}
+
+float Renderer::GetOfficialGaussianSortMs() const
+{
+    if (const auto* pass = FindPass<OfficialGaussianRasterPass>("official-gaussian-raster")) {
+        return pass->GetStatistics().sortMs;
+    }
+    return 0.0f;
+}
+
+float Renderer::GetOfficialGaussianRangeMs() const
+{
+    if (const auto* pass = FindPass<OfficialGaussianRasterPass>("official-gaussian-raster")) {
+        return pass->GetStatistics().rangeMs;
+    }
+    return 0.0f;
+}
+
+float Renderer::GetOfficialGaussianRasterMs() const
+{
+    if (const auto* pass = FindPass<OfficialGaussianRasterPass>("official-gaussian-raster")) {
+        return pass->GetStatistics().rasterMs;
+    }
+    return 0.0f;
+}
+
+float Renderer::GetOfficialGaussianTotalBuildMs() const
+{
+    if (const auto* pass = FindPass<OfficialGaussianRasterPass>("official-gaussian-raster")) {
+        return pass->GetStatistics().totalBuildMs;
+    }
+    return 0.0f;
+}
+
 vesta::scene::SceneKind Renderer::GetRecommendedSceneKind() const
 {
     return _scene.GetSceneKind();
@@ -737,6 +815,7 @@ void Renderer::SelectDirectionalLight()
         .kind = SelectionKind::DirectionalLight,
         .objectIndex = 0,
     };
+    _trackSelectedObjectOrbit = false;
 }
 
 void Renderer::ClearSelection()
@@ -744,6 +823,66 @@ void Renderer::ClearSelection()
     _selection = {};
     _selectionDragging = false;
     _selectionEditedSinceDragStart = false;
+    _trackSelectedObjectOrbit = false;
+}
+
+bool Renderer::OrbitCameraAroundSelection()
+{
+    const auto& objects = _scene.GetObjects();
+    if (_selection.kind != SelectionKind::Object || _selection.objectIndex >= objects.size()) {
+        return false;
+    }
+
+    const auto& object = objects[_selection.objectIndex];
+    const float distance = DefaultOrbitDistance(glm::distance(_camera.GetPosition(), object.bounds.center), object.bounds.radius);
+    _camera.EnableOrbit(object.bounds.center, distance);
+    _trackSelectedObjectOrbit = true;
+    ResetAccumulation();
+    _visibilityDirty = true;
+    return true;
+}
+
+void Renderer::OrbitCameraAroundScene()
+{
+    const auto& bounds = _scene.GetBounds();
+    const float distance = DefaultOrbitDistance(glm::distance(_camera.GetPosition(), bounds.center), bounds.radius);
+    _camera.EnableOrbit(bounds.center, distance);
+    _trackSelectedObjectOrbit = false;
+    ResetAccumulation();
+    _visibilityDirty = true;
+}
+
+bool Renderer::DollyCameraAroundSelection()
+{
+    const auto& objects = _scene.GetObjects();
+    if (_selection.kind != SelectionKind::Object || _selection.objectIndex >= objects.size()) {
+        return false;
+    }
+
+    const auto& object = objects[_selection.objectIndex];
+    const float distance = DefaultOrbitDistance(glm::distance(_camera.GetPosition(), object.bounds.center), object.bounds.radius);
+    _camera.EnableDollyOrbit(object.bounds.center, distance, _camera.GetDollySpeedDegrees());
+    _trackSelectedObjectOrbit = true;
+    ResetAccumulation();
+    _visibilityDirty = true;
+    return true;
+}
+
+void Renderer::DollyCameraAroundScene()
+{
+    const auto& bounds = _scene.GetBounds();
+    const float distance = DefaultOrbitDistance(glm::distance(_camera.GetPosition(), bounds.center), bounds.radius);
+    _camera.EnableDollyOrbit(bounds.center, distance, _camera.GetDollySpeedDegrees());
+    _trackSelectedObjectOrbit = false;
+    ResetAccumulation();
+    _visibilityDirty = true;
+}
+
+void Renderer::DisableCameraOrbit()
+{
+    _camera.DisableOrbit();
+    _trackSelectedObjectOrbit = false;
+    ResetAccumulation();
 }
 
 std::pair<glm::vec3, glm::vec3> Renderer::ComputeMouseRay(glm::vec2 mousePosition) const

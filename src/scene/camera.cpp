@@ -1,5 +1,6 @@
 #include <vesta/scene/camera.h>
 
+#include <algorithm>
 #include <cmath>
 
 #include <SDL.h>
@@ -9,6 +10,8 @@
 #include <glm/ext/matrix_transform.hpp>
 
 namespace {
+constexpr float kMinOrbitDistance = 0.05f;
+
 glm::vec3 RotateAroundAxis(const glm::vec3& vector, const glm::vec3& axis, float radians)
 {
     const float cosine = std::cos(radians);
@@ -29,6 +32,7 @@ void Camera::SetViewport(uint32_t width, uint32_t height)
 
 void Camera::Focus(glm::vec3 center, float radius)
 {
+    DisableOrbit();
     _position = center + glm::vec3(radius * 0.35f, radius * 0.2f, radius * 1.4f);
     _yawDegrees = -110.0f;
     _pitchDegrees = -10.0f;
@@ -43,6 +47,7 @@ void Camera::SetPosition(glm::vec3 position)
     if (glm::dot(delta, delta) <= 1.0e-10f) {
         return;
     }
+    DisableOrbit();
     _position = position;
     _movedThisFrame = true;
 }
@@ -58,7 +63,80 @@ void Camera::SetRotationDegrees(glm::vec3 rotationDegrees)
     _pitchDegrees = rotationDegrees.y;
     _rollDegrees = rotationDegrees.z;
     UpdateOrientationFromAngles();
+    if (IsOrbitEnabled()) {
+        UpdatePositionFromOrbit();
+    }
     _movedThisFrame = true;
+}
+
+void Camera::EnableOrbit(glm::vec3 target, float distance)
+{
+    _mode = Mode::Orbit;
+    _orbitTarget = target;
+    _orbitDistance = std::max(distance > 0.0f ? distance : glm::distance(_position, target), kMinOrbitDistance);
+
+    glm::vec3 targetDirection = target - _position;
+    if (glm::dot(targetDirection, targetDirection) <= 1.0e-8f) {
+        targetDirection = _forward;
+    } else {
+        targetDirection = glm::normalize(targetDirection);
+    }
+
+    _yawDegrees = glm::degrees(std::atan2(targetDirection.z, targetDirection.x));
+    _pitchDegrees = glm::degrees(std::asin(glm::clamp(targetDirection.y, -1.0f, 1.0f)));
+    UpdateOrientationFromAngles();
+    UpdatePositionFromOrbit();
+    _movedThisFrame = true;
+}
+
+void Camera::EnableDollyOrbit(glm::vec3 target, float radius, float angularSpeedDegrees)
+{
+    EnableOrbit(target, radius);
+    _mode = Mode::DollyOrbit;
+    _dollySpeedDegrees = angularSpeedDegrees;
+}
+
+void Camera::DisableOrbit()
+{
+    _mode = Mode::Fly;
+}
+
+void Camera::SetOrbitTarget(glm::vec3 target)
+{
+    if (!IsOrbitEnabled()) {
+        return;
+    }
+
+    const glm::vec3 delta = target - _orbitTarget;
+    if (glm::dot(delta, delta) <= 1.0e-10f) {
+        return;
+    }
+
+    _orbitTarget = target;
+    UpdatePositionFromOrbit();
+    _movedThisFrame = true;
+}
+
+void Camera::SetOrbitRadius(float radius)
+{
+    const float clampedRadius = std::max(radius, kMinOrbitDistance);
+    if (std::abs(clampedRadius - _orbitDistance) <= 1.0e-5f) {
+        return;
+    }
+
+    _orbitDistance = clampedRadius;
+    if (IsOrbitEnabled()) {
+        UpdatePositionFromOrbit();
+        _movedThisFrame = true;
+    }
+}
+
+void Camera::SetDollySpeedDegrees(float speedDegrees)
+{
+    if (std::abs(speedDegrees - _dollySpeedDegrees) <= 1.0e-5f) {
+        return;
+    }
+    _dollySpeedDegrees = speedDegrees;
 }
 
 void Camera::HandleEvent(const SDL_Event& event)
@@ -93,12 +171,40 @@ void Camera::HandleEvent(const SDL_Event& event)
         _pitchDegrees -= static_cast<float>(deltaY) * kMouseSensitivity;
         _pitchDegrees = glm::clamp(_pitchDegrees, -89.0f, 89.0f);
         UpdateOrientationFromAngles();
+        if (IsOrbitEnabled()) {
+            UpdatePositionFromOrbit();
+        }
+        _movedThisFrame = true;
+        return;
+    }
+
+    if (event.type == SDL_MOUSEWHEEL && IsOrbitEnabled()) {
+        const float scrollDelta = event.wheel.preciseY != 0.0f ? event.wheel.preciseY : static_cast<float>(event.wheel.y);
+        if (std::abs(scrollDelta) <= 1.0e-4f) {
+            return;
+        }
+
+        const float distanceScale = std::pow(0.85f, scrollDelta);
+        _orbitDistance = std::max(_orbitDistance * distanceScale, kMinOrbitDistance);
+        UpdatePositionFromOrbit();
         _movedThisFrame = true;
     }
 }
 
 void Camera::Update(float deltaSeconds)
 {
+    if (_mode == Mode::DollyOrbit) {
+        _yawDegrees += _dollySpeedDegrees * deltaSeconds;
+        UpdateOrientationFromAngles();
+        UpdatePositionFromOrbit();
+        _movedThisFrame = true;
+        return;
+    }
+
+    if (_mode == Mode::Orbit) {
+        return;
+    }
+
     const Uint8* keyboard = SDL_GetKeyboardState(nullptr);
 
     glm::vec3 right = glm::normalize(glm::cross(_forward, _up));
@@ -190,4 +296,14 @@ void Camera::UpdateOrientationFromAngles()
         up = glm::normalize(RotateAroundAxis(up, _forward, glm::radians(_rollDegrees)));
     }
     _up = up;
+}
+
+void Camera::UpdatePositionFromOrbit()
+{
+    if (!IsOrbitEnabled()) {
+        return;
+    }
+
+    _orbitDistance = std::max(_orbitDistance, kMinOrbitDistance);
+    _position = _orbitTarget - _forward * _orbitDistance;
 }

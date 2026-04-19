@@ -89,16 +89,14 @@ void main()
             sBucketCounts[localIndex] = 0u;
         }
         barrier();
-        if (localIndex == 0u) {
-            uint begin = blockIndex * BLOCK_SIZE;
-            uint end = min(begin + BLOCK_SIZE, count);
-            for (uint i = begin; i < end; ++i) {
-                uint digit = ExtractDigit(ReadKey(pc.params1.x, i), shift);
-                sBucketCounts[digit] += 1u;
-            }
-            for (uint digit = 0u; digit < RADIX; ++digit) {
-                radixHistogram[blockIndex * RADIX + digit] = sBucketCounts[digit];
-            }
+        uint itemIndex = blockIndex * BLOCK_SIZE + localIndex;
+        if (itemIndex < count) {
+            uint digit = ExtractDigit(ReadKey(pc.params1.x, itemIndex), shift);
+            atomicAdd(sBucketCounts[digit], 1u);
+        }
+        barrier();
+        if (localIndex < RADIX) {
+            radixHistogram[blockIndex * RADIX + localIndex] = sBucketCounts[localIndex];
         }
         return;
     }
@@ -153,20 +151,13 @@ void main()
         sValues[localIndex] = 0u;
         sDigits[localIndex] = 0u;
     }
-    barrier();
-
     if (localIndex < RADIX) {
         sBucketCounts[localIndex] = 0u;
     }
     barrier();
 
-    if (localIndex == 0u) {
-        uint end = min(begin + BLOCK_SIZE, count);
-        for (uint i = 0u; i < end - begin; ++i) {
-            uint digit = sDigits[i];
-            sLocalOffsets[i] = sBucketCounts[digit];
-            sBucketCounts[digit] += 1u;
-        }
+    if (valid) {
+        atomicAdd(sBucketCounts[sDigits[localIndex]], 1u);
     }
     barrier();
 
@@ -175,6 +166,13 @@ void main()
     }
 
     uint digit = sDigits[localIndex];
-    uint outIndex = radixBinBase[digit] + radixHistogram[blockIndex * RADIX + digit] + sLocalOffsets[localIndex];
+    uint localOffset = 0u;
+    for (uint i = 0u; i < localIndex; ++i) {
+        if (sDigits[i] == digit) {
+            ++localOffset;
+        }
+    }
+
+    uint outIndex = radixBinBase[digit] + radixHistogram[blockIndex * RADIX + digit] + localOffset;
     WriteItem(pc.params1.y, outIndex, sKeys[localIndex], sValues[localIndex]);
 }
