@@ -389,13 +389,14 @@ private:
         Idle = 0,
         AllocateBuffers = 1,
         UploadVertices = 2,
-        UploadMaterials = 3,
-        UploadIndices = 4,
-        UploadTriangles = 5,
-        UploadTextures = 6,
-        BuildBLAS = 7,
-        BuildTLAS = 8,
-        SwapScene = 9,
+        UploadGaussians = 3,
+        UploadMaterials = 4,
+        UploadIndices = 5,
+        UploadTriangles = 6,
+        UploadTextures = 7,
+        BuildBLAS = 8,
+        BuildTLAS = 9,
+        SwapScene = 10,
     };
 
     struct PendingSceneUpload {
@@ -407,6 +408,7 @@ private:
         float textureUploadMs{ 0.0f };
         PendingSceneUploadStage stage{ PendingSceneUploadStage::Idle };
         size_t vertexOffsetBytes{ 0 };
+        size_t gaussianOffsetBytes{ 0 };
         size_t materialOffsetBytes{ 0 };
         size_t indexOffsetBytes{ 0 };
         size_t triangleOffsetBytes{ 0 };

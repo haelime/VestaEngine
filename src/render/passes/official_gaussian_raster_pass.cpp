@@ -36,6 +36,9 @@ constexpr float kGaussianAlphaThreshold = 1.0e-4f;
 constexpr float kGaussianRevealThreshold = 7.5e-4f;
 constexpr VkDeviceSize kSortDispatchIndirectOffset = sizeof(glm::uvec4);
 constexpr uint32_t kTimestampQueryCount = 8;
+constexpr VkDeviceSize kCountReadbackBytes = sizeof(uint32_t) * 16u;
+constexpr VmaAllocationCreateFlags kHostReadbackFlags =
+    VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT | VMA_ALLOCATION_CREATE_MAPPED_BIT;
 
 enum GaussianTimestampQuery : uint32_t {
     kTimestampBuildStart = 0,
@@ -371,10 +374,20 @@ void OfficialGaussianRasterPass::EnsureResources(
     _scanBlockCapacity = scanBlockCount;
     _duplicateCountBuffer = device.CreateBuffer(BufferDesc{
         .size = sizeof(uint32_t) * 16u,
-        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
         .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
         .debugName = "OfficialGaussianCounts",
     });
+    for (uint32_t slot = 0; slot < kTimestampFrameSlots; ++slot) {
+        _countReadbackBuffers[slot] = device.CreateBuffer(BufferDesc{
+            .size = kCountReadbackBytes,
+            .usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+            .allocationFlags = kHostReadbackFlags,
+            .debugName = "OfficialGaussianCountReadback",
+        });
+        _countReadbackPending[slot] = false;
+    }
     _radixHistogramBuffer = device.CreateBuffer(BufferDesc{
         .size = sizeof(uint32_t) * radixBlockCount * 16u,
         .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
@@ -434,6 +447,13 @@ void OfficialGaussianRasterPass::DestroyResources(RenderDevice& device)
         device.DestroyBuffer(_duplicateCountBuffer);
         _duplicateCountBuffer = {};
     }
+    for (BufferHandle& readbackBuffer : _countReadbackBuffers) {
+        if (readbackBuffer) {
+            device.DestroyBuffer(readbackBuffer);
+            readbackBuffer = {};
+        }
+    }
+    _countReadbackPending.fill(false);
     if (_radixHistogramBuffer) {
         device.DestroyBuffer(_radixHistogramBuffer);
         _radixHistogramBuffer = {};
@@ -515,10 +535,35 @@ bool OfficialGaussianRasterPass::ReadTimestampResults(RenderDevice& device, uint
         _statistics.sortMs = elapsedMs(kTimestampDuplicateEnd, kTimestampSortEnd);
         _statistics.rangeMs = elapsedMs(kTimestampSortEnd, kTimestampRangeEnd);
         _statistics.totalBuildMs = elapsedMs(kTimestampBuildStart, kTimestampRangeEnd);
+        ReadCountReadback(device, slot);
     }
     _statistics.rasterMs = elapsedMs(kTimestampRasterStart, kTimestampRasterEnd);
     _timestampResultsPending[slot] = false;
     return true;
+}
+
+void OfficialGaussianRasterPass::ReadCountReadback(RenderDevice& device, uint32_t slot)
+{
+    if (slot >= _countReadbackBuffers.size() || !_countReadbackPending[slot] || !_countReadbackBuffers[slot]) {
+        return;
+    }
+
+    device.InvalidateBuffer(_countReadbackBuffers[slot], 0, kCountReadbackBytes);
+    const AllocatedBuffer& readbackBuffer = device.GetBufferResource(_countReadbackBuffers[slot]);
+    if (readbackBuffer.allocationInfo.pMappedData == nullptr) {
+        _countReadbackPending[slot] = false;
+        return;
+    }
+
+    std::array<uint32_t, 16> countMeta{};
+    std::memcpy(countMeta.data(), readbackBuffer.allocationInfo.pMappedData, countMeta.size() * sizeof(uint32_t));
+    _statistics.duplicateCount = countMeta[0];
+    _statistics.paddedDuplicateCount = countMeta[1] * 256u;
+    _statistics.averageTilesTouched =
+        _statistics.projectedCount > 0u ? static_cast<float>(_statistics.duplicateCount) / static_cast<float>(_statistics.projectedCount) : 0.0f;
+    _duplicateCount = _statistics.duplicateCount;
+    _duplicatePaddedCount = _statistics.paddedDuplicateCount;
+    _countReadbackPending[slot] = false;
 }
 
 void OfficialGaussianRasterPass::Execute(const RenderGraphContext& context)
@@ -753,6 +798,21 @@ void OfficialGaussianRasterPass::Execute(const RenderGraphContext& context)
             VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
             VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
         writeTimestamp(kTimestampRangeEnd);
+
+        if (writeTimestamps && _countReadbackBuffers[timestampSlot]) {
+            InsertMemoryBarrier(commandBuffer,
+                VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+                VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                VK_ACCESS_2_TRANSFER_READ_BIT);
+            const VkBufferCopy copyRegion{ .srcOffset = 0, .dstOffset = 0, .size = kCountReadbackBytes };
+            vkCmdCopyBuffer(commandBuffer,
+                device.GetBuffer(_duplicateCountBuffer),
+                device.GetBuffer(_countReadbackBuffers[timestampSlot]),
+                1,
+                &copyRegion);
+            _countReadbackPending[timestampSlot] = true;
+        }
 
         _gpuBuildDirty = false;
     }

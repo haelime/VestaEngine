@@ -248,6 +248,7 @@ void PathTracerPass::Initialize(RenderDevice& device)
             shaderHandles.data() + static_cast<size_t>(handleSize) * groupIndex,
             handleSize);
     }
+    device.FlushBuffer(_shaderBindingTable, 0, static_cast<VkDeviceSize>(groupStride) * groupCount);
 
     const VkDeviceAddress sbtAddress = device.GetBufferDeviceAddress(_shaderBindingTable);
     _raygenSbt = VkStridedDeviceAddressRegionKHR{ sbtAddress, groupStride, groupStride };
