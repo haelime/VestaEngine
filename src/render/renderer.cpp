@@ -1494,6 +1494,8 @@ void Renderer::PumpPendingSceneUpload()
             return "AllocateBuffers";
         case Stage::UploadVertices:
             return "UploadVertices";
+        case Stage::UploadGaussians:
+            return "UploadGaussians";
         case Stage::UploadMaterials:
             return "UploadMaterials";
         case Stage::UploadIndices:
@@ -1539,8 +1541,8 @@ void Renderer::PumpPendingSceneUpload()
             const size_t totalBytes = sizeof(vesta::scene::SceneVertex) * prepared->vertices.size();
             VESTA_ASSERT_STATE(_pendingSceneUpload.vertexOffsetBytes <= totalBytes, "Vertex upload offset exceeded total vertex bytes.");
             if (_pendingSceneUpload.vertexOffsetBytes >= totalBytes) {
-                _pendingSceneUpload.stage = Stage::UploadMaterials;
-                _sceneLoadStatus.message = "Uploading materials for " + _pendingSceneUpload.path.filename().string() + "...";
+                _pendingSceneUpload.stage = Stage::UploadGaussians;
+                _sceneLoadStatus.message = "Uploading gaussians for " + _pendingSceneUpload.path.filename().string() + "...";
                 continue;
             }
 
@@ -1549,6 +1551,27 @@ void Renderer::PumpPendingSceneUpload()
             _pendingSceneUpload.scene.UploadGpuResourceChunk(
                 _device, vesta::scene::SceneUploadResource::Vertex, _pendingSceneUpload.vertexOffsetBytes, chunkBytes);
             _pendingSceneUpload.vertexOffsetBytes += chunkBytes;
+            remainingUploadBudget -= chunkBytes;
+            if (remainingUploadBudget == 0) {
+                break;
+            }
+            continue;
+        }
+        case Stage::UploadGaussians: {
+            const size_t totalBytes = sizeof(vesta::scene::GaussianPrimitive) * prepared->gaussians.size();
+            VESTA_ASSERT_STATE(
+                _pendingSceneUpload.gaussianOffsetBytes <= totalBytes, "Gaussian upload offset exceeded total gaussian bytes.");
+            if (_pendingSceneUpload.gaussianOffsetBytes >= totalBytes) {
+                _pendingSceneUpload.stage = Stage::UploadMaterials;
+                _sceneLoadStatus.message = "Uploading materials for " + _pendingSceneUpload.path.filename().string() + "...";
+                continue;
+            }
+
+            const size_t chunkBytes =
+                std::min<size_t>(remainingUploadBudget, totalBytes - _pendingSceneUpload.gaussianOffsetBytes);
+            _pendingSceneUpload.scene.UploadGpuResourceChunk(
+                _device, vesta::scene::SceneUploadResource::Gaussian, _pendingSceneUpload.gaussianOffsetBytes, chunkBytes);
+            _pendingSceneUpload.gaussianOffsetBytes += chunkBytes;
             remainingUploadBudget -= chunkBytes;
             if (remainingUploadBudget == 0) {
                 break;
@@ -1707,6 +1730,10 @@ void Renderer::PumpPendingSceneUpload()
                 _pendingSceneUpload.materialOffsetBytes >= sizeof(vesta::scene::SceneMaterial) * prepared->materials.size()
                     || prepared->materials.empty(),
                 "SwapScene requires material upload completion.");
+            VESTA_ASSERT_STATE(
+                _pendingSceneUpload.gaussianOffsetBytes >= sizeof(vesta::scene::GaussianPrimitive) * prepared->gaussians.size()
+                    || prepared->gaussians.empty(),
+                "SwapScene requires gaussian upload completion.");
             _sceneLoadStatus.lastBlockingWait = "FlushUploadBatch before SwapScene";
             _device.FlushUploadBatch();
             _pendingSceneUpload.uploadMs +=

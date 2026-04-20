@@ -68,6 +68,7 @@ private:
     void RebuildFrameDataIfNeeded(VkExtent2D extent);
     bool NeedsFrameDataRebuild(VkExtent2D extent) const;
     [[nodiscard]] bool ReadTimestampResults(RenderDevice& device, uint32_t slot);
+    void ReadCountReadback(RenderDevice& device, uint32_t slot);
 
     GraphTextureHandle _depthInput{};
     GraphTextureHandle _accumOutput{};
@@ -102,6 +103,8 @@ private:
     bool _timestampsSupported{ false };
     std::array<bool, kTimestampFrameSlots> _timestampResultsPending{};
     std::array<bool, kTimestampFrameSlots> _timestampResultsIncludeBuild{};
+    std::array<BufferHandle, kTimestampFrameSlots> _countReadbackBuffers{};
+    std::array<bool, kTimestampFrameSlots> _countReadbackPending{};
     uint32_t _timestampWriteSlot{ 0 };
 
     BufferHandle _projectedBuffer{};
