@@ -24,6 +24,7 @@ public:
     void SetScene(const vesta::scene::Scene* scene);
     void SetCamera(const Camera* camera);
     void SetJobSystem(vesta::core::JobSystem* jobs);
+    void SetFrameSlot(uint32_t frameSlot);
     void SetParams(float opacity, uint32_t shDegree, bool viewDependentColor, bool antialiasing, bool fastCulling);
 
     [[nodiscard]] std::string_view Name() const override { return "OfficialGaussianRasterPass"; }
@@ -80,6 +81,7 @@ private:
     bool _viewDependentColor{ true };
     bool _antialiasing{ true };
     bool _fastCulling{ true };
+    uint32_t _frameSlot{ 0 };
 
     VkPipelineLayout _pipelineLayout{ VK_NULL_HANDLE };
     VkPipeline _preprocessPipeline{ VK_NULL_HANDLE };
@@ -96,8 +98,9 @@ private:
     VkShaderModule _rasterShader{ VK_NULL_HANDLE };
     VkDescriptorPool _descriptorPool{ VK_NULL_HANDLE };
     VkDescriptorSetLayout _descriptorSetLayout{ VK_NULL_HANDLE };
-    VkDescriptorSet _descriptorSet{ VK_NULL_HANDLE };
-    static constexpr uint32_t kTimestampFrameSlots = 2;
+    static constexpr uint32_t kFrameSlots = 2;
+    std::array<VkDescriptorSet, kFrameSlots> _descriptorSets{};
+    static constexpr uint32_t kTimestampFrameSlots = kFrameSlots;
     std::array<VkQueryPool, kTimestampFrameSlots> _timestampQueryPools{};
     float _timestampPeriodNs{ 0.0f };
     bool _timestampsSupported{ false };
@@ -105,7 +108,6 @@ private:
     std::array<bool, kTimestampFrameSlots> _timestampResultsIncludeBuild{};
     std::array<BufferHandle, kTimestampFrameSlots> _countReadbackBuffers{};
     std::array<bool, kTimestampFrameSlots> _countReadbackPending{};
-    uint32_t _timestampWriteSlot{ 0 };
 
     BufferHandle _projectedBuffer{};
     BufferHandle _duplicateKeyBuffer{};
@@ -124,6 +126,8 @@ private:
     size_t _tileCapacity{ 0 };
     size_t _duplicateCount{ 0 };
     size_t _duplicatePaddedCount{ 0 };
+    size_t _nextDuplicateCapacityFloor{ 0 };
+    bool _duplicateOverflowed{ false };
 
     const vesta::scene::Scene* _cachedScene{ nullptr };
     uint64_t _cachedSceneVersion{ 0 };
