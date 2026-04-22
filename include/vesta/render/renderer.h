@@ -286,6 +286,7 @@ struct DdgiStats {
     uint64_t raysPerUpdate{ 0 };
     uint64_t estimatedIrradianceBytes{ 0 };
     uint64_t estimatedVisibilityBytes{ 0 };
+    uint64_t estimatedRelocationBytes{ 0 };
     float probeSpacing{ 0.0f };
     float hysteresis{ 0.0f };
     float intensity{ 0.0f };
@@ -298,6 +299,7 @@ struct DdgiStats {
     bool spatialFilteringAvailable{ false };
     bool rayUpdateAvailable{ false };
     bool temporalBlendAvailable{ false };
+    bool probeRelocationAvailable{ false };
     bool overlayEnabled{ false };
 };
 
@@ -707,6 +709,7 @@ public:
     [[nodiscard]] DdgiStats GetDdgiStats() const;
     [[nodiscard]] BufferHandle GetDdgiIrradianceBuffer() const { return _ddgiIrradianceBuffer; }
     [[nodiscard]] BufferHandle GetDdgiVisibilityBuffer() const { return _ddgiVisibilityBuffer; }
+    [[nodiscard]] BufferHandle GetDdgiRelocationBuffer() const { return _ddgiRelocationBuffer; }
     [[nodiscard]] BufferHandle GetRestirReservoirBuffer() const { return _restirReservoirBuffer; }
     [[nodiscard]] BufferHandle GetRestirHistoryReservoirBuffer() const { return _restirHistoryReservoirBuffer; }
     [[nodiscard]] BufferHandle GetRestirGiReservoirBuffer() const { return _restirGiReservoirBuffer; }
@@ -963,8 +966,10 @@ private:
     uint32_t _iblBrdfLutSampledImageIndex{ kInvalidResourceIndex };
     BufferHandle _ddgiIrradianceBuffer{};
     BufferHandle _ddgiVisibilityBuffer{};
+    BufferHandle _ddgiRelocationBuffer{};
     uint64_t _ddgiIrradianceBufferBytes{ 0 };
     uint64_t _ddgiVisibilityBufferBytes{ 0 };
+    uint64_t _ddgiRelocationBufferBytes{ 0 };
     BufferHandle _restirReservoirBuffer{};
     BufferHandle _restirHistoryReservoirBuffer{};
     BufferHandle _restirGiReservoirBuffer{};

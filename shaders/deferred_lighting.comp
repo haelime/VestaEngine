@@ -408,6 +408,19 @@ uint ddgiProbeIndex(ivec3 probe, uvec3 grid)
     return p.x + p.y * grid.x + p.z * grid.x * grid.y;
 }
 
+vec3 ddgiRelocatedProbePosition(DeferredLightingConstants constants, ivec3 probe, uvec3 grid)
+{
+    vec3 position = ddgiProbePosition(probe, grid, constants.ddgiParams.x);
+    if (constants.ddgiBufferIndices.z == INVALID_BUFFER_INDEX) {
+        return position;
+    }
+
+    uint probeIndex = ddgiProbeIndex(probe, grid);
+    vec4 relocation = storageBuffersVec4[nonuniformEXT(int(constants.ddgiBufferIndices.z))].values[probeIndex];
+    float maxOffset = max(constants.ddgiParams.x, 0.001) * 0.35;
+    return position + clamp(relocation.xyz, vec3(-maxOffset), vec3(maxOffset)) * clamp(relocation.a, 0.0, 1.0);
+}
+
 float evaluateDdgiVisibilityMoment(vec4 visibility, vec3 probePosition, vec3 worldPosition, float spacing)
 {
     if (visibility.a <= 0.0) {
@@ -465,7 +478,7 @@ vec3 sampleDdgiStoredIrradiance(
         if (neighborIrradiance.a <= 0.0) {
             continue;
         }
-        vec3 neighborPosition = ddgiProbePosition(neighborProbe, grid, constants.ddgiParams.x);
+        vec3 neighborPosition = ddgiRelocatedProbePosition(constants, neighborProbe, grid);
         float neighborConfidence = 1.0;
         if (constants.ddgiBufferIndices.y != INVALID_BUFFER_INDEX) {
             vec4 neighborVisibility = storageBuffersVec4[nonuniformEXT(int(constants.ddgiBufferIndices.y))].values[neighborIndex];
@@ -486,7 +499,7 @@ vec3 sampleDdgiStoredIrradiance(
 
 vec3 computeDdgiProbeIrradiance(DeferredLightingConstants constants, ivec3 probe, uvec3 grid, vec3 worldPosition, vec3 normal)
 {
-    vec3 probePosition = ddgiProbePosition(probe, grid, constants.ddgiParams.x);
+    vec3 probePosition = ddgiRelocatedProbePosition(constants, probe, grid);
     vec3 toSurface = worldPosition - probePosition;
     float distanceWeight = smoothstep(constants.ddgiParams.x * 2.5, 0.0, length(toSurface));
     float normalWeight = length(toSurface) > 1.0e-4 ? max(dot(normal, normalize(toSurface)), 0.0) : 1.0;

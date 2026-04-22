@@ -17,7 +17,7 @@ namespace vesta::render {
 // exposes a real probe update pass while the deferred composite remains stable.
 class DdgiProbeUpdatePass final : public IRenderPass {
 public:
-    void SetProbeBuffers(BufferHandle irradiance, BufferHandle visibility);
+    void SetProbeBuffers(BufferHandle irradiance, BufferHandle visibility, BufferHandle relocation);
     void SetScene(const vesta::scene::Scene* scene);
     void SetFrameSlot(uint32_t frameSlot);
     void SetFrameIndex(uint32_t frameIndex);
@@ -42,6 +42,7 @@ public:
 private:
     BufferHandle _irradianceBuffer{};
     BufferHandle _visibilityBuffer{};
+    BufferHandle _relocationBuffer{};
     const vesta::scene::Scene* _scene{ nullptr };
     uint32_t _frameSlot{ 0 };
     uint32_t _frameIndex{ 0 };

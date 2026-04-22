@@ -71,7 +71,7 @@ struct DeferredLightingConstants {
     glm::vec4 areaColor{ 0.86f, 0.92f, 1.0f, 0.0f };
     glm::uvec4 ddgiGrid{ 8u, 4u, 8u, 0u };
     glm::vec4 ddgiParams{ 2.0f, 0.95f, 0.28f, 0.0f };
-    glm::uvec4 ddgiBufferIndices{ kInvalidResourceIndex, kInvalidResourceIndex, 0u, 0u };
+    glm::uvec4 ddgiBufferIndices{ kInvalidResourceIndex, kInvalidResourceIndex, kInvalidResourceIndex, 0u };
 };
 } // namespace
 
@@ -245,7 +245,8 @@ void DeferredLightingPass::SetDdgi(
     float hysteresis,
     float intensity,
     BufferHandle irradianceBuffer,
-    BufferHandle visibilityBuffer)
+    BufferHandle visibilityBuffer,
+    BufferHandle relocationBuffer)
 {
     _ddgiGrid = glm::uvec4(
         std::clamp(probeCountX, 1u, 32u),
@@ -259,6 +260,7 @@ void DeferredLightingPass::SetDdgi(
         0.0f);
     _ddgiIrradianceBuffer = enabled ? irradianceBuffer : BufferHandle{};
     _ddgiVisibilityBuffer = enabled ? visibilityBuffer : BufferHandle{};
+    _ddgiRelocationBuffer = enabled ? relocationBuffer : BufferHandle{};
 }
 
 void DeferredLightingPass::SetContactShadows(bool enabled, float length, float intensity)
@@ -387,6 +389,9 @@ void DeferredLightingPass::Execute(const RenderGraphContext& context)
     const uint32_t ddgiVisibilityBufferIndex = _ddgiVisibilityBuffer
         ? context.GetDevice().GetBufferResource(_ddgiVisibilityBuffer).bindless.storageBuffer
         : kInvalidResourceIndex;
+    const uint32_t ddgiRelocationBufferIndex = _ddgiRelocationBuffer
+        ? context.GetDevice().GetBufferResource(_ddgiRelocationBuffer).bindless.storageBuffer
+        : kInvalidResourceIndex;
 
     const AllocatedBuffer& lightingConstantsBuffer = context.GetDevice().GetBufferResource(_lightingConstantsBuffer);
     if (lightingConstantsBuffer.allocationInfo.pMappedData != nullptr) {
@@ -446,7 +451,7 @@ void DeferredLightingPass::Execute(const RenderGraphContext& context)
             .areaColor = _areaLightColor,
             .ddgiGrid = _ddgiGrid,
             .ddgiParams = _ddgiParams,
-            .ddgiBufferIndices = glm::uvec4(ddgiIrradianceBufferIndex, ddgiVisibilityBufferIndex, 0u, 0u),
+            .ddgiBufferIndices = glm::uvec4(ddgiIrradianceBufferIndex, ddgiVisibilityBufferIndex, ddgiRelocationBufferIndex, 0u),
         };
         std::memcpy(lightingConstantsBuffer.allocationInfo.pMappedData, &constants, sizeof(constants));
         context.GetDevice().FlushBuffer(_lightingConstantsBuffer, 0, sizeof(constants));

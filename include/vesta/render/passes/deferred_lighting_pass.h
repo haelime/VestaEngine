@@ -49,7 +49,8 @@ public:
         float hysteresis,
         float intensity,
         BufferHandle irradianceBuffer,
-        BufferHandle visibilityBuffer);
+        BufferHandle visibilityBuffer,
+        BufferHandle relocationBuffer);
     void SetContactShadows(bool enabled, float length, float intensity);
     void SetShadowMap(GraphTextureHandle shadowMap,
         const std::array<DirectionalShadowCascade, 4>& cascades,
@@ -110,6 +111,7 @@ private:
     glm::vec4 _ddgiParams{ 2.0f, 0.95f, 0.28f, 0.0f };
     BufferHandle _ddgiIrradianceBuffer{};
     BufferHandle _ddgiVisibilityBuffer{};
+    BufferHandle _ddgiRelocationBuffer{};
     glm::vec4 _contactShadowParams{ 1.0f, 1.2f, 0.35f, 0.0f };
     std::array<DirectionalShadowCascade, 4> _shadowCascades{};
     uint32_t _shadowCascadeCount{ 1 };

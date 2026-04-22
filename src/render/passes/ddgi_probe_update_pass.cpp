@@ -22,10 +22,11 @@ struct DdgiProbeUpdatePushConstants {
 static_assert(sizeof(DdgiProbeUpdatePushConstants) <= 256, "DDGI push constants must fit common Vulkan limits.");
 } // namespace
 
-void DdgiProbeUpdatePass::SetProbeBuffers(BufferHandle irradiance, BufferHandle visibility)
+void DdgiProbeUpdatePass::SetProbeBuffers(BufferHandle irradiance, BufferHandle visibility, BufferHandle relocation)
 {
     _irradianceBuffer = irradiance;
     _visibilityBuffer = visibility;
+    _relocationBuffer = relocation;
 }
 
 void DdgiProbeUpdatePass::SetScene(const vesta::scene::Scene* scene)
@@ -120,17 +121,19 @@ void DdgiProbeUpdatePass::Setup(RenderGraphBuilder&)
 
 void DdgiProbeUpdatePass::Execute(const RenderGraphContext& context)
 {
-    if (_pipeline == VK_NULL_HANDLE || _scene == nullptr || !_scene->HasRayTracingScene() || !_irradianceBuffer || !_visibilityBuffer) {
+    if (_pipeline == VK_NULL_HANDLE || _scene == nullptr || !_scene->HasRayTracingScene() || !_irradianceBuffer || !_visibilityBuffer
+        || !_relocationBuffer) {
         return;
     }
 
     const uint32_t irradianceIndex = context.GetDevice().GetBufferResource(_irradianceBuffer).bindless.storageBuffer;
     const uint32_t visibilityIndex = context.GetDevice().GetBufferResource(_visibilityBuffer).bindless.storageBuffer;
+    const uint32_t relocationIndex = context.GetDevice().GetBufferResource(_relocationBuffer).bindless.storageBuffer;
     const DdgiProbeUpdatePushConstants pushConstants{
-        .bufferIndices = glm::uvec4(irradianceIndex, visibilityIndex, 0u, 0u),
+        .bufferIndices = glm::uvec4(irradianceIndex, visibilityIndex, relocationIndex, 0u),
         .gridAndFrame = glm::uvec4(_probeCountX, _probeCountY, _probeCountZ, _frameIndex),
-        .rayParams = glm::uvec4(_raysPerProbe, 0u, 0u, 0u),
-        .probeParams = glm::vec4(_probeSpacing, _hysteresis, 0.0f, 0.0f),
+        .rayParams = glm::uvec4(_raysPerProbe, 1u, 0u, 0u),
+        .probeParams = glm::vec4(_probeSpacing, _hysteresis, 0.35f, 0.0f),
         .lightDirectionAndIntensity = _lightDirectionAndIntensity,
         .directionalLightColor = _directionalLightColor,
         .environmentParams = _environmentParams,

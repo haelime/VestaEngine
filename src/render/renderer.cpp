@@ -4,6 +4,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdlib>
 #include <cctype>
 #include <fstream>
@@ -840,7 +841,8 @@ void ConfigureDeferredLightingPass(Renderer& renderer, IRenderPass& pass, const 
         settings.ddgiHysteresis,
         settings.ddgiIntensity,
         renderer.GetDdgiIrradianceBuffer(),
-        renderer.GetDdgiVisibilityBuffer());
+        renderer.GetDdgiVisibilityBuffer(),
+        renderer.GetDdgiRelocationBuffer());
     lightingPass.SetContactShadows(
         settings.enableContactShadows, settings.contactShadowLength, settings.contactShadowIntensity);
     if (resources.shadowMap && renderer.GetScene().HasRasterGeometry()) {
@@ -954,7 +956,7 @@ void ConfigureDdgiProbeUpdatePass(Renderer& renderer, IRenderPass& pass, const R
 {
     auto& ddgiPass = static_cast<DdgiProbeUpdatePass&>(pass);
     const auto& settings = renderer.GetSettings();
-    ddgiPass.SetProbeBuffers(renderer.GetDdgiIrradianceBuffer(), renderer.GetDdgiVisibilityBuffer());
+    ddgiPass.SetProbeBuffers(renderer.GetDdgiIrradianceBuffer(), renderer.GetDdgiVisibilityBuffer(), renderer.GetDdgiRelocationBuffer());
     ddgiPass.SetScene(&renderer.GetScene());
     ddgiPass.SetFrameSlot(renderer.GetFrameSlot());
     ddgiPass.SetFrameIndex(renderer.GetPathTraceFrameIndex());
@@ -2660,13 +2662,15 @@ DdgiStats Renderer::GetDdgiStats() const
     stats.raysPerUpdate = static_cast<uint64_t>(stats.totalProbeCount) * stats.raysPerProbe;
     stats.estimatedIrradianceBytes = static_cast<uint64_t>(stats.totalProbeCount) * kIrradianceTexelsPerProbe * kRgba16fBytesPerTexel;
     stats.estimatedVisibilityBytes = static_cast<uint64_t>(stats.totalProbeCount) * kVisibilityTexelsPerProbe * kRg16fBytesPerTexel;
+    stats.estimatedRelocationBytes = static_cast<uint64_t>(stats.totalProbeCount) * sizeof(glm::vec4);
     stats.probeSpacing = std::clamp(_settings.ddgiProbeSpacing, 0.25f, 10.0f);
     stats.hysteresis = std::clamp(_settings.ddgiHysteresis, 0.0f, 1.0f);
     stats.intensity = std::clamp(_settings.ddgiIntensity, 0.0f, 2.0f);
     stats.requested = _settings.enableDdgi;
-    stats.probeStorageAvailable = _ddgiIrradianceBuffer && _ddgiVisibilityBuffer
+    stats.probeStorageAvailable = _ddgiIrradianceBuffer && _ddgiVisibilityBuffer && _ddgiRelocationBuffer
         && _ddgiIrradianceBufferBytes >= stats.estimatedIrradianceBytes
-        && _ddgiVisibilityBufferBytes >= stats.estimatedVisibilityBytes;
+        && _ddgiVisibilityBufferBytes >= stats.estimatedVisibilityBytes
+        && _ddgiRelocationBufferBytes >= stats.estimatedRelocationBytes;
     stats.probeCompositeAvailable = stats.requested && NeedsDeferredPass(_settings);
     stats.storageCompositeAvailable = stats.probeCompositeAvailable && stats.probeStorageAvailable;
     const auto* ddgiProbeUpdatePass = FindPass<DdgiProbeUpdatePass>("ddgi-probe-update");
@@ -2675,6 +2679,7 @@ DdgiStats Renderer::GetDdgiStats() const
     stats.momentValidationAvailable = stats.storageCompositeAvailable && stats.rayUpdateAvailable;
     stats.spatialFilteringAvailable = stats.storageCompositeAvailable && stats.probeCountX * stats.probeCountY * stats.probeCountZ > 1u;
     stats.temporalBlendAvailable = stats.rayUpdateAvailable && stats.hysteresis > 0.0f;
+    stats.probeRelocationAvailable = stats.rayUpdateAvailable && _ddgiRelocationBuffer;
     stats.backendAvailable =
         stats.requested && stats.probeStorageAvailable && (stats.storageCompositeAvailable || stats.rayUpdateAvailable);
     stats.overlayEnabled = _settings.showGiProbeOverlay;
@@ -2709,10 +2714,13 @@ void Renderer::EnsureDdgiResources()
             .debugName = std::string(name),
         });
         currentBytes = requiredBytes;
+        std::vector<std::byte> clearData(static_cast<size_t>(requiredBytes));
+        _device.UploadBufferData(handle, 0, clearData);
     };
 
     recreateBuffer(_ddgiIrradianceBuffer, _ddgiIrradianceBufferBytes, stats.estimatedIrradianceBytes, "DDGI.IrradianceProbeStorage");
     recreateBuffer(_ddgiVisibilityBuffer, _ddgiVisibilityBufferBytes, stats.estimatedVisibilityBytes, "DDGI.VisibilityProbeStorage");
+    recreateBuffer(_ddgiRelocationBuffer, _ddgiRelocationBufferBytes, stats.estimatedRelocationBytes, "DDGI.RelocationProbeStorage");
 }
 
 void Renderer::DestroyDdgiResources()
@@ -2725,8 +2733,13 @@ void Renderer::DestroyDdgiResources()
         _device.DestroyBuffer(_ddgiVisibilityBuffer);
         _ddgiVisibilityBuffer = {};
     }
+    if (_ddgiRelocationBuffer) {
+        _device.DestroyBuffer(_ddgiRelocationBuffer);
+        _ddgiRelocationBuffer = {};
+    }
     _ddgiIrradianceBufferBytes = 0;
     _ddgiVisibilityBufferBytes = 0;
+    _ddgiRelocationBufferBytes = 0;
 }
 
 void Renderer::EnsureRestirResources()

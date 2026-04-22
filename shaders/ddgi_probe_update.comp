@@ -10,10 +10,10 @@ layout(set = 0, binding = 2, std430) buffer StorageBufferVec4 {
 layout(set = 1, binding = 0) uniform accelerationStructureEXT topLevelAS;
 
 layout(push_constant) uniform DdgiProbeUpdatePushConstants {
-    uvec4 bufferIndices;              // irradiance, visibility, unused, unused
+    uvec4 bufferIndices;              // irradiance, visibility, relocation, unused
     uvec4 gridAndFrame;               // x, y, z, frame
-    uvec4 rayParams;                  // rays/probe, unused...
-    vec4 probeParams;                 // spacing, hysteresis, unused...
+    uvec4 rayParams;                  // rays/probe, relocation enabled, unused...
+    vec4 probeParams;                 // spacing, hysteresis, max relocation fraction, unused
     vec4 lightDirectionAndIntensity;
     vec4 directionalLightColor;
     vec4 environmentParams;           // intensity, rotation, preset, diffuse strength
@@ -44,7 +44,13 @@ vec3 probePosition(uint probeIndex)
     uint y = (probeIndex / grid.x) % grid.y;
     uint z = probeIndex / max(grid.x * grid.y, 1u);
     vec3 center = (vec3(grid) - vec3(1.0)) * 0.5;
-    return (vec3(x, y, z) - center) * max(pc.probeParams.x, 0.001);
+    vec3 basePosition = (vec3(x, y, z) - center) * max(pc.probeParams.x, 0.001);
+    if (pc.bufferIndices.z != INVALID_RESOURCE_INDEX && pc.rayParams.y != 0u) {
+        vec4 relocation = storageBuffersVec4[nonuniformEXT(int(pc.bufferIndices.z))].values[probeIndex];
+        float maxOffset = max(pc.probeParams.x, 0.001) * clamp(pc.probeParams.z, 0.0, 0.5);
+        basePosition += clamp(relocation.xyz, vec3(-maxOffset), vec3(maxOffset)) * clamp(relocation.a, 0.0, 1.0);
+    }
+    return basePosition;
 }
 
 vec3 sampleSphere(uint probeIndex, uint rayIndex)
@@ -133,6 +139,18 @@ void main()
     float historyWeight = (pc.gridAndFrame.w == 0u || previousIrradiance.a <= 0.0) ? 0.0 : clamp(pc.probeParams.y, 0.0, 0.99);
     vec3 blendedRadiance = mix(radiance, previousIrradiance.rgb, historyWeight);
     vec3 blendedVisibility = mix(vec3(moment1, moment2, visible), previousVisibility.xyz, historyWeight);
+    if (pc.bufferIndices.z != INVALID_RESOURCE_INDEX && pc.rayParams.y != 0u) {
+        vec4 previousRelocation = pc.gridAndFrame.w == 0u
+            ? vec4(0.0)
+            : storageBuffersVec4[nonuniformEXT(int(pc.bufferIndices.z))].values[probeIndex];
+        float nearSurface = 1.0 - smoothstep(0.08, 0.45, moment1);
+        vec3 pushDirection = -direction * nearSurface * max(pc.probeParams.x, 0.001) * 0.12;
+        float relocationHistory = clamp(pc.probeParams.y * 0.92, 0.0, 0.98);
+        vec3 relocated = mix(pushDirection, previousRelocation.xyz, relocationHistory);
+        float relocationConfidence = max(nearSurface, previousRelocation.a * relocationHistory);
+        storageBuffersVec4[nonuniformEXT(int(pc.bufferIndices.z))].values[probeIndex] =
+            vec4(relocated, clamp(relocationConfidence, 0.0, 1.0));
+    }
 
     // Multiple rays can update the same probe during a frame; each ray blends
     // against the previous frame record so the probe field evolves smoothly.

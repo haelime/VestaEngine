@@ -1918,7 +1918,7 @@ void VestaEngine::finish_benchmark()
                << "rt_hybrid_backend,rt_hybrid_ray_query,rt_hybrid_tlas,rt_hybrid_resolution,rt_shadow_requested,rt_ao_requested,rt_reflection_requested,rt_gi_requested,rt_shadow_samples,rt_ao_samples,rt_reflection_samples,rt_gi_samples,rt_shadow_rays,rt_ao_rays,rt_reflection_rays,rt_gi_rays,rt_denoiser,rt_gi_spatial_denoise,rt_temporal,rt_gi_temporal,"
                << "ssr,ssr_max_distance,ssr_thickness,ssr_intensity,"
                << "ssgi,ssgi_radius,ssgi_intensity,ssgi_samples,"
-               << "ddgi,ddgi_backend,ddgi_probes,ddgi_rays_per_update,ddgi_memory_mb,ddgi_probe_spacing,ddgi_hysteresis,ddgi_intensity,ddgi_overlay,ddgi_composite,ddgi_storage_composite,ddgi_moment_validation,ddgi_spatial_filtering,ddgi_ray_update,ddgi_temporal_blend,"
+               << "ddgi,ddgi_backend,ddgi_probes,ddgi_rays_per_update,ddgi_memory_mb,ddgi_probe_spacing,ddgi_hysteresis,ddgi_intensity,ddgi_overlay,ddgi_composite,ddgi_storage_composite,ddgi_moment_validation,ddgi_spatial_filtering,ddgi_ray_update,ddgi_temporal_blend,ddgi_probe_relocation,"
                << "shadow_map,shadow_map_size,shadow_cascades,shadow_cascade_lambda,shadow_bias,shadow_normal_bias,shadow_strength,shadow_pcss,shadow_filter_radius,contact_shadows,contact_shadow_length,contact_shadow_intensity,"
                << "pt_nee,pt_rr,pt_rr_depth,pt_firefly_clamp,"
                << "pt_denoiser,pt_denoiser_strength,pt_denoiser_temporal,pt_denoiser_iterations,"
@@ -2101,7 +2101,7 @@ void VestaEngine::finish_benchmark()
            << ','
            << CsvEscape(fmt::format("{}x{}x{}", ddgiStats.probeCountX, ddgiStats.probeCountY, ddgiStats.probeCountZ)) << ','
            << ddgiStats.raysPerUpdate << ','
-           << MiB(ddgiStats.estimatedIrradianceBytes + ddgiStats.estimatedVisibilityBytes) << ','
+           << MiB(ddgiStats.estimatedIrradianceBytes + ddgiStats.estimatedVisibilityBytes + ddgiStats.estimatedRelocationBytes) << ','
            << ddgiStats.probeSpacing << ','
            << ddgiStats.hysteresis << ','
            << ddgiStats.intensity << ','
@@ -2112,6 +2112,7 @@ void VestaEngine::finish_benchmark()
            << (ddgiStats.spatialFilteringAvailable ? "true" : "false") << ','
            << (ddgiStats.rayUpdateAvailable ? "true" : "false") << ','
            << (ddgiStats.temporalBlendAvailable ? "true" : "false") << ','
+           << (ddgiStats.probeRelocationAvailable ? "true" : "false") << ','
            << (settings.enableShadowMap ? "true" : "false") << ','
            << settings.shadowMapSize << ','
            << settings.shadowCascadeCount << ','
@@ -2399,6 +2400,7 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "    \"rays_per_update\": " << ddgiStats.raysPerUpdate << ",\n"
            << "    \"estimated_irradiance_bytes\": " << ddgiStats.estimatedIrradianceBytes << ",\n"
            << "    \"estimated_visibility_bytes\": " << ddgiStats.estimatedVisibilityBytes << ",\n"
+           << "    \"estimated_relocation_bytes\": " << ddgiStats.estimatedRelocationBytes << ",\n"
            << "    \"probe_spacing\": " << ddgiStats.probeSpacing << ",\n"
            << "    \"hysteresis\": " << ddgiStats.hysteresis << ",\n"
            << "    \"intensity\": " << ddgiStats.intensity << ",\n"
@@ -2408,7 +2410,8 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "    \"moment_validation_available\": " << (ddgiStats.momentValidationAvailable ? "true" : "false") << ",\n"
            << "    \"spatial_filtering_available\": " << (ddgiStats.spatialFilteringAvailable ? "true" : "false") << ",\n"
            << "    \"ray_update_available\": " << (ddgiStats.rayUpdateAvailable ? "true" : "false") << ",\n"
-           << "    \"temporal_blend_available\": " << (ddgiStats.temporalBlendAvailable ? "true" : "false") << "\n"
+           << "    \"temporal_blend_available\": " << (ddgiStats.temporalBlendAvailable ? "true" : "false") << ",\n"
+           << "    \"probe_relocation_available\": " << (ddgiStats.probeRelocationAvailable ? "true" : "false") << "\n"
            << "  },\n"
            << "  \"shadow_map\": " << (settings.enableShadowMap ? "true" : "false") << ",\n"
            << "  \"shadow_map_size\": " << settings.shadowMapSize << ",\n"
@@ -5373,6 +5376,11 @@ void VestaEngine::build_debug_ui()
                         ddgiStats.estimatedVisibilityBytes,
                     });
                     bufferEntries.push_back(BufferInspectorEntry{
+                        "DDGI Relocation Probe Storage",
+                        _renderer.GetDdgiRelocationBuffer(),
+                        ddgiStats.estimatedRelocationBytes,
+                    });
+                    bufferEntries.push_back(BufferInspectorEntry{
                         "ReSTIR DI Current Reservoir Storage",
                         _renderer.GetRestirReservoirBuffer(),
                         restirPerBufferBytes(restirStats.estimatedDiReservoirBytes),
@@ -6461,9 +6469,10 @@ void VestaEngine::draw_global_illumination_panel()
         ddgiStats.probeCountY,
         ddgiStats.probeCountZ,
         static_cast<unsigned long long>(ddgiStats.raysPerUpdate));
-    ImGui::Text("Estimated irradiance %.2f MiB  visibility %.2f MiB",
+    ImGui::Text("Estimated irradiance %.2f MiB  visibility %.2f MiB  relocation %.3f MiB",
         MiB(ddgiStats.estimatedIrradianceBytes),
-        MiB(ddgiStats.estimatedVisibilityBytes));
+        MiB(ddgiStats.estimatedVisibilityBytes),
+        MiB(ddgiStats.estimatedRelocationBytes));
     ImGui::Text("Spacing %.2f  Hysteresis %.2f  Overlay %s",
         ddgiStats.probeSpacing,
         ddgiStats.hysteresis,
@@ -6482,8 +6491,10 @@ void VestaEngine::draw_global_illumination_panel()
         ddgiStats.spatialFilteringAvailable ? "live" : "staged",
         ddgiStats.rayUpdateAvailable ? "live" : "staged",
         ddgiStats.temporalBlendAvailable ? "live" : "staged");
+    ImGui::Text("Probe Relocation %s",
+        ddgiStats.probeRelocationAvailable ? "live" : "staged");
     ImGui::TextDisabled(
-        "DDGI probe storage, storage-backed irradiance composite, visibility moment validation, neighbor spatial filtering, ray-query probe update, and temporal hysteresis blending are live when TLAS/ray query are available; probe relocation remains staged.");
+        "DDGI probe storage, storage-backed irradiance composite, visibility moment validation, neighbor spatial filtering, ray-query probe update, temporal hysteresis blending, and probe relocation are live when TLAS/ray query are available.");
 
     ImGui::SeparatorText("Advanced GI");
     ImGui::BeginDisabled(true);
