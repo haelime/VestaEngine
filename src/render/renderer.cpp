@@ -1255,6 +1255,7 @@ void Renderer::Shutdown()
     DestroyIblResources();
     DestroyDdgiResources();
     DestroyRestirResources();
+    DestroyVoxelGiResources();
     for (RetiredSceneEntry& retiredScene : _retiredScenes) {
         retiredScene.scene.DestroyGpu(_device);
     }
@@ -1465,6 +1466,7 @@ void Renderer::RenderFrame()
     // focused on "what it needs" instead of hand-written global barriers.
     EnsureDdgiResources();
     EnsureRestirResources();
+    EnsureVoxelGiResources();
     RenderGraph graph = BuildFrameGraph(swapchainImageIndex);
     RenderGraphExecutionContext executionContext{
         .device = _device,
@@ -2697,6 +2699,23 @@ DdgiStats Renderer::GetDdgiStats() const
     return stats;
 }
 
+VoxelGiStats Renderer::GetVoxelGiStats() const
+{
+    VoxelGiStats stats{};
+    stats.resolution = std::clamp(_settings.voxelGiResolution, 16u, 128u);
+    stats.totalVoxels = stats.resolution * stats.resolution * stats.resolution;
+    stats.worldExtent = std::clamp(_settings.voxelGiWorldExtent, 4.0f, 128.0f);
+    stats.voxelSize = stats.worldExtent / static_cast<float>(std::max(1u, stats.resolution));
+    stats.estimatedRadianceBytes = static_cast<uint64_t>(stats.totalVoxels) * sizeof(glm::vec4);
+    stats.estimatedOccupancyBytes = static_cast<uint64_t>(stats.totalVoxels) * sizeof(uint32_t);
+    stats.requested = _settings.enableVoxelGi;
+    stats.radianceAvailable = _voxelGiRadianceBuffer && _voxelGiRadianceBufferBytes >= stats.estimatedRadianceBytes;
+    stats.occupancyAvailable = _voxelGiOccupancyBuffer && _voxelGiOccupancyBufferBytes >= stats.estimatedOccupancyBytes;
+    stats.storageAvailable = stats.requested && stats.radianceAvailable && stats.occupancyAvailable;
+    stats.visualizationAvailable = stats.storageAvailable;
+    return stats;
+}
+
 void Renderer::EnsureDdgiResources()
 {
     const DdgiStats stats = GetDdgiStats();
@@ -2751,6 +2770,56 @@ void Renderer::DestroyDdgiResources()
     _ddgiIrradianceBufferBytes = 0;
     _ddgiVisibilityBufferBytes = 0;
     _ddgiRelocationBufferBytes = 0;
+}
+
+void Renderer::EnsureVoxelGiResources()
+{
+    const VoxelGiStats stats = GetVoxelGiStats();
+    if (!stats.requested || _device.GetDevice() == VK_NULL_HANDLE) {
+        DestroyVoxelGiResources();
+        return;
+    }
+
+    const auto recreateBuffer = [&](BufferHandle& handle, uint64_t& currentBytes, uint64_t requiredBytes, std::string_view name) {
+        if (handle && currentBytes == requiredBytes) {
+            return;
+        }
+        if (handle) {
+            _device.DestroyBuffer(handle);
+            handle = {};
+            currentBytes = 0;
+        }
+        if (requiredBytes == 0u) {
+            return;
+        }
+        handle = _device.CreateBuffer(BufferDesc{
+            .size = static_cast<VkDeviceSize>(requiredBytes),
+            .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+            .registerBindlessStorage = true,
+            .debugName = std::string(name),
+        });
+        currentBytes = requiredBytes;
+        std::vector<std::byte> clearData(static_cast<size_t>(requiredBytes));
+        _device.UploadBufferData(handle, 0, clearData);
+    };
+
+    recreateBuffer(_voxelGiRadianceBuffer, _voxelGiRadianceBufferBytes, stats.estimatedRadianceBytes, "VoxelGI.RadianceVolumeStorage");
+    recreateBuffer(_voxelGiOccupancyBuffer, _voxelGiOccupancyBufferBytes, stats.estimatedOccupancyBytes, "VoxelGI.OccupancyVolumeStorage");
+}
+
+void Renderer::DestroyVoxelGiResources()
+{
+    if (_voxelGiRadianceBuffer) {
+        _device.DestroyBuffer(_voxelGiRadianceBuffer);
+        _voxelGiRadianceBuffer = {};
+    }
+    if (_voxelGiOccupancyBuffer) {
+        _device.DestroyBuffer(_voxelGiOccupancyBuffer);
+        _voxelGiOccupancyBuffer = {};
+    }
+    _voxelGiRadianceBufferBytes = 0;
+    _voxelGiOccupancyBufferBytes = 0;
 }
 
 void Renderer::EnsureRestirResources()

@@ -306,6 +306,20 @@ struct DdgiStats {
     bool overlayEnabled{ false };
 };
 
+struct VoxelGiStats {
+    uint32_t resolution{ 0 };
+    uint32_t totalVoxels{ 0 };
+    float worldExtent{ 0.0f };
+    float voxelSize{ 0.0f };
+    uint64_t estimatedRadianceBytes{ 0 };
+    uint64_t estimatedOccupancyBytes{ 0 };
+    bool requested{ false };
+    bool storageAvailable{ false };
+    bool radianceAvailable{ false };
+    bool occupancyAvailable{ false };
+    bool visualizationAvailable{ false };
+};
+
 struct IblStats {
     uint32_t sourceWidth{ 0 };
     uint32_t sourceHeight{ 0 };
@@ -432,6 +446,8 @@ struct RendererSettings {
     bool enableDdgi{ false };
     bool enableVoxelGi{ false };
     bool enableRestirGi{ false };
+    uint32_t voxelGiResolution{ 64 };
+    float voxelGiWorldExtent{ 24.0f };
     uint32_t ddgiProbeCountX{ 8 };
     uint32_t ddgiProbeCountY{ 4 };
     uint32_t ddgiProbeCountZ{ 8 };
@@ -710,6 +726,7 @@ public:
     [[nodiscard]] TemporalUpscalerStats GetTemporalUpscalerStats() const;
     [[nodiscard]] RestirStats GetRestirStats() const;
     [[nodiscard]] DdgiStats GetDdgiStats() const;
+    [[nodiscard]] VoxelGiStats GetVoxelGiStats() const;
     [[nodiscard]] BufferHandle GetDdgiIrradianceBuffer() const { return _ddgiIrradianceBuffer; }
     [[nodiscard]] BufferHandle GetDdgiVisibilityBuffer() const { return _ddgiVisibilityBuffer; }
     [[nodiscard]] BufferHandle GetDdgiRelocationBuffer() const { return _ddgiRelocationBuffer; }
@@ -721,6 +738,8 @@ public:
     [[nodiscard]] BufferHandle GetRestirPtHistoryReservoirBuffer() const { return _restirPtHistoryReservoirBuffer; }
     [[nodiscard]] BufferHandle GetRestirPtPathStateBuffer() const { return _restirPtPathStateBuffer; }
     [[nodiscard]] BufferHandle GetRestirPtHistoryPathStateBuffer() const { return _restirPtHistoryPathStateBuffer; }
+    [[nodiscard]] BufferHandle GetVoxelGiRadianceBuffer() const { return _voxelGiRadianceBuffer; }
+    [[nodiscard]] BufferHandle GetVoxelGiOccupancyBuffer() const { return _voxelGiOccupancyBuffer; }
     [[nodiscard]] IblStats GetIblStats() const;
     [[nodiscard]] RayEffectsStats GetRayEffectsStats() const;
     [[nodiscard]] std::vector<RenderPassDebugInfo> GetRenderPassDebugInfo() const;
@@ -915,6 +934,8 @@ private:
     void DestroyDdgiResources();
     void EnsureRestirResources();
     void DestroyRestirResources();
+    void EnsureVoxelGiResources();
+    void DestroyVoxelGiResources();
 
     RenderDevice _device;
     vesta::core::JobSystem _jobs;
@@ -991,6 +1012,10 @@ private:
     uint64_t _restirPtHistoryReservoirBufferBytes{ 0 };
     uint64_t _restirPtPathStateBufferBytes{ 0 };
     uint64_t _restirPtHistoryPathStateBufferBytes{ 0 };
+    BufferHandle _voxelGiRadianceBuffer{};
+    BufferHandle _voxelGiOccupancyBuffer{};
+    uint64_t _voxelGiRadianceBufferBytes{ 0 };
+    uint64_t _voxelGiOccupancyBufferBytes{ 0 };
     glm::vec2 _lastDragMousePosition{ 0.0f };
     glm::vec3 _dragPlaneOrigin{ 0.0f };
     glm::vec3 _dragPlaneNormal{ 0.0f, 1.0f, 0.0f };

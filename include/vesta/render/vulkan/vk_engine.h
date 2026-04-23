@@ -52,6 +52,7 @@ struct EngineLaunchOptions {
     std::optional<float> startupSsgiIntensity;
     std::optional<uint32_t> startupSsgiSamples;
     std::optional<bool> startupDdgiEnabled;
+    std::optional<bool> startupVoxelGiEnabled;
     std::optional<bool> startupRestirDiEnabled;
     std::optional<bool> startupRestirGiEnabled;
     std::optional<bool> startupRestirPtEnabled;

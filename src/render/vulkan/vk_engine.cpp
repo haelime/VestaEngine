@@ -1359,6 +1359,10 @@ void VestaEngine::init_renderer()
         settings.enableDdgi = *_launchOptions.startupDdgiEnabled;
         resetAccumulation = true;
     }
+    if (_launchOptions.startupVoxelGiEnabled.has_value()) {
+        settings.enableVoxelGi = *_launchOptions.startupVoxelGiEnabled;
+        resetAccumulation = true;
+    }
     if (_launchOptions.startupRestirDiEnabled.has_value()) {
         settings.enableRestirDi = *_launchOptions.startupRestirDiEnabled;
         resetAccumulation = true;
@@ -1919,6 +1923,7 @@ void VestaEngine::finish_benchmark()
                << "ssr,ssr_max_distance,ssr_thickness,ssr_intensity,"
                << "ssgi,ssgi_radius,ssgi_intensity,ssgi_samples,"
                << "ddgi,ddgi_backend,ddgi_probes,ddgi_rays_per_update,ddgi_memory_mb,ddgi_probe_spacing,ddgi_hysteresis,ddgi_intensity,ddgi_overlay,ddgi_composite,ddgi_storage_composite,ddgi_moment_validation,ddgi_spatial_filtering,ddgi_ray_update,ddgi_temporal_blend,ddgi_probe_relocation,"
+               << "voxel_gi,voxel_gi_backend,voxel_gi_resolution,voxel_gi_voxels,voxel_gi_extent,voxel_gi_voxel_size,voxel_gi_memory_mb,voxel_gi_radiance,voxel_gi_occupancy,voxel_gi_visualization,"
                << "shadow_map,shadow_map_size,shadow_cascades,shadow_cascade_lambda,shadow_bias,shadow_normal_bias,shadow_strength,shadow_pcss,shadow_filter_radius,contact_shadows,contact_shadow_length,contact_shadow_intensity,"
                << "pt_nee,pt_rr,pt_rr_depth,pt_firefly_clamp,"
                << "pt_denoiser,pt_denoiser_strength,pt_denoiser_temporal,pt_denoiser_iterations,"
@@ -1969,6 +1974,7 @@ void VestaEngine::finish_benchmark()
     const bool anyRestirResolve =
         restirStats.lightingResolveAvailable || restirStats.giResolveAvailable || restirStats.ptResolveAvailable;
     const auto ddgiStats = _renderer.GetDdgiStats();
+    const auto voxelGiStats = _renderer.GetVoxelGiStats();
     const auto iblStats = _renderer.GetIblStats();
     const auto rayEffectsStats = _renderer.GetRayEffectsStats();
     std::string iblBackendLabel;
@@ -2116,6 +2122,16 @@ void VestaEngine::finish_benchmark()
            << (ddgiStats.rayUpdateAvailable ? "true" : "false") << ','
            << (ddgiStats.temporalBlendAvailable ? "true" : "false") << ','
            << (ddgiStats.probeRelocationAvailable ? "true" : "false") << ','
+           << (voxelGiStats.requested ? "true" : "false") << ','
+           << CsvEscape(voxelGiStats.storageAvailable ? "VolumeStorage" : "Staged") << ','
+           << voxelGiStats.resolution << ','
+           << voxelGiStats.totalVoxels << ','
+           << voxelGiStats.worldExtent << ','
+           << voxelGiStats.voxelSize << ','
+           << MiB(voxelGiStats.estimatedRadianceBytes + voxelGiStats.estimatedOccupancyBytes) << ','
+           << (voxelGiStats.radianceAvailable ? "true" : "false") << ','
+           << (voxelGiStats.occupancyAvailable ? "true" : "false") << ','
+           << (voxelGiStats.visualizationAvailable ? "true" : "false") << ','
            << (settings.enableShadowMap ? "true" : "false") << ','
            << settings.shadowMapSize << ','
            << settings.shadowCascadeCount << ','
@@ -2293,6 +2309,7 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
     const auto temporalUpscalerStats = _renderer.GetTemporalUpscalerStats();
     const auto restirStats = _renderer.GetRestirStats();
     const auto ddgiStats = _renderer.GetDdgiStats();
+    const auto voxelGiStats = _renderer.GetVoxelGiStats();
     const auto iblStats = _renderer.GetIblStats();
     const auto rayEffectsStats = _renderer.GetRayEffectsStats();
     const uint64_t sceneBufferBytes = BufferSizeBytes(device, scene.GetVertexBuffer())
@@ -2418,6 +2435,19 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "    \"ray_update_available\": " << (ddgiStats.rayUpdateAvailable ? "true" : "false") << ",\n"
            << "    \"temporal_blend_available\": " << (ddgiStats.temporalBlendAvailable ? "true" : "false") << ",\n"
            << "    \"probe_relocation_available\": " << (ddgiStats.probeRelocationAvailable ? "true" : "false") << "\n"
+           << "  },\n"
+           << "  \"voxel_gi_stats\": {\n"
+           << "    \"requested\": " << (voxelGiStats.requested ? "true" : "false") << ",\n"
+           << "    \"storage_available\": " << (voxelGiStats.storageAvailable ? "true" : "false") << ",\n"
+           << "    \"radiance_available\": " << (voxelGiStats.radianceAvailable ? "true" : "false") << ",\n"
+           << "    \"occupancy_available\": " << (voxelGiStats.occupancyAvailable ? "true" : "false") << ",\n"
+           << "    \"visualization_available\": " << (voxelGiStats.visualizationAvailable ? "true" : "false") << ",\n"
+           << "    \"resolution\": " << voxelGiStats.resolution << ",\n"
+           << "    \"total_voxels\": " << voxelGiStats.totalVoxels << ",\n"
+           << "    \"world_extent\": " << voxelGiStats.worldExtent << ",\n"
+           << "    \"voxel_size\": " << voxelGiStats.voxelSize << ",\n"
+           << "    \"estimated_radiance_bytes\": " << voxelGiStats.estimatedRadianceBytes << ",\n"
+           << "    \"estimated_occupancy_bytes\": " << voxelGiStats.estimatedOccupancyBytes << "\n"
            << "  },\n"
            << "  \"shadow_map\": " << (settings.enableShadowMap ? "true" : "false") << ",\n"
            << "  \"shadow_map_size\": " << settings.shadowMapSize << ",\n"
@@ -5359,6 +5389,7 @@ void VestaEngine::build_debug_ui()
                         uint64_t logicalBytes;
                     };
                     const auto ddgiStats = _renderer.GetDdgiStats();
+                    const auto voxelGiStats = _renderer.GetVoxelGiStats();
                     const auto restirStats = _renderer.GetRestirStats();
                     const auto restirPerBufferBytes = [&](uint64_t totalBytes) {
                         return restirStats.temporalReuse ? totalBytes / 2u : totalBytes;
@@ -5385,6 +5416,16 @@ void VestaEngine::build_debug_ui()
                         "DDGI Relocation Probe Storage",
                         _renderer.GetDdgiRelocationBuffer(),
                         ddgiStats.estimatedRelocationBytes,
+                    });
+                    bufferEntries.push_back(BufferInspectorEntry{
+                        "Voxel GI Radiance Volume Storage",
+                        _renderer.GetVoxelGiRadianceBuffer(),
+                        voxelGiStats.estimatedRadianceBytes,
+                    });
+                    bufferEntries.push_back(BufferInspectorEntry{
+                        "Voxel GI Occupancy Volume Storage",
+                        _renderer.GetVoxelGiOccupancyBuffer(),
+                        voxelGiStats.estimatedOccupancyBytes,
                     });
                     bufferEntries.push_back(BufferInspectorEntry{
                         "ReSTIR DI Current Reservoir Storage",
@@ -6513,11 +6554,30 @@ void VestaEngine::draw_global_illumination_panel()
         "DDGI probe storage, storage-backed irradiance composite, visibility moment validation, neighbor spatial filtering, ray-query probe update, temporal hysteresis blending, and probe relocation are live when TLAS/ray query are available.");
 
     ImGui::SeparatorText("Advanced GI");
-    ImGui::BeginDisabled(true);
     ImGui::Checkbox("Voxel GI", &settings.enableVoxelGi);
+    int voxelResolution = static_cast<int>(settings.voxelGiResolution);
+    if (ImGui::SliderInt("Voxel Resolution", &voxelResolution, 16, 128)) {
+        settings.voxelGiResolution = static_cast<uint32_t>(std::clamp(voxelResolution, 16, 128));
+        resetHistory = true;
+    }
+    resetHistory |= ImGui::SliderFloat("Voxel World Extent", &settings.voxelGiWorldExtent, 4.0f, 128.0f, "%.1f m");
+    const auto voxelGiStats = _renderer.GetVoxelGiStats();
+    ImGui::Text("Voxel GI %s  %u^3 (%u voxels)",
+        voxelGiStats.storageAvailable ? "VolumeStorage" : "Staged",
+        voxelGiStats.resolution,
+        voxelGiStats.totalVoxels);
+    ImGui::Text("Extent %.1f m  Voxel %.3f m  Memory %.2f MiB",
+        voxelGiStats.worldExtent,
+        voxelGiStats.voxelSize,
+        MiB(voxelGiStats.estimatedRadianceBytes + voxelGiStats.estimatedOccupancyBytes));
+    ImGui::Text("Radiance %s  Occupancy %s  Visualization %s",
+        voxelGiStats.radianceAvailable ? "ready" : "staged",
+        voxelGiStats.occupancyAvailable ? "ready" : "staged",
+        voxelGiStats.visualizationAvailable ? "ready" : "staged");
+    ImGui::BeginDisabled(true);
     ImGui::Checkbox("ReSTIR GI", &settings.enableRestirGi);
     ImGui::EndDisabled();
-    ImGui::TextDisabled("Voxel GI remains a roadmap stub; ReSTIR GI allocates reservoir storage, with GI resolve shading still staged.");
+    ImGui::TextDisabled("Voxel GI volume storage is live when enabled; production voxelization and cone tracing remain staged.");
 
     if (resetHistory) {
         _renderer.ResetAccumulation();

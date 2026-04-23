@@ -42,6 +42,7 @@ void PrintUsage()
         << "  --ssgi-intensity <value>      SSGI bounce strength.\n"
         << "  --ssgi-samples <4-16>         SSGI sample count.\n"
         << "  --ddgi <on|off>               Toggle DDGI probe storage allocation.\n"
+        << "  --voxel-gi <on|off>           Toggle Voxel GI volume storage allocation.\n"
         << "  --restir-di <on|off>          Toggle ReSTIR DI reservoir storage allocation.\n"
         << "  --restir-gi <on|off>          Toggle ReSTIR GI reservoir storage allocation.\n"
         << "  --restir-pt <on|off>          Toggle ReSTIR PT reservoir storage allocation.\n"
@@ -663,6 +664,18 @@ int main(int argc, char* argv[])
             options.startupDdgiEnabled = ParseToggle(value);
             if (!options.startupDdgiEnabled.has_value()) {
                 std::cerr << "Invalid DDGI toggle: " << value << "\n";
+                return 1;
+            }
+            continue;
+        }
+        if (argument == "--voxel-gi") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            options.startupVoxelGiEnabled = ParseToggle(value);
+            if (!options.startupVoxelGiEnabled.has_value()) {
+                std::cerr << "Invalid Voxel GI toggle: " << value << "\n";
                 return 1;
             }
             continue;
