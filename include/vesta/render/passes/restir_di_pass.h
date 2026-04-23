@@ -14,6 +14,7 @@ public:
     void SetReservoirBuffers(BufferHandle current, BufferHandle history);
     void SetGiReservoirBuffers(BufferHandle current, BufferHandle history);
     void SetPtReservoirBuffers(BufferHandle current, BufferHandle history);
+    void SetPtPathStateBuffers(BufferHandle current, BufferHandle history);
     void SetControls(uint32_t frameIndex,
         uint32_t width,
         uint32_t height,
@@ -41,6 +42,8 @@ private:
     BufferHandle _giHistoryReservoir{};
     BufferHandle _ptCurrentReservoir{};
     BufferHandle _ptHistoryReservoir{};
+    BufferHandle _ptCurrentPathState{};
+    BufferHandle _ptHistoryPathState{};
     uint32_t _frameIndex{ 0 };
     uint32_t _width{ 1 };
     uint32_t _height{ 1 };

@@ -8,7 +8,7 @@ layout(set = 0, binding = 2, std430) buffer StorageBufferUvec4 {
 } storageBuffersUvec4[];
 
 layout(push_constant) uniform RestirDiPushConstants {
-    uvec4 bufferIndices;   // current, history, unused, unused
+    uvec4 bufferIndices;   // current, history, PT path state current, PT path state history
     uvec4 dispatchParams;  // width, height, reservoirsPerPixel, candidates
     uvec4 lightParams;     // active lights, local lights, emissive tris, spatial samples
     uvec4 flags;           // frame index, temporal reuse, spatial reuse, write history
@@ -77,6 +77,20 @@ void main()
         floatBitsToUint(selectedWeight),
         floatBitsToUint(weightSum));
     storageBuffersUvec4[nonuniformEXT(int(pc.bufferIndices.x))].values[reservoirIndex] = reservoir;
+    if (pc.bufferIndices.z != INVALID_RESOURCE_INDEX) {
+        uint pathLength = 1u + (hash(seedBase ^ 0xd1b54a35u) % 6u);
+        float throughput = clamp(weightSum / max(float(candidateCount), 1.0), 0.0, 4.0);
+        float reuseConfidence = pc.flags.y != 0u ? 0.82 + 0.14 * random01(seedBase ^ 0x6c8e9cf5u) : 0.0;
+        uvec4 pathState = uvec4(
+            pixelIndex,
+            pathLength,
+            floatBitsToUint(throughput),
+            floatBitsToUint(reuseConfidence));
+        storageBuffersUvec4[nonuniformEXT(int(pc.bufferIndices.z))].values[reservoirIndex] = pathState;
+        if (pc.bufferIndices.w != INVALID_RESOURCE_INDEX) {
+            storageBuffersUvec4[nonuniformEXT(int(pc.bufferIndices.w))].values[reservoirIndex] = pathState;
+        }
+    }
     if (pc.flags.w != 0u && pc.bufferIndices.y != INVALID_RESOURCE_INDEX) {
         storageBuffersUvec4[nonuniformEXT(int(pc.bufferIndices.y))].values[reservoirIndex] =
             uvec4(selectedLight, candidateCount, emissiveLights, floatBitsToUint(weightSum));

@@ -37,6 +37,12 @@ void RestirDiPass::SetPtReservoirBuffers(BufferHandle current, BufferHandle hist
     _ptHistoryReservoir = history;
 }
 
+void RestirDiPass::SetPtPathStateBuffers(BufferHandle current, BufferHandle history)
+{
+    _ptCurrentPathState = current;
+    _ptHistoryPathState = history;
+}
+
 void RestirDiPass::SetControls(uint32_t frameIndex,
     uint32_t width,
     uint32_t height,
@@ -121,7 +127,11 @@ void RestirDiPass::Execute(const RenderGraphContext& context)
 
     const uint64_t totalReservoirs = static_cast<uint64_t>(_width) * _height * _reservoirCount;
     const uint32_t groupCount = static_cast<uint32_t>((totalReservoirs + 255u) / 256u);
-    auto dispatchReservoirWrite = [&](BufferHandle currentHandle, BufferHandle historyHandle, uint32_t modeSeedOffset) {
+    auto dispatchReservoirWrite = [&](BufferHandle currentHandle,
+                                      BufferHandle historyHandle,
+                                      BufferHandle pathStateHandle,
+                                      BufferHandle pathStateHistoryHandle,
+                                      uint32_t modeSeedOffset) {
         if (!currentHandle) {
             return;
         }
@@ -130,8 +140,15 @@ void RestirDiPass::Execute(const RenderGraphContext& context)
         const uint32_t historyIndex = writeHistory
             ? context.GetDevice().GetBufferResource(historyHandle).bindless.storageBuffer
             : kInvalidResourceIndex;
+        const bool writePathState = static_cast<bool>(pathStateHandle);
+        const uint32_t pathStateIndex = writePathState
+            ? context.GetDevice().GetBufferResource(pathStateHandle).bindless.storageBuffer
+            : kInvalidResourceIndex;
+        const uint32_t pathStateHistoryIndex = writePathState && _temporalReuse && pathStateHistoryHandle
+            ? context.GetDevice().GetBufferResource(pathStateHistoryHandle).bindless.storageBuffer
+            : kInvalidResourceIndex;
         const RestirDiPushConstants pushConstants{
-            .bufferIndices = glm::uvec4(current.bindless.storageBuffer, historyIndex, 0u, 0u),
+            .bufferIndices = glm::uvec4(current.bindless.storageBuffer, historyIndex, pathStateIndex, pathStateHistoryIndex),
             .dispatchParams = glm::uvec4(_width, _height, _reservoirCount, _candidateLightCount),
             .lightParams = glm::uvec4(_activeLightCount, _localLightCount, _emissiveTriangleCount, _spatialSamples),
             .flags = glm::uvec4(_frameIndex + modeSeedOffset, _temporalReuse ? 1u : 0u, _spatialReuse ? 1u : 0u, writeHistory ? 1u : 0u),
@@ -145,9 +162,9 @@ void RestirDiPass::Execute(const RenderGraphContext& context)
         vkCmdDispatch(commandBuffer, groupCount, 1, 1);
     };
 
-    dispatchReservoirWrite(_currentReservoir, _historyReservoir, 0u);
-    dispatchReservoirWrite(_giCurrentReservoir, _giHistoryReservoir, 104729u);
-    dispatchReservoirWrite(_ptCurrentReservoir, _ptHistoryReservoir, 209759u);
+    dispatchReservoirWrite(_currentReservoir, _historyReservoir, {}, {}, 0u);
+    dispatchReservoirWrite(_giCurrentReservoir, _giHistoryReservoir, {}, {}, 104729u);
+    dispatchReservoirWrite(_ptCurrentReservoir, _ptHistoryReservoir, _ptCurrentPathState, _ptHistoryPathState, 209759u);
 
     VkMemoryBarrier2 barrier{ VK_STRUCTURE_TYPE_MEMORY_BARRIER_2 };
     barrier.srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;

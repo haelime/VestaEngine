@@ -909,6 +909,7 @@ void ConfigureRestirDiPass(Renderer& renderer, IRenderPass& pass, const Renderer
     restirPass.SetReservoirBuffers(renderer.GetRestirReservoirBuffer(), renderer.GetRestirHistoryReservoirBuffer());
     restirPass.SetGiReservoirBuffers(renderer.GetRestirGiReservoirBuffer(), renderer.GetRestirGiHistoryReservoirBuffer());
     restirPass.SetPtReservoirBuffers(renderer.GetRestirPtReservoirBuffer(), renderer.GetRestirPtHistoryReservoirBuffer());
+    restirPass.SetPtPathStateBuffers(renderer.GetRestirPtPathStateBuffer(), renderer.GetRestirPtHistoryPathStateBuffer());
     restirPass.SetControls(renderer.GetPathTraceFrameIndex(),
         extent.width,
         extent.height,
@@ -2594,12 +2595,15 @@ RestirStats Renderer::GetRestirStats() const
     stats.reservoirCount = std::clamp(_settings.restirReservoirCount, 1u, 8u);
     stats.reservoirPixels = static_cast<uint64_t>(extent.width) * static_cast<uint64_t>(extent.height) * stats.reservoirCount;
     const uint64_t reservoirBufferBytes = stats.reservoirPixels * kEstimatedReservoirBytes;
+    const uint64_t pathStateBufferBytes = stats.reservoirPixels * sizeof(glm::uvec4);
     const uint64_t temporalMultiplier = stats.temporalReuse ? 2u : 1u;
     stats.estimatedDiReservoirBytes = stats.requestedDi ? reservoirBufferBytes * temporalMultiplier : 0u;
     stats.estimatedGiReservoirBytes = stats.requestedGi ? reservoirBufferBytes * temporalMultiplier : 0u;
     stats.estimatedPtReservoirBytes = stats.requestedPt ? reservoirBufferBytes * temporalMultiplier : 0u;
+    stats.estimatedPtPathStateBytes = stats.requestedPt ? pathStateBufferBytes * temporalMultiplier : 0u;
     stats.estimatedReservoirBytes =
-        stats.estimatedDiReservoirBytes + stats.estimatedGiReservoirBytes + stats.estimatedPtReservoirBytes;
+        stats.estimatedDiReservoirBytes + stats.estimatedGiReservoirBytes + stats.estimatedPtReservoirBytes
+        + stats.estimatedPtPathStateBytes;
     const bool requested = stats.requestedDi || stats.requestedGi || stats.requestedPt;
     stats.diReservoirBuffersAvailable = stats.requestedDi
         && (_restirReservoirBuffer && _restirReservoirBufferBytes >= reservoirBufferBytes
@@ -2613,15 +2617,21 @@ RestirStats Renderer::GetRestirStats() const
         && (_restirPtReservoirBuffer && _restirPtReservoirBufferBytes >= reservoirBufferBytes
             && (!stats.temporalReuse
                 || (_restirPtHistoryReservoirBuffer && _restirPtHistoryReservoirBufferBytes >= reservoirBufferBytes)));
+    stats.ptPathStateAvailable = stats.requestedPt
+        && (_restirPtPathStateBuffer && _restirPtPathStateBufferBytes >= pathStateBufferBytes
+            && (!stats.temporalReuse
+                || (_restirPtHistoryPathStateBuffer && _restirPtHistoryPathStateBufferBytes >= pathStateBufferBytes)));
     stats.reservoirBuffersAvailable =
         requested
         && (!stats.requestedDi || stats.diReservoirBuffersAvailable)
         && (!stats.requestedGi || stats.giReservoirBuffersAvailable)
-        && (!stats.requestedPt || stats.ptReservoirBuffersAvailable);
+        && (!stats.requestedPt || (stats.ptReservoirBuffersAvailable && stats.ptPathStateAvailable));
     stats.historyAvailable = stats.temporalReuse
         && ((!stats.requestedDi || (_restirHistoryReservoirBuffer && _restirHistoryReservoirBufferBytes >= reservoirBufferBytes))
             && (!stats.requestedGi || (_restirGiHistoryReservoirBuffer && _restirGiHistoryReservoirBufferBytes >= reservoirBufferBytes))
-            && (!stats.requestedPt || (_restirPtHistoryReservoirBuffer && _restirPtHistoryReservoirBufferBytes >= reservoirBufferBytes)));
+            && (!stats.requestedPt
+                || ((_restirPtHistoryReservoirBuffer && _restirPtHistoryReservoirBufferBytes >= reservoirBufferBytes)
+                    && (_restirPtHistoryPathStateBuffer && _restirPtHistoryPathStateBufferBytes >= pathStateBufferBytes))));
     const auto* restirPass = FindPass<RestirDiPass>("restir-di");
     const auto* restirResolvePass = FindPass<RestirDiResolvePass>("restir-di-resolve");
     stats.candidateSamplingAvailable = stats.requestedDi && stats.diReservoirBuffersAvailable
@@ -2641,6 +2651,7 @@ RestirStats Renderer::GetRestirStats() const
         && _settings.restirSpatialSamples > 0u;
     stats.giReservoirBackendAvailable = stats.giCandidatePassAvailable;
     stats.ptReservoirBackendAvailable = stats.ptCandidatePassAvailable;
+    stats.ptPathStateReuseAvailable = stats.ptCandidatePassAvailable && stats.ptPathStateAvailable && stats.temporalReuse;
     stats.backendAvailable = requested && stats.reservoirBuffersAvailable
         && (stats.candidateSamplingAvailable || stats.giCandidatePassAvailable || stats.ptCandidatePassAvailable);
     return stats;
@@ -2753,6 +2764,7 @@ void Renderer::EnsureRestirResources()
 
     constexpr uint64_t kEstimatedReservoirBytes = 32u;
     const uint64_t reservoirBufferBytes = stats.reservoirPixels * kEstimatedReservoirBytes;
+    const uint64_t pathStateBufferBytes = stats.reservoirPixels * sizeof(glm::uvec4);
     const auto recreateBuffer = [&](BufferHandle& handle, uint64_t& currentBytes, uint64_t requiredBytes, std::string_view name) {
         if (handle && currentBytes == requiredBytes) {
             return;
@@ -2789,6 +2801,7 @@ void Renderer::EnsureRestirResources()
                                         uint64_t& currentBytes,
                                         BufferHandle& history,
                                         uint64_t& historyBytes,
+                                        uint64_t bytesPerBuffer,
                                         std::string_view currentName,
                                         std::string_view historyName) {
         if (!enabled) {
@@ -2796,9 +2809,9 @@ void Renderer::EnsureRestirResources()
             releaseBuffer(history, historyBytes);
             return;
         }
-        recreateBuffer(current, currentBytes, reservoirBufferBytes, currentName);
+        recreateBuffer(current, currentBytes, bytesPerBuffer, currentName);
         if (stats.temporalReuse) {
-            recreateBuffer(history, historyBytes, reservoirBufferBytes, historyName);
+            recreateBuffer(history, historyBytes, bytesPerBuffer, historyName);
         } else {
             releaseBuffer(history, historyBytes);
         }
@@ -2809,6 +2822,7 @@ void Renderer::EnsureRestirResources()
         _restirReservoirBufferBytes,
         _restirHistoryReservoirBuffer,
         _restirHistoryReservoirBufferBytes,
+        reservoirBufferBytes,
         "ReSTIR.DI.CurrentReservoirStorage",
         "ReSTIR.DI.HistoryReservoirStorage");
     updateReservoirSet(stats.requestedGi,
@@ -2816,6 +2830,7 @@ void Renderer::EnsureRestirResources()
         _restirGiReservoirBufferBytes,
         _restirGiHistoryReservoirBuffer,
         _restirGiHistoryReservoirBufferBytes,
+        reservoirBufferBytes,
         "ReSTIR.GI.CurrentReservoirStorage",
         "ReSTIR.GI.HistoryReservoirStorage");
     updateReservoirSet(stats.requestedPt,
@@ -2823,8 +2838,17 @@ void Renderer::EnsureRestirResources()
         _restirPtReservoirBufferBytes,
         _restirPtHistoryReservoirBuffer,
         _restirPtHistoryReservoirBufferBytes,
+        reservoirBufferBytes,
         "ReSTIR.PT.CurrentReservoirStorage",
         "ReSTIR.PT.HistoryReservoirStorage");
+    updateReservoirSet(stats.requestedPt,
+        _restirPtPathStateBuffer,
+        _restirPtPathStateBufferBytes,
+        _restirPtHistoryPathStateBuffer,
+        _restirPtHistoryPathStateBufferBytes,
+        pathStateBufferBytes,
+        "ReSTIR.PT.CurrentPathStateStorage",
+        "ReSTIR.PT.HistoryPathStateStorage");
 }
 
 void Renderer::DestroyRestirResources()
@@ -2853,12 +2877,22 @@ void Renderer::DestroyRestirResources()
         _device.DestroyBuffer(_restirPtHistoryReservoirBuffer);
         _restirPtHistoryReservoirBuffer = {};
     }
+    if (_restirPtPathStateBuffer) {
+        _device.DestroyBuffer(_restirPtPathStateBuffer);
+        _restirPtPathStateBuffer = {};
+    }
+    if (_restirPtHistoryPathStateBuffer) {
+        _device.DestroyBuffer(_restirPtHistoryPathStateBuffer);
+        _restirPtHistoryPathStateBuffer = {};
+    }
     _restirReservoirBufferBytes = 0;
     _restirHistoryReservoirBufferBytes = 0;
     _restirGiReservoirBufferBytes = 0;
     _restirGiHistoryReservoirBufferBytes = 0;
     _restirPtReservoirBufferBytes = 0;
     _restirPtHistoryReservoirBufferBytes = 0;
+    _restirPtPathStateBufferBytes = 0;
+    _restirPtHistoryPathStateBufferBytes = 0;
 }
 
 IblStats Renderer::GetIblStats() const
