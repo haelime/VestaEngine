@@ -1375,6 +1375,10 @@ void VestaEngine::init_renderer()
         settings.enableRestirPt = *_launchOptions.startupRestirPtEnabled;
         resetAccumulation = true;
     }
+    if (_launchOptions.startupMeshletCullingEnabled.has_value()) {
+        settings.enableMeshletCulling = *_launchOptions.startupMeshletCullingEnabled;
+        resetAccumulation = true;
+    }
     if (_launchOptions.startupRtShadowsEnabled.has_value()) {
         settings.enableRtShadows = *_launchOptions.startupRtShadowsEnabled;
         resetAccumulation = true;
@@ -1931,7 +1935,7 @@ void VestaEngine::finish_benchmark()
                << "requested_backend,active_backend,scene_upload_mode,"
                << "gaussian,path_tracing,texture_streaming,indirect_draw,frustum_culling,distance_culling,async_compute,async_timeline,transfer_queue,"
                << "gpu_driven,gpu_driven_backend,visibility_set_valid,visible_surfaces,culled_surfaces,indirect_draw_estimate,"
-               << "meshlet_culling,cluster_count,visible_clusters,culled_clusters,meshlet_count,visible_meshlets,culled_meshlets,cluster_bounds,meshlet_triangles,"
+               << "meshlet_culling,meshlet_backend,meshlet_visibility_storage,meshlet_visibility_mb,cluster_count,visible_clusters,culled_clusters,meshlet_count,visible_meshlets,culled_meshlets,cluster_bounds,meshlet_triangles,"
                << "gaussian_trained,gaussian_count,gaussian_sh_degree,gaussian_view_dependent_color,gaussian_antialiasing,"
                << "gaussian_fast_culling,gaussian_opacity,gaussian_mix,gaussian_interactive_preview,"
                << "pt_scale,environment_intensity,environment_rotation_deg,environment_preset,external_hdri,external_hdri_path,external_hdri_resolution,external_hdri_hdr,"
@@ -2176,6 +2180,9 @@ void VestaEngine::finish_benchmark()
            << gpuDrivenStats.culledSurfaces << ','
            << gpuDrivenStats.indirectDrawEstimate << ','
            << (settings.enableMeshletCulling ? "true" : "false") << ','
+           << CsvEscape(meshletStats.visibilityStorageAvailable ? "VisibilityStorage" : "Staged") << ','
+           << (meshletStats.visibilityStorageAvailable ? "true" : "false") << ','
+           << MiB(meshletStats.estimatedVisibilityBytes) << ','
            << meshletStats.totalClusters << ','
            << meshletStats.visibleClusters << ','
            << meshletStats.culledClusters << ','
@@ -2476,6 +2483,9 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "  },\n"
            << "  \"meshlet_culling\": " << (settings.enableMeshletCulling ? "true" : "false") << ",\n"
            << "  \"meshlet_cluster_stats\": {\n"
+           << "    \"backend\": \"" << (meshletStats.visibilityStorageAvailable ? "VisibilityStorage" : "Staged") << "\",\n"
+           << "    \"visibility_storage_available\": " << (meshletStats.visibilityStorageAvailable ? "true" : "false") << ",\n"
+           << "    \"estimated_visibility_bytes\": " << meshletStats.estimatedVisibilityBytes << ",\n"
            << "    \"cluster_count\": " << meshletStats.totalClusters << ",\n"
            << "    \"visible_clusters\": " << meshletStats.visibleClusters << ",\n"
            << "    \"culled_clusters\": " << meshletStats.culledClusters << ",\n"
@@ -3683,6 +3693,9 @@ void VestaEngine::build_debug_ui()
             ImGui::Text("Visible Surfaces %u / %zu", _renderer.GetVisibleSurfaceCount(), scene.GetSurfaces().size());
             const auto meshletStats = _renderer.GetMeshletClusterStats();
             ImGui::Text("Meshlets %u visible / %u total", meshletStats.visibleMeshlets, meshletStats.totalMeshlets);
+            ImGui::Text("Meshlet Visibility Storage %s  %.3f MiB",
+                meshletStats.visibilityStorageAvailable ? "ready" : "staged",
+                MiB(meshletStats.estimatedVisibilityBytes));
             const uint32_t totalGaussians = scene.GetGaussianCount();
             const uint32_t projectedGaussians = _renderer.GetOfficialGaussianProjectedCount();
             const uint32_t culledGaussians = projectedGaussians <= totalGaussians ? totalGaussians - projectedGaussians : 0u;
@@ -5391,6 +5404,7 @@ void VestaEngine::build_debug_ui()
                     const auto ddgiStats = _renderer.GetDdgiStats();
                     const auto voxelGiStats = _renderer.GetVoxelGiStats();
                     const auto restirStats = _renderer.GetRestirStats();
+                    const auto meshletStats = _renderer.GetMeshletClusterStats();
                     const auto restirPerBufferBytes = [&](uint64_t totalBytes) {
                         return restirStats.temporalReuse ? totalBytes / 2u : totalBytes;
                     };
@@ -5401,6 +5415,7 @@ void VestaEngine::build_debug_ui()
                         BufferInspectorEntry{ "Triangle Buffer", scene.GetTriangleBuffer(), triangleBytes },
                         BufferInspectorEntry{ "Emissive Triangle Buffer", scene.GetEmissiveTriangleBuffer(), emissiveBytes },
                         BufferInspectorEntry{ "Gaussian Position/Covariance/SH", scene.GetGaussianBuffer(), gaussianBytes },
+                        BufferInspectorEntry{ "Meshlet Visibility Cluster Storage", _renderer.GetMeshletVisibilityBuffer(), meshletStats.estimatedVisibilityBytes },
                     };
                     bufferEntries.push_back(BufferInspectorEntry{
                         "DDGI Irradiance Probe Storage",
@@ -6726,8 +6741,12 @@ void VestaEngine::draw_advanced_portfolio_panel()
         meshletStats.visibleClusters,
         meshletStats.totalClusters,
         meshletStats.culledClusters);
-    ImGui::Text("Meshlet proxy %u triangles / meshlet", meshletStats.trianglesPerMeshlet);
-    ImGui::TextDisabled(meshletStats.visibilitySetValid ? "CPU visibility set is current; GPU meshlet dispatch remains staged."
+    ImGui::Text("Visibility storage %s  Backend %s  Memory %.3f MiB",
+        meshletStats.visibilityStorageAvailable ? "ready" : "staged",
+        meshletStats.visibilityStorageAvailable ? "VisibilityStorage" : "Staged",
+        MiB(meshletStats.estimatedVisibilityBytes));
+    ImGui::Text("Meshlet grouping %u triangles / meshlet", meshletStats.trianglesPerMeshlet);
+    ImGui::TextDisabled(meshletStats.visibilitySetValid ? "CPU visibility set is current; meshlet visibility storage is live when enabled."
                                                         : "No current visibility set; stats use full scene as visible.");
     if (ImGui::BeginTable("MeshletClusterStats", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
         ImGui::TableSetupColumn("Metric");
@@ -6750,7 +6769,7 @@ void VestaEngine::draw_advanced_portfolio_panel()
         clusterRow("Meshlets", meshletStats.totalMeshlets, meshletStats.visibleMeshlets, meshletStats.culledMeshlets);
         ImGui::EndTable();
     }
-    ImGui::TextDisabled("Compute culling, cone culling, and indirect meshlet draws are roadmap stubs.");
+    ImGui::TextDisabled("Compute cone culling and indirect meshlet draws remain staged beyond the current visibility-storage backend.");
 
     ImGui::SeparatorText("Bindless");
     const auto bindlessStats = device.GetBindlessStats();

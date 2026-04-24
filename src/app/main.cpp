@@ -53,6 +53,7 @@ void PrintUsage()
         << "  --rt-half <on|off>            Toggle half-resolution hybrid ray effects.\n"
         << "  --rt-distance <value>         Hybrid ray effects max ray distance.\n"
         << "  --rt-ao-radius <value>        Hybrid ray-query AO radius.\n"
+        << "  --meshlet-culling <on|off>    Toggle meshlet visibility storage backend.\n"
         << "  --shadow-pcss <on|off>        Toggle PCSS-style soft shadow filtering.\n"
         << "  --shadow-filter-radius <0.5-4> Shadow PCF/PCSS filter radius.\n"
         << "  --motion-blur <on|off>        Toggle screen-space motion blur.\n"
@@ -724,6 +725,18 @@ int main(int argc, char* argv[])
             options.startupRtShadowsEnabled = ParseToggle(value);
             if (!options.startupRtShadowsEnabled.has_value()) {
                 std::cerr << "Invalid RT shadows toggle: " << value << "\n";
+                return 1;
+            }
+            continue;
+        }
+        if (argument == "--meshlet-culling") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            options.startupMeshletCullingEnabled = ParseToggle(value);
+            if (!options.startupMeshletCullingEnabled.has_value()) {
+                std::cerr << "Invalid meshlet culling toggle: " << value << "\n";
                 return 1;
             }
             continue;

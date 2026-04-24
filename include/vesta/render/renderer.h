@@ -210,9 +210,11 @@ struct MeshletClusterStats {
     uint32_t visibleMeshlets{ 0 };
     uint32_t culledMeshlets{ 0 };
     uint32_t boundsAvailable{ 0 };
+    uint64_t estimatedVisibilityBytes{ 0 };
     bool visibilitySetValid{ false };
     bool coneCullingEnabled{ false };
     bool gpuDrivenBackend{ false };
+    bool visibilityStorageAvailable{ false };
 };
 
 struct GpuDrivenStats {
@@ -740,6 +742,7 @@ public:
     [[nodiscard]] BufferHandle GetRestirPtHistoryPathStateBuffer() const { return _restirPtHistoryPathStateBuffer; }
     [[nodiscard]] BufferHandle GetVoxelGiRadianceBuffer() const { return _voxelGiRadianceBuffer; }
     [[nodiscard]] BufferHandle GetVoxelGiOccupancyBuffer() const { return _voxelGiOccupancyBuffer; }
+    [[nodiscard]] BufferHandle GetMeshletVisibilityBuffer() const { return _meshletVisibilityBuffer; }
     [[nodiscard]] IblStats GetIblStats() const;
     [[nodiscard]] RayEffectsStats GetRayEffectsStats() const;
     [[nodiscard]] std::vector<RenderPassDebugInfo> GetRenderPassDebugInfo() const;
@@ -936,6 +939,8 @@ private:
     void DestroyRestirResources();
     void EnsureVoxelGiResources();
     void DestroyVoxelGiResources();
+    void EnsureMeshletResources();
+    void DestroyMeshletResources();
 
     RenderDevice _device;
     vesta::core::JobSystem _jobs;
@@ -1016,6 +1021,8 @@ private:
     BufferHandle _voxelGiOccupancyBuffer{};
     uint64_t _voxelGiRadianceBufferBytes{ 0 };
     uint64_t _voxelGiOccupancyBufferBytes{ 0 };
+    BufferHandle _meshletVisibilityBuffer{};
+    uint64_t _meshletVisibilityBufferBytes{ 0 };
     glm::vec2 _lastDragMousePosition{ 0.0f };
     glm::vec3 _dragPlaneOrigin{ 0.0f };
     glm::vec3 _dragPlaneNormal{ 0.0f, 1.0f, 0.0f };

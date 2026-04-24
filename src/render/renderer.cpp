@@ -1256,6 +1256,7 @@ void Renderer::Shutdown()
     DestroyDdgiResources();
     DestroyRestirResources();
     DestroyVoxelGiResources();
+    DestroyMeshletResources();
     for (RetiredSceneEntry& retiredScene : _retiredScenes) {
         retiredScene.scene.DestroyGpu(_device);
     }
@@ -1467,6 +1468,7 @@ void Renderer::RenderFrame()
     EnsureDdgiResources();
     EnsureRestirResources();
     EnsureVoxelGiResources();
+    EnsureMeshletResources();
     RenderGraph graph = BuildFrameGraph(swapchainImageIndex);
     RenderGraphExecutionContext executionContext{
         .device = _device,
@@ -2521,7 +2523,6 @@ MeshletClusterStats Renderer::GetMeshletClusterStats() const
     stats.boundsAvailable = static_cast<uint32_t>(_scene.GetSurfaceBounds().size());
     stats.visibilitySetValid = HasValidVisibilitySet();
     stats.coneCullingEnabled = false;
-    stats.gpuDrivenBackend = false;
 
     const auto surfaceMeshletCount = [&](uint32_t surfaceIndex) -> uint32_t {
         if (surfaceIndex >= _scene.GetSurfaces().size()) {
@@ -2547,6 +2548,10 @@ MeshletClusterStats Renderer::GetMeshletClusterStats() const
 
     stats.culledClusters = stats.totalClusters >= stats.visibleClusters ? stats.totalClusters - stats.visibleClusters : 0u;
     stats.culledMeshlets = stats.totalMeshlets >= stats.visibleMeshlets ? stats.totalMeshlets - stats.visibleMeshlets : 0u;
+    stats.estimatedVisibilityBytes = static_cast<uint64_t>(stats.totalMeshlets) * sizeof(glm::uvec4);
+    stats.visibilityStorageAvailable = _settings.enableMeshletCulling && _meshletVisibilityBuffer
+        && _meshletVisibilityBufferBytes >= stats.estimatedVisibilityBytes;
+    stats.gpuDrivenBackend = false;
     return stats;
 }
 
@@ -2820,6 +2825,44 @@ void Renderer::DestroyVoxelGiResources()
     }
     _voxelGiRadianceBufferBytes = 0;
     _voxelGiOccupancyBufferBytes = 0;
+}
+
+void Renderer::EnsureMeshletResources()
+{
+    const MeshletClusterStats stats = GetMeshletClusterStats();
+    if (!_settings.enableMeshletCulling || _device.GetDevice() == VK_NULL_HANDLE || stats.estimatedVisibilityBytes == 0u) {
+        DestroyMeshletResources();
+        return;
+    }
+
+    if (_meshletVisibilityBuffer && _meshletVisibilityBufferBytes == stats.estimatedVisibilityBytes) {
+        return;
+    }
+    if (_meshletVisibilityBuffer) {
+        _device.DestroyBuffer(_meshletVisibilityBuffer);
+        _meshletVisibilityBuffer = {};
+        _meshletVisibilityBufferBytes = 0;
+    }
+
+    _meshletVisibilityBuffer = _device.CreateBuffer(BufferDesc{
+        .size = static_cast<VkDeviceSize>(stats.estimatedVisibilityBytes),
+        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        .memoryUsage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+        .registerBindlessStorage = true,
+        .debugName = "Meshlet.VisibilityClusterStorage",
+    });
+    _meshletVisibilityBufferBytes = stats.estimatedVisibilityBytes;
+    std::vector<std::byte> clearData(static_cast<size_t>(stats.estimatedVisibilityBytes));
+    _device.UploadBufferData(_meshletVisibilityBuffer, 0, clearData);
+}
+
+void Renderer::DestroyMeshletResources()
+{
+    if (_meshletVisibilityBuffer) {
+        _device.DestroyBuffer(_meshletVisibilityBuffer);
+        _meshletVisibilityBuffer = {};
+    }
+    _meshletVisibilityBufferBytes = 0;
 }
 
 void Renderer::EnsureRestirResources()

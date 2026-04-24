@@ -56,6 +56,7 @@ struct EngineLaunchOptions {
     std::optional<bool> startupRestirDiEnabled;
     std::optional<bool> startupRestirGiEnabled;
     std::optional<bool> startupRestirPtEnabled;
+    std::optional<bool> startupMeshletCullingEnabled;
     std::optional<bool> startupRtShadowsEnabled;
     std::optional<bool> startupRtAoEnabled;
     std::optional<bool> startupRtReflectionsEnabled;
