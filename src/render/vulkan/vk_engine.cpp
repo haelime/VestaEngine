@@ -85,6 +85,118 @@ constexpr std::array<BenchmarkScenePreset, 8> kBenchmarkScenePresets{
     BenchmarkScenePreset{ "Stanford Buddha", "assets/benchmark_scenes/stanford_buddha/happy_recon/happy_vrip_res2.ply", "High-detail mesh validation model" },
 };
 
+std::string NormalizedAssetPathKey(const std::filesystem::path& path)
+{
+    std::string key = path.lexically_normal().generic_string();
+    std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return key;
+}
+
+void ApplyBenchmarkSceneLightingPreset(vesta::render::RendererSettings& settings, const std::filesystem::path& path)
+{
+    const std::string key = NormalizedAssetPathKey(path);
+    const auto contains = [&](std::string_view token) {
+        return key.find(token) != std::string::npos;
+    };
+    const bool isBenchmarkPreset = contains("cornell_box") || contains("cornell-box") || contains("bistro_interior")
+        || contains("interior.obj") || contains("bistro_exterior") || contains("exterior.obj") || contains("sponza")
+        || contains("san_miguel") || contains("stanford_bunny") || contains("stanford_dragon") || contains("stanford_buddha");
+    if (!isBenchmarkPreset) {
+        return;
+    }
+
+    settings.animateDirectionalLight = false;
+    settings.enablePointLight = false;
+    settings.enableSpotLight = false;
+    settings.enableAreaLight = false;
+    settings.enableContactShadows = true;
+
+    if (contains("cornell_box") || contains("cornell-box")) {
+        settings.environmentPreset = 0u;
+        settings.environmentIntensity = 0.015f;
+        settings.environmentDiffuseStrength = 0.04f;
+        settings.environmentSpecularStrength = 0.02f;
+        settings.lightDirectionAndIntensity = glm::vec4(-0.15f, -1.0f, -0.10f, 0.0f);
+        settings.directionalLightColor = glm::vec4(1.0f, 0.96f, 0.88f, 0.0f);
+        settings.enableAreaLight = true;
+        settings.areaLightPositionAndIntensity = glm::vec4(-0.234f, 5.319f, -3.043f, 18.0f);
+        settings.areaLightNormalAndSize = glm::vec4(0.0f, -1.0f, 0.0f, 1.25f);
+        settings.areaLightColor = glm::vec4(1.0f, 0.92f, 0.78f, 0.0f);
+        settings.cameraExposureEv = 0.0f;
+        settings.enableSsao = false;
+        settings.enableSsgi = false;
+        return;
+    }
+
+    if (contains("bistro_interior") || contains("interior.obj")) {
+        settings.environmentPreset = 0u;
+        settings.environmentIntensity = 0.18f;
+        settings.environmentDiffuseStrength = 0.22f;
+        settings.environmentSpecularStrength = 0.35f;
+        settings.lightDirectionAndIntensity = glm::vec4(-0.35f, -1.0f, -0.25f, 0.45f);
+        settings.directionalLightColor = glm::vec4(1.0f, 0.9f, 0.78f, 0.0f);
+        settings.enablePointLight = true;
+        settings.pointLightPositionAndIntensity = glm::vec4(0.0f, 2.4f, 0.5f, 8.0f);
+        settings.pointLightColor = glm::vec4(1.0f, 0.78f, 0.52f, 0.0f);
+        settings.enableSpotLight = true;
+        settings.spotLightPositionAndIntensity = glm::vec4(0.0f, 3.2f, 2.0f, 18.0f);
+        settings.spotLightDirectionAndAngle = glm::vec4(0.0f, -0.85f, -0.45f, 34.0f);
+        settings.spotLightColor = glm::vec4(1.0f, 0.86f, 0.68f, 0.0f);
+        return;
+    }
+
+    if (contains("bistro_exterior") || contains("exterior.obj")) {
+        settings.environmentPreset = 3u;
+        settings.environmentIntensity = 0.42f;
+        settings.environmentDiffuseStrength = 0.42f;
+        settings.environmentSpecularStrength = 0.45f;
+        settings.lightDirectionAndIntensity = glm::vec4(-0.55f, -1.0f, -0.25f, 4.8f);
+        settings.directionalLightColor = glm::vec4(1.0f, 0.88f, 0.70f, 0.0f);
+        return;
+    }
+
+    if (contains("sponza")) {
+        settings.environmentPreset = 1u;
+        settings.environmentIntensity = 0.26f;
+        settings.environmentDiffuseStrength = 0.32f;
+        settings.environmentSpecularStrength = 0.38f;
+        settings.lightDirectionAndIntensity = glm::vec4(-0.42f, -1.0f, -0.35f, 3.4f);
+        settings.directionalLightColor = glm::vec4(1.0f, 0.90f, 0.76f, 0.0f);
+        return;
+    }
+
+    if (contains("san_miguel")) {
+        settings.environmentPreset = 1u;
+        settings.environmentIntensity = 0.34f;
+        settings.environmentDiffuseStrength = 0.36f;
+        settings.environmentSpecularStrength = 0.35f;
+        settings.lightDirectionAndIntensity = glm::vec4(-0.50f, -1.0f, -0.18f, 4.2f);
+        settings.directionalLightColor = glm::vec4(1.0f, 0.86f, 0.64f, 0.0f);
+        settings.enablePointLight = true;
+        settings.pointLightPositionAndIntensity = glm::vec4(0.0f, 3.0f, 0.0f, 5.0f);
+        settings.pointLightColor = glm::vec4(1.0f, 0.72f, 0.46f, 0.0f);
+        return;
+    }
+
+    if (contains("stanford_bunny") || contains("stanford_dragon") || contains("stanford_buddha")) {
+        settings.environmentPreset = 0u;
+        settings.environmentIntensity = 0.30f;
+        settings.environmentDiffuseStrength = 0.30f;
+        settings.environmentSpecularStrength = 0.42f;
+        settings.lightDirectionAndIntensity = glm::vec4(-0.35f, -1.0f, -0.25f, 2.8f);
+        settings.directionalLightColor = glm::vec4(1.0f, 0.96f, 0.88f, 0.0f);
+        settings.enablePointLight = true;
+        settings.pointLightPositionAndIntensity = glm::vec4(1.8f, 2.5f, 2.2f, 4.0f);
+        settings.pointLightColor = glm::vec4(0.70f, 0.84f, 1.0f, 0.0f);
+        settings.enableAreaLight = true;
+        settings.areaLightPositionAndIntensity = glm::vec4(-1.5f, 3.0f, 1.0f, 5.0f);
+        settings.areaLightNormalAndSize = glm::vec4(0.35f, -0.9f, -0.25f, 1.4f);
+        settings.areaLightColor = glm::vec4(1.0f, 0.86f, 0.66f, 0.0f);
+    }
+}
+
 #if defined(NDEBUG)
 constexpr bool bUseValidationLayers = false;
 #else
@@ -1474,6 +1586,7 @@ void VestaEngine::init_renderer()
         if (!_launchOptions.startupDisplayMode.has_value()) {
             ApplySceneModeInference(settings, path);
         }
+        ApplyBenchmarkSceneLightingPreset(settings, path);
         return _renderer.LoadSceneAsync(path);
     };
 
@@ -1761,6 +1874,9 @@ void VestaEngine::update_startup_state()
         _renderer.GetSettings() = _startupState.savedSettings;
         if (!_launchOptions.startupDisplayMode.has_value() && !_renderer.GetScene().GetSourcePath().empty()) {
             ApplySceneModeInference(_renderer.GetSettings(), _renderer.GetScene().GetSourcePath());
+        }
+        if (!_renderer.GetScene().GetSourcePath().empty()) {
+            ApplyBenchmarkSceneLightingPreset(_renderer.GetSettings(), _renderer.GetScene().GetSourcePath());
         }
         _renderer.SetStartupSafeModeActive(false);
         if (_renderer.GetSettings().buildRayTracingStructuresOnLoad
@@ -6953,6 +7069,7 @@ void VestaEngine::load_scene_path(const std::filesystem::path& path)
     }
 
     ApplySceneModeInference(_renderer.GetSettings(), normalizedPath);
+    ApplyBenchmarkSceneLightingPreset(_renderer.GetSettings(), normalizedPath);
     _renderer.ResetAccumulation();
 
     const bool started = UseAsyncSceneLoading(_renderer.GetSettings())

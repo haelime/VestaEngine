@@ -23,6 +23,8 @@ struct RayEffectsPushConstants {
     uint32_t triangleBufferIndex{ kInvalidResourceIndex };
     uint32_t triangleCount{ 0 };
     uint32_t giHistoryInitialized{ 0 };
+    uint32_t reserved0{ 0 };
+    uint32_t reserved1{ 0 };
     glm::mat4 inverseViewProjection{ 1.0f };
     glm::vec4 cameraPosition{ 0.0f };
     glm::vec4 lightDirectionAndIntensity{ -0.4f, -1.0f, -0.3f, 2.0f };

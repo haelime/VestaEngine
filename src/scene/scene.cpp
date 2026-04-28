@@ -869,6 +869,22 @@ std::string ExtractObjMapFilename(std::string_view arguments)
     return lastToken;
 }
 
+bool IsLikelyObjLightMaterial(std::string_view name)
+{
+    std::string lowered(name);
+    std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return lowered == "light" || lowered == "lights" || lowered == "area_light" || lowered == "arealight"
+        || lowered.find("emissive") != std::string::npos || lowered.find("lamp") != std::string::npos
+        || lowered.find("light_") != std::string::npos || lowered.find("_light") != std::string::npos;
+}
+
+float Luminance(glm::vec3 color)
+{
+    return glm::dot(color, glm::vec3(0.2126f, 0.7152f, 0.0722f));
+}
+
 std::vector<ObjMaterialRecord> ParseObjMaterialLibraries(
     const std::filesystem::path& objPath,
     ParsedScene& parsedScene,
@@ -881,6 +897,12 @@ std::vector<ObjMaterialRecord> ParseObjMaterialLibraries(
 
     auto flushCurrent = [&]() {
         if (hasCurrent) {
+            if (IsLikelyObjLightMaterial(current.name) && Luminance(glm::vec3(current.material.emissiveFactor)) <= 1.0e-4f) {
+                current.material.emissiveFactor = glm::vec4(glm::vec3(16.0f), 0.0f);
+                current.material.baseColorFactor = glm::vec4(glm::vec3(1.0f), current.material.baseColorFactor.a);
+                current.material.materialParams.x = 0.0f;
+                current.material.materialParams.y = 0.18f;
+            }
             records.push_back(std::move(current));
             current = {};
             hasCurrent = false;

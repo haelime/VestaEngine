@@ -29,6 +29,8 @@ struct TemporalAAPushConstants {
     float reactiveMetallicThreshold{ 0.55f };
     float reactiveEmissiveThreshold{ 0.08f };
     uint32_t reserved2{ 0 };
+    uint32_t reserved3{ 0 };
+    uint32_t reserved4{ 0 };
     glm::mat4 inverseViewProjection{ 1.0f };
     glm::mat4 previousViewProjection{ 1.0f };
 };
