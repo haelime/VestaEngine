@@ -27,6 +27,7 @@ constexpr VmaAllocationCreateFlags kMappedHostFlags =
 void GeometryRasterPass::SetTargets(
     GraphTextureHandle albedo,
     GraphTextureHandle normal,
+    GraphTextureHandle geometricNormal,
     GraphTextureHandle material,
     GraphTextureHandle debug,
     GraphTextureHandle motion,
@@ -35,6 +36,7 @@ void GeometryRasterPass::SetTargets(
 {
     _albedoTarget = albedo;
     _normalTarget = normal;
+    _geometricNormalTarget = geometricNormal;
     _materialTarget = material;
     _debugTarget = debug;
     _motionTarget = motion;
@@ -142,6 +144,7 @@ void GeometryRasterPass::Initialize(RenderDevice& device)
         VK_FORMAT_R16G16B16A16_SFLOAT,
         VK_FORMAT_R16G16B16A16_SFLOAT,
         VK_FORMAT_R16G16B16A16_SFLOAT,
+        VK_FORMAT_R16G16B16A16_SFLOAT,
     };
     pipelineDesc.depthFormat = VK_FORMAT_D32_SFLOAT;
     pipelineDesc.vertexShader = _vertexShader;
@@ -159,6 +162,7 @@ void GeometryRasterPass::Setup(RenderGraphBuilder& builder)
 {
     builder.Write(_albedoTarget, ResourceUsage::ColorAttachmentWrite);
     builder.Write(_normalTarget, ResourceUsage::ColorAttachmentWrite);
+    builder.Write(_geometricNormalTarget, ResourceUsage::ColorAttachmentWrite);
     builder.Write(_materialTarget, ResourceUsage::ColorAttachmentWrite);
     builder.Write(_debugTarget, ResourceUsage::ColorAttachmentWrite);
     builder.Write(_motionTarget, ResourceUsage::ColorAttachmentWrite);
@@ -185,7 +189,7 @@ void GeometryRasterPass::Execute(const RenderGraphContext& context)
     VkClearValue reactiveClear{};
     reactiveClear.color = { { 0.0f, 1.0f, 0.0f, 0.0f } };
 
-    std::array<VkRenderingAttachmentInfo, 6> colorAttachments{};
+    std::array<VkRenderingAttachmentInfo, 7> colorAttachments{};
     colorAttachments[0].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
     colorAttachments[0].imageView = context.GetTextureView(_albedoTarget);
     colorAttachments[0].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
@@ -201,32 +205,39 @@ void GeometryRasterPass::Execute(const RenderGraphContext& context)
     colorAttachments[1].clearValue = normalClear;
 
     colorAttachments[2].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    colorAttachments[2].imageView = context.GetTextureView(_materialTarget);
+    colorAttachments[2].imageView = context.GetTextureView(_geometricNormalTarget);
     colorAttachments[2].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     colorAttachments[2].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     colorAttachments[2].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    colorAttachments[2].clearValue = materialClear;
+    colorAttachments[2].clearValue = normalClear;
 
     colorAttachments[3].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    colorAttachments[3].imageView = context.GetTextureView(_debugTarget);
+    colorAttachments[3].imageView = context.GetTextureView(_materialTarget);
     colorAttachments[3].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     colorAttachments[3].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     colorAttachments[3].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    colorAttachments[3].clearValue = debugClear;
+    colorAttachments[3].clearValue = materialClear;
 
     colorAttachments[4].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    colorAttachments[4].imageView = context.GetTextureView(_motionTarget);
+    colorAttachments[4].imageView = context.GetTextureView(_debugTarget);
     colorAttachments[4].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     colorAttachments[4].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     colorAttachments[4].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    colorAttachments[4].clearValue = motionClear;
+    colorAttachments[4].clearValue = debugClear;
 
     colorAttachments[5].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    colorAttachments[5].imageView = context.GetTextureView(_reactiveTarget);
+    colorAttachments[5].imageView = context.GetTextureView(_motionTarget);
     colorAttachments[5].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     colorAttachments[5].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     colorAttachments[5].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    colorAttachments[5].clearValue = reactiveClear;
+    colorAttachments[5].clearValue = motionClear;
+
+    colorAttachments[6].sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    colorAttachments[6].imageView = context.GetTextureView(_reactiveTarget);
+    colorAttachments[6].imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    colorAttachments[6].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAttachments[6].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachments[6].clearValue = reactiveClear;
 
     VkRenderingAttachmentInfo depthAttachment{};
     depthAttachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;

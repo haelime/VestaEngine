@@ -126,7 +126,7 @@ private:
     bool _motionBlurEnabled{ false };
     float _motionBlurStrength{ 0.35f };
     glm::vec4 _ssaoParams{ 1.0f, 0.75f, 1.35f, 0.0f };
-    glm::vec4 _shadowCascadeParams{ 4.0f, 0.65f, 0.0f, 0.0f };
+    glm::vec4 _shadowCascadeParams{ 4.0f, 0.92f, 0.0f, 0.0f };
     glm::mat4 _viewProjection{ 1.0f };
     glm::mat4 _inverseViewProjection{ 1.0f };
     glm::mat4 _previousViewProjection{ 1.0f };

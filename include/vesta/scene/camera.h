@@ -21,6 +21,7 @@ public:
     void SetOrbitTarget(glm::vec3 target);
     void SetOrbitRadius(float radius);
     void SetDollySpeedDegrees(float speedDegrees);
+    void SetMoveSpeed(float speed);
     void HandleEvent(const SDL_Event& event);
     void Update(float deltaSeconds);
     [[nodiscard]] bool ConsumeMoved();
@@ -44,6 +45,7 @@ public:
     [[nodiscard]] float GetOrbitDistance() const { return _orbitDistance; }
     [[nodiscard]] float GetOrbitRadius() const { return _orbitDistance; }
     [[nodiscard]] float GetDollySpeedDegrees() const { return _dollySpeedDegrees; }
+    [[nodiscard]] float GetMoveSpeed() const { return _moveSpeed; }
 
 private:
     enum class Mode : uint32_t {
@@ -64,7 +66,7 @@ private:
     float _fovDegrees{ 60.0f };
     float _aspectRatio{ 16.0f / 9.0f };
     float _nearPlane{ 0.05f };
-    float _farPlane{ 500.0f };
+    float _farPlane{ 5000.0f };
     bool _rightMouseDown{ false };
     bool _firstMouseSample{ true };
     int32_t _lastMouseX{ 0 };
@@ -73,5 +75,6 @@ private:
     glm::vec3 _orbitTarget{ 0.0f };
     float _orbitDistance{ 5.0f };
     float _dollySpeedDegrees{ 20.0f };
+    float _moveSpeed{ 3.0f };
     bool _movedThisFrame{ true };
 };

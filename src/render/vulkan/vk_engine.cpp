@@ -1512,7 +1512,7 @@ void VestaEngine::init_renderer()
         resetAccumulation = true;
     }
     if (_launchOptions.startupRtMaxRayDistance.has_value()) {
-        settings.rtMaxRayDistance = std::clamp(*_launchOptions.startupRtMaxRayDistance, 0.1f, 10000.0f);
+        settings.rtMaxRayDistance = std::clamp(*_launchOptions.startupRtMaxRayDistance, 0.1f, 100000.0f);
         resetAccumulation = true;
     }
     if (_launchOptions.startupRtAoRadius.has_value()) {
@@ -2960,7 +2960,7 @@ void VestaEngine::begin_imgui_frame(float deltaSeconds)
 
 void VestaEngine::build_debug_dockspace()
 {
-    if (!_imguiInitialized || !_showDebugUi) {
+    if (!_imguiInitialized || (!_showDebugUi && !has_debug_window_open())) {
         return;
     }
 
@@ -2988,9 +2988,16 @@ void VestaEngine::build_debug_dockspace()
 #endif
 }
 
+bool VestaEngine::has_debug_window_open() const
+{
+    return _showDetailedStats || _showLegacyStatsPanel || _showLegacyRenderPanel || _showLegacyCameraPanel
+        || _showFrameOverview || _showRenderGraphPanel || _showGpuProfilerPanel || _showDebugVisualizationPanel
+        || _showRenderModeControlPanel || _showSceneInspectorPanel || _showResourceInspectorPanel || _showLogConsolePanel;
+}
+
 void VestaEngine::draw_light_gizmo_overlay()
 {
-    if (!_imguiInitialized || !_showDebugUi) {
+    if (!_imguiInitialized || (!_showDebugUi && !has_debug_window_open())) {
         return;
     }
 
@@ -3303,14 +3310,14 @@ void VestaEngine::build_main_menu_bar()
                     settings.fpsLimit = static_cast<uint32_t>(fpsLimit);
                 }
                 int uploadBudgetMiB = static_cast<int>(settings.maxUploadBytesPerFrame / (1024u * 1024u));
-                if (ImGui::SliderInt("Upload Budget (MiB)", &uploadBudgetMiB, 1, 32)) {
+                if (ImGui::SliderInt("Upload Budget (MiB)", &uploadBudgetMiB, 1, 256)) {
                     settings.maxUploadBytesPerFrame = static_cast<uint32_t>(uploadBudgetMiB) * 1024u * 1024u;
                 }
                 int textureUploadBudgetMiB = static_cast<int>(settings.maxTextureUploadBytesPerFrame / (1024u * 1024u));
-                if (ImGui::SliderInt("Texture Budget (MiB)", &textureUploadBudgetMiB, 1, 64)) {
+                if (ImGui::SliderInt("Texture Budget (MiB)", &textureUploadBudgetMiB, 1, 512)) {
                     settings.maxTextureUploadBytesPerFrame = static_cast<uint32_t>(textureUploadBudgetMiB) * 1024u * 1024u;
                 }
-                ImGui::SliderFloat("Distance Cull Scale", &settings.distanceCullScale, 1.0f, 12.0f, "%.1f");
+                ImGui::SliderFloat("Distance Cull Scale", &settings.distanceCullScale, 1.0f, 100.0f, "%.1f");
                 ImGui::Separator();
                 ImGui::TextDisabled("Validation: %s", bUseValidationLayers ? "Debug default" : "Off");
                 ImGui::EndMenu();
@@ -3398,18 +3405,23 @@ void VestaEngine::build_main_menu_bar()
         }
 
         if (ImGui::BeginMenu("Debug")) {
-            ImGui::MenuItem("Frame / Engine Overview", nullptr, &_showFrameOverview);
-            ImGui::MenuItem("Render Graph", nullptr, &_showRenderGraphPanel);
-            ImGui::MenuItem("GPU Profiler", nullptr, &_showGpuProfilerPanel);
-            ImGui::MenuItem("Debug Visualization", nullptr, &_showDebugVisualizationPanel);
-            ImGui::MenuItem("Render Mode Control", nullptr, &_showRenderModeControlPanel);
-            ImGui::MenuItem("Scene Inspector", nullptr, &_showSceneInspectorPanel);
-            ImGui::MenuItem("Resource Inspector", nullptr, &_showResourceInspectorPanel);
-            ImGui::MenuItem("Log Console", nullptr, &_showLogConsolePanel);
+            const auto panelMenuItem = [&](const char* label, bool& visible) {
+                if (ImGui::MenuItem(label, nullptr, &visible) && visible) {
+                    _showDebugUi = true;
+                }
+            };
+            panelMenuItem("Frame / Engine Overview", _showFrameOverview);
+            panelMenuItem("Render Graph", _showRenderGraphPanel);
+            panelMenuItem("GPU Profiler", _showGpuProfilerPanel);
+            panelMenuItem("Debug Visualization", _showDebugVisualizationPanel);
+            panelMenuItem("Render Mode Control", _showRenderModeControlPanel);
+            panelMenuItem("Scene Inspector", _showSceneInspectorPanel);
+            panelMenuItem("Resource Inspector", _showResourceInspectorPanel);
+            panelMenuItem("Log Console", _showLogConsolePanel);
             ImGui::Separator();
-            ImGui::MenuItem("Legacy Stats", nullptr, &_showLegacyStatsPanel);
-            ImGui::MenuItem("Legacy Render Controls", nullptr, &_showLegacyRenderPanel);
-            ImGui::MenuItem("Legacy Camera Controls", nullptr, &_showLegacyCameraPanel);
+            panelMenuItem("Legacy Stats", _showLegacyStatsPanel);
+            panelMenuItem("Legacy Render Controls", _showLegacyRenderPanel);
+            panelMenuItem("Legacy Camera Controls", _showLegacyCameraPanel);
             ImGui::Separator();
             if (ImGui::MenuItem("Reset Accumulation")) {
                 _renderer.ResetAccumulation();
@@ -3439,7 +3451,7 @@ void VestaEngine::build_main_menu_bar()
 
 void VestaEngine::build_debug_ui()
 {
-    if (!_imguiInitialized || !_showDebugUi) {
+    if (!_imguiInitialized || (!_showDebugUi && !has_debug_window_open())) {
         return;
     }
 
@@ -4500,12 +4512,16 @@ void VestaEngine::build_debug_ui()
             camera.SetRotationDegrees(glm::vec3(cameraRotation[0], cameraRotation[1], cameraRotation[2]));
             _renderer.ResetAccumulation();
         }
+        float moveSpeed = camera.GetMoveSpeed();
+        if (ImGui::DragFloat("Move Speed", &moveSpeed, 0.25f, 0.05f, 1000.0f, "%.2f")) {
+            camera.SetMoveSpeed(moveSpeed);
+        }
         ImGui::TextDisabled("Rotation order: Yaw Pitch Roll");
         ImGui::Text("Forward %.3f %.3f %.3f", camera.GetForward().x, camera.GetForward().y, camera.GetForward().z);
         ImGui::Text("Up %.3f %.3f %.3f", camera.GetUp().x, camera.GetUp().y, camera.GetUp().z);
         ImGui::SeparatorText("Controls");
-        ImGui::Text("%s", camera.IsOrbitEnabled() ? "RMB + Mouse Orbit / Dolly Adjust" : "RMB + Mouse Look");
-        ImGui::Text("%s", camera.IsOrbitEnabled() ? "Wheel Zoom" : "WASD / Q / E Move");
+        ImGui::Text("RMB + Mouse Look, RMB + Wheel Speed");
+        ImGui::Text("Wheel Dolly, WASD / Q / E Move");
         ImGui::Text("LMB Pick/Drag Object");
         ImGui::Text("L Select Light, Esc Clear Selection");
         ImGui::Text("1 Raster, 2 Gaussian, 3 PT, 4 Composite");
@@ -4610,6 +4626,10 @@ void VestaEngine::build_debug_ui()
                     if (lensChanged) {
                         camera.SetLens(fov, nearPlane, farPlane);
                         _renderer.ResetAccumulation();
+                    }
+                    float moveSpeed = camera.GetMoveSpeed();
+                    if (ImGui::DragFloat("Move Speed", &moveSpeed, 0.25f, 0.05f, 1000.0f, "%.2f")) {
+                        camera.SetMoveSpeed(moveSpeed);
                     }
                     ImGui::SliderFloat("Exposure", &settings.cameraExposureEv, -6.0f, 6.0f, "%.2f EV");
                     bool dofChanged = ImGui::SliderFloat("Aperture Radius", &settings.cameraApertureRadius, 0.0f, 0.25f, "%.3f");
@@ -5947,7 +5967,7 @@ void VestaEngine::build_debug_ui()
 
 void VestaEngine::build_render_mode_control_panel()
 {
-    if (!_imguiInitialized || !_showDebugUi || !_showRenderModeControlPanel) {
+    if (!_imguiInitialized || !_showRenderModeControlPanel) {
         return;
     }
 
@@ -6205,7 +6225,7 @@ void VestaEngine::draw_rasterizer_debug_panel()
     ImGui::Checkbox("Frustum Culling", &settings.enableFrustumCulling);
     ImGui::Checkbox("Distance Culling", &settings.enableDistanceCulling);
     ImGui::Checkbox("Indirect Draw", &settings.useIndirectDraw);
-    ImGui::SliderFloat("Distance Scale", &settings.distanceCullScale, 1.0f, 12.0f, "%.1f");
+    ImGui::SliderFloat("Distance Scale", &settings.distanceCullScale, 1.0f, 100.0f, "%.1f");
 
     ImGui::SeparatorText("G-Buffer / Raster AOV");
     if (ImGui::Button("Albedo")) { settings.debugView = vesta::render::RendererDebugView::Albedo; }
@@ -6574,7 +6594,7 @@ void VestaEngine::draw_ray_tracing_debug_panel()
         settings.rtGiSamples = static_cast<uint32_t>(std::clamp(giSamples, 1, 8));
         resetHistory = true;
     }
-    resetHistory |= ImGui::SliderFloat("Max Ray Distance", &settings.rtMaxRayDistance, 0.5f, 500.0f, "%.1f");
+    resetHistory |= ImGui::SliderFloat("Max Ray Distance", &settings.rtMaxRayDistance, 0.5f, 100000.0f, "%.1f");
     resetHistory |= ImGui::SliderFloat("AO Radius", &settings.rtAoRadius, 0.05f, 20.0f, "%.2f");
     resetHistory |= ImGui::SliderFloat("Reflection Roughness Cutoff", &settings.rtReflectionRoughnessCutoff, 0.0f, 1.0f, "%.2f");
     resetHistory |= ImGui::Checkbox("Half Resolution", &settings.rtHalfResolution);

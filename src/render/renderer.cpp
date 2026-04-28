@@ -763,6 +763,7 @@ void ConfigureGeometryRasterPass(Renderer& renderer, IRenderPass& pass, const Re
     rasterPass.SetTargets(
         resources.gbufferAlbedo,
         resources.gbufferNormal,
+        resources.gbufferGeometricNormal,
         resources.gbufferMaterial,
         resources.gbufferDebug,
         resources.gbufferMotion,
@@ -799,7 +800,12 @@ void ConfigureDeferredLightingPass(Renderer& renderer, IRenderPass& pass, const 
 {
     auto& lightingPass = static_cast<DeferredLightingPass&>(pass);
     const auto& settings = renderer.GetSettings();
-    lightingPass.SetInputs(resources.gbufferAlbedo, resources.gbufferNormal, resources.gbufferMaterial, resources.sceneDepth);
+    lightingPass.SetInputs(
+        resources.gbufferAlbedo,
+        resources.gbufferNormal,
+        resources.gbufferGeometricNormal,
+        resources.gbufferMaterial,
+        resources.sceneDepth);
     lightingPass.SetCamera(&renderer.GetCamera());
     lightingPass.SetLight(settings.lightDirectionAndIntensity);
     lightingPass.SetLightColors(settings.directionalLightColor, settings.pointLightColor, settings.spotLightColor, settings.areaLightColor);
@@ -850,7 +856,8 @@ void ConfigureDeferredLightingPass(Renderer& renderer, IRenderPass& pass, const 
             renderer.GetCamera(),
             settings.lightDirectionAndIntensity,
             settings.shadowCascadeCount,
-            settings.shadowCascadeLambda);
+            settings.shadowCascadeLambda,
+            settings.shadowMapSize);
         lightingPass.SetShadowMap(resources.shadowMap,
             cascades,
             settings.shadowCascadeCount,
@@ -1480,8 +1487,8 @@ void Renderer::RenderFrame()
         .timestampPeriodNs = _timestampPeriodNs,
     };
     graph.Execute(executionContext);
-    RecordOverlay(currentFrame.commandBuffer, swapchainImageIndex);
     RecordScreenshotReadback(currentFrame.commandBuffer, currentFrame, swapchainImageIndex);
+    RecordOverlay(currentFrame.commandBuffer, swapchainImageIndex);
 
     VK_CHECK(vkEndCommandBuffer(currentFrame.commandBuffer));
 
@@ -4385,6 +4392,14 @@ void Renderer::ApplyLoadedScene(vesta::scene::Scene&& scene)
     _sceneLoadStatus.blasMs = _scene.GetBottomLevelBuildMs();
     _sceneLoadStatus.tlasMs = _scene.GetTopLevelBuildMs();
 
+    const float sceneRadius = std::max(_scene.GetBounds().radius, 1.0f);
+    const float sceneNearPlane = std::clamp(sceneRadius * 0.0005f, 0.05f, 1.0f);
+    const float sceneFarPlane = std::clamp(sceneRadius * 8.0f, 500.0f, 100000.0f);
+    if (std::abs(_camera.GetNearPlane() - sceneNearPlane) > 0.001f
+        || std::abs(_camera.GetFarPlane() - sceneFarPlane) > 1.0f) {
+        _camera.SetLens(_camera.GetFovDegrees(), sceneNearPlane, sceneFarPlane);
+    }
+
     if (_settings.autoFocusSceneOnLoad) {
         _camera.Focus(_scene.GetBounds().center, _scene.GetBounds().radius);
     }
@@ -4506,6 +4521,7 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
     if (useGeometryPass) {
         resources.gbufferAlbedo = graph.CreateTexture("GBuffer.Albedo", gbufferDesc);
         resources.gbufferNormal = graph.CreateTexture("GBuffer.NormalRoughness", gbufferDesc);
+        resources.gbufferGeometricNormal = graph.CreateTexture("GBuffer.GeometricNormal", gbufferDesc);
         resources.gbufferMaterial = graph.CreateTexture("GBuffer.Material", gbufferDesc);
         resources.gbufferDebug = graph.CreateTexture("GBuffer.Debug", gbufferDesc);
         resources.gbufferMotion = graph.CreateTexture("GBuffer.Motion", gbufferDesc);

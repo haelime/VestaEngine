@@ -18,6 +18,7 @@ struct DeferredLightingConstants {
     vec4 shadowFilterParams;
     vec4 contactShadowParams;
     uvec4 shadowIndices;
+    uvec4 gbufferIndices;
     uvec4 iblIndices;
     uvec4 iblCubeIndices;
     uvec4 rayEffects;
@@ -608,7 +609,7 @@ vec3 sampleRestirDirectLighting(DeferredLightingConstants constants, ivec2 pixel
     return max(imageLoad(storageImages[nonuniformEXT(int(constants.restirDi.x))], rtPixel).rgb, vec3(0.0));
 }
 
-float computeDirectionalShadow(vec3 worldPosition, vec3 normal, vec3 lightDirection)
+float computeDirectionalShadow(vec3 worldPosition, vec3 shadingNormal, vec3 geometricNormal, vec3 lightDirection)
 {
     if (pc.lightingConstantsBufferIndex == INVALID_BUFFER_INDEX) {
         return 1.0;
@@ -620,35 +621,51 @@ float computeDirectionalShadow(vec3 worldPosition, vec3 normal, vec3 lightDirect
     }
 
     uint cascadeCount = clamp(constants.shadowIndices.z, 1u, 4u);
-    float viewDistance = length(worldPosition - pc.cameraPosition.xyz);
     uint cascadeIndex = cascadeCount - 1u;
+    vec3 shadowNdc = vec3(0.0);
+    vec4 atlasScaleOffset = constants.cascadeAtlasScaleOffsets[cascadeIndex];
+    bool cascadeFound = false;
     for (uint i = 0u; i < 4u; ++i) {
         if (i >= cascadeCount) {
             break;
         }
-        if (viewDistance <= constants.cascadeSplits[i]) {
+        vec4 candidateClip = constants.cascadeViewProjections[i] * vec4(worldPosition, 1.0);
+        if (candidateClip.w <= 0.0) {
+            continue;
+        }
+        vec3 candidateNdc = candidateClip.xyz / candidateClip.w;
+        vec2 candidateUv = candidateNdc.xy * 0.5 + 0.5;
+        if (candidateUv.x >= 0.0 && candidateUv.y >= 0.0 && candidateUv.x <= 1.0 && candidateUv.y <= 1.0
+            && candidateNdc.z >= 0.0 && candidateNdc.z <= 1.0) {
             cascadeIndex = i;
+            shadowNdc = candidateNdc;
+            atlasScaleOffset = constants.cascadeAtlasScaleOffsets[i];
+            cascadeFound = true;
             break;
         }
     }
-
-    float normalBias = constants.shadowParams.y;
-    vec4 shadowClip = constants.cascadeViewProjections[cascadeIndex] * vec4(worldPosition + normal * normalBias, 1.0);
-    if (shadowClip.w <= 0.0) {
+    if (!cascadeFound) {
         return 1.0;
     }
 
-    vec3 shadowNdc = shadowClip.xyz / shadowClip.w;
+    float normalBias = constants.shadowParams.y;
+    if (normalBias > 0.0) {
+        vec4 biasedClip = constants.cascadeViewProjections[cascadeIndex] * vec4(worldPosition + geometricNormal * normalBias, 1.0);
+        shadowNdc.z = biasedClip.z / max(biasedClip.w, 1.0e-4);
+    }
     vec2 cascadeUv = shadowNdc.xy * 0.5 + 0.5;
     if (cascadeUv.x < 0.0 || cascadeUv.y < 0.0 || cascadeUv.x > 1.0 || cascadeUv.y > 1.0) {
         return 1.0;
     }
-    vec4 atlasScaleOffset = constants.cascadeAtlasScaleOffsets[cascadeIndex];
     vec2 shadowUv = cascadeUv * atlasScaleOffset.xy + atlasScaleOffset.zw;
 
     vec2 texelSize = 1.0 / vec2(textureSize(sampledImages[nonuniformEXT(int(constants.shadowIndices.x))], 0));
-    float slopeBias = constants.shadowParams.x * (1.0 - clamp(dot(normal, lightDirection), 0.0, 1.0));
-    float receiverDepth = shadowNdc.z - max(constants.shadowParams.x, slopeBias);
+    float ndotl = clamp(dot(geometricNormal, lightDirection), 0.0, 1.0);
+    float slopeTerm = 1.0 - ndotl;
+    float receiverBias = constants.shadowParams.x * (1.0 + 4.0 * slopeTerm * slopeTerm);
+    float receiverDepth = shadowNdc.z - receiverBias;
+    vec2 atlasMin = atlasScaleOffset.zw + texelSize * 1.5;
+    vec2 atlasMax = atlasScaleOffset.zw + atlasScaleOffset.xy - texelSize * 1.5;
 
     float filterRadius = clamp(constants.shadowFilterParams.x, 0.5, 4.0);
     if (constants.shadowFilterParams.y > 0.5) {
@@ -658,7 +675,8 @@ float computeDirectionalShadow(vec3 worldPosition, vec3 normal, vec3 lightDirect
         for (int y = -blockerRadius; y <= blockerRadius; ++y) {
             for (int x = -blockerRadius; x <= blockerRadius; ++x) {
                 vec2 offset = vec2(x, y) * texelSize * max(filterRadius, 1.0);
-                float blockerDepth = texture(sampledImages[nonuniformEXT(int(constants.shadowIndices.x))], shadowUv + offset).r;
+                vec2 sampleUv = clamp(shadowUv + offset, atlasMin, atlasMax);
+                float blockerDepth = texture(sampledImages[nonuniformEXT(int(constants.shadowIndices.x))], sampleUv).r;
                 if (blockerDepth < receiverDepth) {
                     blockerDepthSum += blockerDepth;
                     blockerCount += 1.0;
@@ -682,8 +700,8 @@ float computeDirectionalShadow(vec3 worldPosition, vec3 normal, vec3 lightDirect
                 continue;
             }
             float weight = 1.0 - smoothstep(max(filterRadius - 1.0, 0.0), filterRadius + 0.35, distanceToCenter);
-            float blockerDepth = texture(sampledImages[nonuniformEXT(int(constants.shadowIndices.x))],
-                shadowUv + vec2(x, y) * texelSize).r;
+            vec2 sampleUv = clamp(shadowUv + vec2(x, y) * texelSize, atlasMin, atlasMax);
+            float blockerDepth = texture(sampledImages[nonuniformEXT(int(constants.shadowIndices.x))], sampleUv).r;
             visibility += (receiverDepth <= blockerDepth ? 1.0 : 0.0) * weight;
             weightSum += weight;
         }
@@ -799,6 +817,12 @@ void main() {
     float depth = texture(sampledImages[nonuniformEXT(int(pc.depthImageIndex))], uv).r;
 
     vec3 N = normalize(normalRoughness.xyz * 2.0 - 1.0);
+    vec3 geometricNormal = N;
+    DeferredLightingConstants lightingConstants = lightingConstantsBuffers[nonuniformEXT(int(pc.lightingConstantsBufferIndex))].values;
+    if (lightingConstants.gbufferIndices.x != INVALID_IMAGE_INDEX) {
+        vec4 geometricNormalPacked = imageLoad(storageImages[nonuniformEXT(int(lightingConstants.gbufferIndices.x))], pixel);
+        geometricNormal = normalize(geometricNormalPacked.xyz * 2.0 - 1.0);
+    }
     float roughness = clamp(normalRoughness.w, 0.045, 1.0);
     float metallic = clamp(emissiveMetallic.a, 0.0, 1.0);
     float ao = clamp(albedoAo.a, 0.0, 1.0);
@@ -812,7 +836,6 @@ void main() {
     vec3 R = reflect(-V, N);
 
     vec3 F0 = mix(vec3(0.04), baseColor, metallic);
-    DeferredLightingConstants lightingConstants = lightingConstantsBuffers[nonuniformEXT(int(pc.lightingConstantsBufferIndex))].values;
     vec4 rayEffects = sampleRayEffects(lightingConstants, pixel, size);
     if (lightingConstants.rayEffects.z != 0u) {
         ao *= clamp(rayEffects.g, 0.0, 1.0);
@@ -824,7 +847,7 @@ void main() {
         V,
         L,
         max(lightingConstants.directionalColor.rgb, vec3(0.0)) * pc.lightDirectionAndIntensity.w);
-    float shadowFactor = computeDirectionalShadow(worldPosition, N, L);
+    float shadowFactor = computeDirectionalShadow(worldPosition, N, geometricNormal, L);
     float rtShadowFactor = lightingConstants.rayEffects.y != 0u ? clamp(rayEffects.r, 0.0, 1.0) : 1.0;
     float contactShadow = computeContactShadow(lightingConstants, pixel, size, worldPosition, N, L, depth);
     direct *= shadowFactor * contactShadow * rtShadowFactor;

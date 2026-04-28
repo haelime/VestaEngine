@@ -54,6 +54,7 @@ struct DeferredLightingConstants {
     glm::vec4 shadowFilterParams{ 1.0f, 0.0f, 0.0f, 0.0f }; // filter radius, PCSS enabled
     glm::vec4 contactShadowParams{ 1.0f, 1.2f, 0.35f, 0.0f }; // enabled, length, intensity
     glm::uvec4 shadowIndices{ kInvalidResourceIndex, 0u, 0u, 0u };
+    glm::uvec4 gbufferIndices{ kInvalidResourceIndex, 0u, 0u, 0u };
     glm::uvec4 iblIndices{ kInvalidResourceIndex, kInvalidResourceIndex, kInvalidResourceIndex, kInvalidResourceIndex };
     glm::uvec4 iblCubeIndices{ kInvalidResourceIndex, 0u, 0u, 0u };
     glm::uvec4 rayEffects{ kInvalidResourceIndex, 0u, 0u, 0u };
@@ -75,10 +76,15 @@ struct DeferredLightingConstants {
 };
 } // namespace
 
-void DeferredLightingPass::SetInputs(GraphTextureHandle albedo, GraphTextureHandle normal, GraphTextureHandle material, GraphTextureHandle depth)
+void DeferredLightingPass::SetInputs(GraphTextureHandle albedo,
+    GraphTextureHandle normal,
+    GraphTextureHandle geometricNormal,
+    GraphTextureHandle material,
+    GraphTextureHandle depth)
 {
     _albedo = albedo;
     _normal = normal;
+    _geometricNormal = geometricNormal;
     _material = material;
     _depth = depth;
 }
@@ -331,6 +337,7 @@ void DeferredLightingPass::Setup(RenderGraphBuilder& builder)
 {
     builder.Read(_albedo, ResourceUsage::StorageRead);
     builder.Read(_normal, ResourceUsage::StorageRead);
+    builder.Read(_geometricNormal, ResourceUsage::StorageRead);
     builder.Read(_material, ResourceUsage::StorageRead);
     builder.Read(_depth, ResourceUsage::SampledRead);
     if (_shadowMap) {
@@ -362,6 +369,7 @@ void DeferredLightingPass::Execute(const RenderGraphContext& context)
 
     const ImageHandle albedoHandle = context.GetTextureHandle(_albedo);
     const ImageHandle normalHandle = context.GetTextureHandle(_normal);
+    const ImageHandle geometricNormalHandle = context.GetTextureHandle(_geometricNormal);
     const ImageHandle materialHandle = context.GetTextureHandle(_material);
     const ImageHandle depthHandle = context.GetTextureHandle(_depth);
     const ImageHandle outputHandle = context.GetTextureHandle(_output);
@@ -422,6 +430,7 @@ void DeferredLightingPass::Execute(const RenderGraphContext& context)
             .shadowFilterParams = _shadowFilterParams,
             .contactShadowParams = _contactShadowParams,
             .shadowIndices = glm::uvec4(shadowMapIndex, _environmentImageIndex, _shadowCascadeCount, _iblBrdfLutImageIndex),
+            .gbufferIndices = glm::uvec4(context.GetDevice().GetImageResource(geometricNormalHandle).bindless.storageImage, 0u, 0u, 0u),
             .iblIndices = glm::uvec4(_environmentImageIndex, _iblDiffuseIrradianceImageIndex, _iblBrdfLutImageIndex, _iblSpecularPrefilterImageIndex),
             .iblCubeIndices = glm::uvec4(_environmentCubeImageIndex,
                 _environmentCubeImageIndex != kInvalidResourceIndex ? 1u : 0u,

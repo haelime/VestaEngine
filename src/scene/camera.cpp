@@ -11,6 +11,10 @@
 
 namespace {
 constexpr float kMinOrbitDistance = 0.05f;
+constexpr float kMinMoveSpeed = 0.05f;
+constexpr float kMaxMoveSpeed = 1000.0f;
+constexpr float kWheelMoveSpeedScale = 1.25f;
+constexpr float kFastMoveMultiplier = 3.0f;
 
 glm::vec3 RotateAroundAxis(const glm::vec3& vector, const glm::vec3& axis, float radians)
 {
@@ -37,6 +41,7 @@ void Camera::Focus(glm::vec3 center, float radius)
     _yawDegrees = -110.0f;
     _pitchDegrees = -10.0f;
     _rollDegrees = 0.0f;
+    SetMoveSpeed(glm::clamp(radius * 0.35f, 3.0f, 250.0f));
     UpdateOrientationFromAngles();
     _movedThisFrame = true;
 }
@@ -156,6 +161,15 @@ void Camera::SetDollySpeedDegrees(float speedDegrees)
     _dollySpeedDegrees = speedDegrees;
 }
 
+void Camera::SetMoveSpeed(float speed)
+{
+    const float clampedSpeed = glm::clamp(speed, kMinMoveSpeed, kMaxMoveSpeed);
+    if (std::abs(clampedSpeed - _moveSpeed) <= 1.0e-5f) {
+        return;
+    }
+    _moveSpeed = clampedSpeed;
+}
+
 void Camera::HandleEvent(const SDL_Event& event)
 {
     // Right mouse button switches the camera into "mouse look" mode so the same
@@ -195,15 +209,19 @@ void Camera::HandleEvent(const SDL_Event& event)
         return;
     }
 
-    if (event.type == SDL_MOUSEWHEEL && IsOrbitEnabled()) {
+    if (event.type == SDL_MOUSEWHEEL) {
         const float scrollDelta = event.wheel.preciseY != 0.0f ? event.wheel.preciseY : static_cast<float>(event.wheel.y);
         if (std::abs(scrollDelta) <= 1.0e-4f) {
             return;
         }
 
-        const float distanceScale = std::pow(0.85f, scrollDelta);
-        _orbitDistance = std::max(_orbitDistance * distanceScale, kMinOrbitDistance);
-        UpdatePositionFromOrbit();
+        if (_rightMouseDown) {
+            SetMoveSpeed(_moveSpeed * std::pow(kWheelMoveSpeedScale, scrollDelta));
+            return;
+        }
+
+        DisableOrbit();
+        _position += _forward * (_moveSpeed * scrollDelta);
         _movedThisFrame = true;
     }
 }
@@ -248,7 +266,7 @@ void Camera::Update(float deltaSeconds)
 
     if (glm::dot(movement, movement) > 0.0f) {
         const bool fast = keyboard[SDL_SCANCODE_LSHIFT] != 0;
-        const float speed = fast ? 8.0f : 3.0f;
+        const float speed = _moveSpeed * (fast ? kFastMoveMultiplier : 1.0f);
         _position += glm::normalize(movement) * speed * deltaSeconds;
         _movedThisFrame = true;
     }

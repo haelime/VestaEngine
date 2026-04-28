@@ -49,6 +49,10 @@ VkPipeline vkutil::create_graphics_pipeline(VkDevice device, const GraphicsPipel
     rasterizer.polygonMode = desc.polygonMode;
     rasterizer.cullMode = desc.cullMode;
     rasterizer.frontFace = desc.frontFace;
+    rasterizer.depthBiasEnable = desc.depthBiasEnable ? VK_TRUE : VK_FALSE;
+    rasterizer.depthBiasConstantFactor = desc.depthBiasConstantFactor;
+    rasterizer.depthBiasClamp = desc.depthBiasClamp;
+    rasterizer.depthBiasSlopeFactor = desc.depthBiasSlopeFactor;
     rasterizer.lineWidth = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo multisampling{};

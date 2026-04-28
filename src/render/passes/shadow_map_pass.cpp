@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <limits>
+#include <span>
 
 #include <glm/ext/matrix_clip_space.hpp>
 #include <glm/ext/matrix_transform.hpp>
@@ -41,6 +43,52 @@ glm::mat4 BuildLightViewProjection(glm::vec3 center, float radius, glm::vec3 lig
     return lightProjection * lightView;
 }
 
+glm::mat4 BuildTightLightViewProjection(std::span<const glm::vec3> corners, glm::vec3 lightDirection, uint32_t tileResolution)
+{
+    glm::vec3 center(0.0f);
+    for (const glm::vec3& corner : corners) {
+        center += corner;
+    }
+    center /= static_cast<float>(std::max<size_t>(corners.size(), 1u));
+
+    float radius = 1.0f;
+    for (const glm::vec3& corner : corners) {
+        radius = std::max(radius, glm::length(corner - center));
+    }
+
+    const glm::vec3 lightPosition = center - lightDirection * radius * 2.5f;
+    const glm::vec3 up = std::abs(glm::dot(lightDirection, glm::vec3(0.0f, 1.0f, 0.0f))) > 0.92f
+        ? glm::vec3(0.0f, 0.0f, 1.0f)
+        : glm::vec3(0.0f, 1.0f, 0.0f);
+    const glm::mat4 lightView = glm::lookAt(lightPosition, center, up);
+
+    glm::vec3 minimum(std::numeric_limits<float>::max());
+    glm::vec3 maximum(-std::numeric_limits<float>::max());
+    for (const glm::vec3& corner : corners) {
+        const glm::vec3 lightSpace = glm::vec3(lightView * glm::vec4(corner, 1.0f));
+        minimum = glm::min(minimum, lightSpace);
+        maximum = glm::max(maximum, lightSpace);
+    }
+
+    const float zPadding = std::max(radius * 0.18f, 0.5f);
+    minimum.z -= zPadding;
+    maximum.z += zPadding;
+
+    const float width = std::max(maximum.x - minimum.x, 0.25f);
+    const float height = std::max(maximum.y - minimum.y, 0.25f);
+    const float texelWorldSize = std::max(width, height) / static_cast<float>(std::max(tileResolution, 1u));
+    minimum.x = std::floor(minimum.x / texelWorldSize) * texelWorldSize;
+    maximum.x = std::ceil(maximum.x / texelWorldSize) * texelWorldSize;
+    minimum.y = std::floor(minimum.y / texelWorldSize) * texelWorldSize;
+    maximum.y = std::ceil(maximum.y / texelWorldSize) * texelWorldSize;
+
+    const float nearPlane = std::max(0.05f, -maximum.z);
+    const float farPlane = std::max(nearPlane + 1.0f, -minimum.z);
+    glm::mat4 lightProjection = glm::ortho(minimum.x, maximum.x, minimum.y, maximum.y, nearPlane, farPlane);
+    lightProjection[1][1] *= -1.0f;
+    return lightProjection * lightView;
+}
+
 glm::vec4 CascadeAtlasScaleOffset(uint32_t cascadeIndex, uint32_t cascadeCount)
 {
     if (cascadeCount <= 1u) {
@@ -67,7 +115,8 @@ std::array<DirectionalShadowCascade, 4> BuildDirectionalShadowCascades(const ves
     const Camera& camera,
     glm::vec4 lightDirectionAndIntensity,
     uint32_t cascadeCount,
-    float splitLambda)
+    float splitLambda,
+    uint32_t shadowMapSize)
 {
     std::array<DirectionalShadowCascade, 4> cascades{};
     cascadeCount = std::clamp(cascadeCount, 1u, 4u);
@@ -106,20 +155,10 @@ std::array<DirectionalShadowCascade, 4> BuildDirectionalShadowCascades(const ves
             corners[cornerIndex++] = center + right * halfWidth + up * halfHeight;
         }
 
-        glm::vec3 center(0.0f);
-        for (const glm::vec3& corner : corners) {
-            center += corner;
-        }
-        center /= static_cast<float>(corners.size());
-
-        float radius = 0.0f;
-        for (const glm::vec3& corner : corners) {
-            radius = std::max(radius, glm::length(corner - center));
-        }
-        radius = std::max(radius, bounds.radius * 0.12f);
-
-        cascades[cascadeIndex].viewProjection = BuildLightViewProjection(center, radius, lightDirection);
         cascades[cascadeIndex].atlasScaleOffset = CascadeAtlasScaleOffset(cascadeIndex, cascadeCount);
+        const uint32_t tileResolution =
+            static_cast<uint32_t>(std::round(static_cast<float>(shadowMapSize) * cascades[cascadeIndex].atlasScaleOffset.x));
+        cascades[cascadeIndex].viewProjection = BuildTightLightViewProjection(corners, lightDirection, tileResolution);
         cascades[cascadeIndex].splitDepth = splitDepth;
         previousSplit = splitDepth;
     }
@@ -192,9 +231,12 @@ void ShadowMapPass::Initialize(RenderDevice& device)
     pipelineDesc.depthFormat = VK_FORMAT_D32_SFLOAT;
     pipelineDesc.vertexShader = _vertexShader;
     pipelineDesc.fragmentShader = _fragmentShader;
-    pipelineDesc.cullMode = VK_CULL_MODE_BACK_BIT;
+    pipelineDesc.cullMode = VK_CULL_MODE_NONE;
     pipelineDesc.depthTestEnable = true;
     pipelineDesc.depthWriteEnable = true;
+    pipelineDesc.depthBiasEnable = true;
+    pipelineDesc.depthBiasConstantFactor = 1.25f;
+    pipelineDesc.depthBiasSlopeFactor = 2.0f;
     pipelineDesc.vertexBindings = { binding };
     pipelineDesc.vertexAttributes = { attributes.begin(), attributes.end() };
 
@@ -213,8 +255,10 @@ void ShadowMapPass::Execute(const RenderGraphContext& context)
     }
 
     const uint32_t cascadeCount = _camera != nullptr ? std::clamp(_cascadeCount, 1u, 4u) : 1u;
+    const VkExtent3D shadowExtent = context.GetTextureExtent(_shadowMap);
     const auto cascades = _camera != nullptr
-        ? BuildDirectionalShadowCascades(_scene->GetBounds(), *_camera, _lightDirectionAndIntensity, cascadeCount, _splitLambda)
+        ? BuildDirectionalShadowCascades(
+              _scene->GetBounds(), *_camera, _lightDirectionAndIntensity, cascadeCount, _splitLambda, shadowExtent.width)
         : std::array<DirectionalShadowCascade, 4>{ DirectionalShadowCascade{
               .viewProjection = BuildDirectionalShadowViewProjection(_scene->GetBounds(), _lightDirectionAndIntensity),
           } };
@@ -222,7 +266,6 @@ void ShadowMapPass::Execute(const RenderGraphContext& context)
     VkClearValue depthClear{};
     depthClear.depthStencil.depth = 1.0f;
 
-    const VkExtent3D shadowExtent = context.GetTextureExtent(_shadowMap);
     VkCommandBuffer commandBuffer = context.GetCommandBuffer();
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, _pipeline);
 

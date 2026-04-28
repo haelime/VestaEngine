@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <filesystem>
 #include <optional>
@@ -97,6 +98,8 @@ struct EngineLaunchOptions {
     settings.useIndirectDraw = false;
     settings.sceneUploadMode = vesta::render::SceneUploadMode::Streaming;
     settings.preferAsyncSceneLoading = true;
+    settings.maxUploadBytesPerFrame = std::max(settings.maxUploadBytesPerFrame, 64u * 1024u * 1024u);
+    settings.maxTextureUploadBytesPerFrame = std::max(settings.maxTextureUploadBytesPerFrame, 128u * 1024u * 1024u);
     return settings;
 }
 
@@ -177,6 +180,7 @@ private:
     void build_main_menu_bar();
     void build_debug_dockspace();
     void build_debug_ui();
+    [[nodiscard]] bool has_debug_window_open() const;
     void draw_light_gizmo_overlay();
     void build_render_mode_control_panel();
     void draw_killer_demo_panel();

@@ -25,6 +25,10 @@ struct GraphicsPipelineDesc {
     VkFrontFace frontFace{ VK_FRONT_FACE_COUNTER_CLOCKWISE };
     bool depthTestEnable{ false };
     bool depthWriteEnable{ false };
+    bool depthBiasEnable{ false };
+    float depthBiasConstantFactor{ 0.0f };
+    float depthBiasClamp{ 0.0f };
+    float depthBiasSlopeFactor{ 0.0f };
     bool blendingEnable{ false };
     std::vector<VkPipelineColorBlendAttachmentState> colorBlendAttachments;
     std::vector<VkVertexInputBindingDescription> vertexBindings;

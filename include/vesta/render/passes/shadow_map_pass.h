@@ -27,7 +27,8 @@ struct DirectionalShadowCascade {
     const Camera& camera,
     glm::vec4 lightDirectionAndIntensity,
     uint32_t cascadeCount,
-    float splitLambda);
+    float splitLambda,
+    uint32_t shadowMapSize);
 
 class ShadowMapPass final : public IRenderPass {
 public:

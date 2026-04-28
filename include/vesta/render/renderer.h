@@ -395,12 +395,12 @@ struct RendererSettings {
     bool enableFpsLimit{ false };
     uint32_t fpsLimit{ 60 };
     bool enableFrustumCulling{ true };
-    bool enableDistanceCulling{ true };
+    bool enableDistanceCulling{ false };
     bool useIndirectDraw{ false };
     SceneUploadMode sceneUploadMode{ SceneUploadMode::AsyncParseSyncUpload };
-    uint32_t maxUploadBytesPerFrame{ 4u * 1024u * 1024u };
-    uint32_t maxTextureUploadBytesPerFrame{ 8u * 1024u * 1024u };
-    float distanceCullScale{ 6.0f };
+    uint32_t maxUploadBytesPerFrame{ 64u * 1024u * 1024u };
+    uint32_t maxTextureUploadBytesPerFrame{ 128u * 1024u * 1024u };
+    float distanceCullScale{ 100.0f };
     float gaussianOpacity{ 1.0f };
     float gaussianMix{ 0.28f };
     uint32_t gaussianShDegree{ 0 };
@@ -424,7 +424,7 @@ struct RendererSettings {
     bool showGBufferPreview{ false };
     bool showShadowCascadeOverlay{ false };
     uint32_t shadowCascadeCount{ 4 };
-    float shadowCascadeLambda{ 0.65f };
+    float shadowCascadeLambda{ 0.92f };
     bool showGiProbeOverlay{ false };
     bool gaussianShowTileGrid{ false };
     bool gaussianShowCovarianceEllipsoids{ false };
@@ -438,7 +438,7 @@ struct RendererSettings {
     uint32_t rtAoSamples{ 1 };
     uint32_t rtReflectionSamples{ 1 };
     uint32_t rtGiSamples{ 1 };
-    float rtMaxRayDistance{ 100.0f };
+    float rtMaxRayDistance{ 100000.0f };
     float rtAoRadius{ 2.0f };
     float rtReflectionRoughnessCutoff{ 0.8f };
     bool rtHalfResolution{ true };
@@ -508,9 +508,9 @@ struct RendererSettings {
     float ssgiIntensity{ 0.32f };
     uint32_t ssgiSampleCount{ 10 };
     bool enableShadowMap{ true };
-    uint32_t shadowMapSize{ 2048 };
-    float shadowBias{ 0.0015f };
-    float shadowNormalBias{ 0.015f };
+    uint32_t shadowMapSize{ 4096 };
+    float shadowBias{ 0.0010f };
+    float shadowNormalBias{ 0.025f };
     float shadowStrength{ 0.82f };
     bool enablePcssShadows{ false };
     float shadowFilterRadius{ 1.0f };
@@ -578,6 +578,7 @@ struct RendererGraphResources {
     GraphTextureHandle swapchainTarget{};
     GraphTextureHandle gbufferAlbedo{};
     GraphTextureHandle gbufferNormal{};
+    GraphTextureHandle gbufferGeometricNormal{};
     GraphTextureHandle gbufferMaterial{};
     GraphTextureHandle gbufferDebug{};
     GraphTextureHandle gbufferMotion{};

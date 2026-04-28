@@ -12,7 +12,11 @@ namespace vesta::render {
 // Because lighting happens after geometry, one mesh pass can feed many lighting models.
 class DeferredLightingPass final : public IRenderPass {
 public:
-    void SetInputs(GraphTextureHandle albedo, GraphTextureHandle normal, GraphTextureHandle material, GraphTextureHandle depth);
+    void SetInputs(GraphTextureHandle albedo,
+        GraphTextureHandle normal,
+        GraphTextureHandle geometricNormal,
+        GraphTextureHandle material,
+        GraphTextureHandle depth);
     void SetOutput(GraphTextureHandle output);
     void SetDebugOutput(GraphTextureHandle output, uint32_t debugView);
     void SetCamera(const Camera* camera);
@@ -71,6 +75,7 @@ public:
 private:
     GraphTextureHandle _albedo{};
     GraphTextureHandle _normal{};
+    GraphTextureHandle _geometricNormal{};
     GraphTextureHandle _material{};
     GraphTextureHandle _depth{};
     GraphTextureHandle _shadowMap{};
@@ -115,7 +120,7 @@ private:
     glm::vec4 _contactShadowParams{ 1.0f, 1.2f, 0.35f, 0.0f };
     std::array<DirectionalShadowCascade, 4> _shadowCascades{};
     uint32_t _shadowCascadeCount{ 1 };
-    float _shadowCascadeLambda{ 0.65f };
+    float _shadowCascadeLambda{ 0.92f };
     glm::vec4 _shadowParams{ 0.0015f, 0.015f, 0.82f, 0.0f };
     glm::vec4 _shadowFilterParams{ 1.0f, 0.0f, 0.0f, 0.0f };
     BufferHandle _lightingConstantsBuffer{};

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -793,6 +794,52 @@ std::string TrimAscii(std::string_view value)
     return std::string(value.substr(begin, end - begin));
 }
 
+std::string_view TrimAsciiView(std::string_view value)
+{
+    size_t begin = 0;
+    while (begin < value.size() && std::isspace(static_cast<unsigned char>(value[begin]))) {
+        ++begin;
+    }
+    size_t end = value.size();
+    while (end > begin && std::isspace(static_cast<unsigned char>(value[end - 1]))) {
+        --end;
+    }
+    return value.substr(begin, end - begin);
+}
+
+void SkipObjWhitespace(const char*& cursor, const char* end)
+{
+    while (cursor < end && std::isspace(static_cast<unsigned char>(*cursor))) {
+        ++cursor;
+    }
+}
+
+bool ReadObjToken(const char*& cursor, const char* end, std::string_view& token)
+{
+    SkipObjWhitespace(cursor, end);
+    const char* begin = cursor;
+    while (cursor < end && !std::isspace(static_cast<unsigned char>(*cursor))) {
+        ++cursor;
+    }
+    if (begin == cursor) {
+        token = {};
+        return false;
+    }
+    token = std::string_view(begin, static_cast<size_t>(cursor - begin));
+    return true;
+}
+
+bool ReadObjFloat(const char*& cursor, const char* end, float& value)
+{
+    SkipObjWhitespace(cursor, end);
+    const auto result = std::from_chars(cursor, end, value);
+    if (result.ec != std::errc{}) {
+        return false;
+    }
+    cursor = result.ptr;
+    return true;
+}
+
 std::filesystem::path ResolveObjTexturePath(const std::filesystem::path& objPath, std::string rawPath)
 {
     rawPath = TrimAscii(rawPath);
@@ -1004,9 +1051,9 @@ int ParseObjIndexToken(std::string_view token)
     if (token.empty()) {
         return 0;
     }
-    char* end = nullptr;
-    const std::string text(token);
-    return static_cast<int>(std::strtol(text.c_str(), &end, 10));
+    int value = 0;
+    const auto result = std::from_chars(token.data(), token.data() + token.size(), value);
+    return result.ec == std::errc{} ? value : 0;
 }
 
 ObjVertexKey ParseObjFaceVertex(std::string_view token)
@@ -1106,32 +1153,36 @@ bool ParseObjMesh(const std::filesystem::path& path, ParsedScene& parsedScene)
     };
 
     std::string line;
+    std::vector<ObjVertexKey> face;
+    face.reserve(8);
     while (std::getline(input, line)) {
-        const std::string trimmed = TrimAscii(line);
+        const std::string_view trimmed = TrimAsciiView(line);
         if (trimmed.empty() || trimmed.front() == '#') {
             continue;
         }
-        std::istringstream stream(trimmed);
-        std::string tag;
-        stream >> tag;
+        const char* cursor = trimmed.data();
+        const char* end = cursor + trimmed.size();
+        std::string_view tag;
+        if (!ReadObjToken(cursor, end, tag)) {
+            continue;
+        }
         if (tag == "v") {
             glm::vec3 value(0.0f);
-            if (stream >> value.x >> value.y >> value.z) {
+            if (ReadObjFloat(cursor, end, value.x) && ReadObjFloat(cursor, end, value.y) && ReadObjFloat(cursor, end, value.z)) {
                 positions.push_back(value);
             }
         } else if (tag == "vn") {
             glm::vec3 value(0.0f, 1.0f, 0.0f);
-            if (stream >> value.x >> value.y >> value.z) {
+            if (ReadObjFloat(cursor, end, value.x) && ReadObjFloat(cursor, end, value.y) && ReadObjFloat(cursor, end, value.z)) {
                 normals.push_back(value);
             }
         } else if (tag == "vt") {
             glm::vec2 value(0.0f);
-            if (stream >> value.x >> value.y) {
+            if (ReadObjFloat(cursor, end, value.x) && ReadObjFloat(cursor, end, value.y)) {
                 texCoords.push_back(glm::vec2(value.x, 1.0f - value.y));
             }
         } else if (tag == "mtllib") {
-            std::string rest;
-            std::getline(stream, rest);
+            const std::string_view rest = TrimAsciiView(std::string_view(cursor, static_cast<size_t>(end - cursor)));
             std::vector<std::filesystem::path> libraries = ParseObjMtllibs(path, rest);
             for (const ObjMaterialRecord& record : ParseObjMaterialLibraries(path, parsedScene, libraries)) {
                 const uint32_t index = static_cast<uint32_t>(parsedScene.materials.size());
@@ -1139,13 +1190,15 @@ bool ParseObjMesh(const std::filesystem::path& path, ParsedScene& parsedScene)
                 materialLookup.emplace(record.name, index);
             }
         } else if (tag == "usemtl") {
-            std::string rest;
-            std::getline(stream, rest);
+            const std::string_view rest = TrimAsciiView(std::string_view(cursor, static_cast<size_t>(end - cursor)));
             currentMaterial = resolveMaterial(rest);
         } else if (tag == "f") {
-            std::vector<ObjVertexKey> face;
-            std::string token;
-            while (stream >> token) {
+            face.clear();
+            std::string_view token;
+            while (ReadObjToken(cursor, end, token)) {
+                if (!token.empty() && token.front() == '#') {
+                    break;
+                }
                 face.push_back(ParseObjFaceVertex(token));
             }
             if (face.size() < 3) {

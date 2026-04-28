@@ -18,6 +18,7 @@ public:
     void SetTargets(
         GraphTextureHandle albedo,
         GraphTextureHandle normal,
+        GraphTextureHandle geometricNormal,
         GraphTextureHandle material,
         GraphTextureHandle debug,
         GraphTextureHandle motion,
@@ -37,6 +38,7 @@ public:
 private:
     GraphTextureHandle _albedoTarget{};
     GraphTextureHandle _normalTarget{};
+    GraphTextureHandle _geometricNormalTarget{};
     GraphTextureHandle _materialTarget{};
     GraphTextureHandle _debugTarget{};
     GraphTextureHandle _motionTarget{};
