@@ -36,6 +36,9 @@ struct EngineLaunchOptions {
     std::optional<bool> startupPathTraceRussianRoulette;
     std::optional<uint32_t> startupPathTraceRussianRouletteDepth;
     std::optional<float> startupPathTraceFireflyClamp;
+    std::optional<bool> startupGlobalIlluminationEnabled;
+    std::optional<bool> startupAmbientOcclusionEnabled;
+    std::optional<vesta::render::AntiAliasingMode> startupAntiAliasingMode;
     std::optional<bool> startupSsaoEnabled;
     std::optional<float> startupSsaoRadius;
     std::optional<float> startupSsaoIntensity;
@@ -73,6 +76,8 @@ struct EngineLaunchOptions {
     std::optional<float> startupEnvironmentSpecularStrength;
     std::optional<bool> startupPcssShadowsEnabled;
     std::optional<float> startupShadowFilterRadius;
+    std::optional<glm::vec3> startupCameraPosition;
+    std::optional<glm::vec3> startupCameraRotation;
     std::optional<BenchmarkConfig> benchmark;
     std::filesystem::path startupLogPath{ "out/startup.log" };
     bool safeStartupMode{ true };

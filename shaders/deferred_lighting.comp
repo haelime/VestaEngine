@@ -234,9 +234,22 @@ vec3 reconstructWorldPosition(ivec2 pixel, ivec2 size, float depth)
     return world.xyz / max(world.w, 1.0e-4);
 }
 
+float fetchDepth(ivec2 pixel, ivec2 size)
+{
+    ivec2 clampedPixel = clamp(pixel, ivec2(0), size - ivec2(1));
+    return texelFetch(sampledImages[nonuniformEXT(int(pc.depthImageIndex))], clampedPixel, 0).r;
+}
+
+float fetchShadowDepth(uint shadowImageIndex, vec2 uv)
+{
+    ivec2 textureExtent = textureSize(sampledImages[nonuniformEXT(int(shadowImageIndex))], 0);
+    ivec2 pixel = clamp(ivec2(floor(uv * vec2(textureExtent))), ivec2(0), textureExtent - ivec2(1));
+    return texelFetch(sampledImages[nonuniformEXT(int(shadowImageIndex))], pixel, 0).r;
+}
+
 float computeScreenSpaceAo(ivec2 pixel, ivec2 size, vec3 worldPosition, vec3 normal, float depth)
 {
-    if (pc.ssaoParams.x < 0.5 || depth >= 0.99999) {
+    if (pc.ssaoParams.x < 0.5 || pc.ssaoParams.z <= 0.0 || depth >= 0.99999) {
         return 1.0;
     }
 
@@ -253,8 +266,7 @@ float computeScreenSpaceAo(ivec2 pixel, ivec2 size, vec3 worldPosition, vec3 nor
     for (int sampleIndex = 0; sampleIndex < 12; ++sampleIndex) {
         vec2 scaledOffset = offsets[sampleIndex] * radiusPixels * (0.45 + 0.11 * float(sampleIndex % 4));
         ivec2 samplePixel = clamp(pixel + ivec2(round(scaledOffset)), ivec2(0), size - ivec2(1));
-        vec2 sampleUv = (vec2(samplePixel) + 0.5) / vec2(size);
-        float sampleDepth = texture(sampledImages[nonuniformEXT(int(pc.depthImageIndex))], sampleUv).r;
+        float sampleDepth = fetchDepth(samplePixel, size);
         if (sampleDepth >= 0.99999) {
             continue;
         }
@@ -266,11 +278,10 @@ float computeScreenSpaceAo(ivec2 pixel, ivec2 size, vec3 worldPosition, vec3 nor
             continue;
         }
 
-        vec3 sampleDirection = delta / distanceToSample;
-        float hemisphereWeight = max(dot(normal, sampleDirection), 0.0);
+        float surfaceSeparation = dot(normal, delta);
+        float hemisphereWeight = max(surfaceSeparation / max(distanceToSample, 1.0e-4), 0.0);
         float rangeWeight = smoothstep(pc.ssaoParams.y, 0.0, distanceToSample);
-        float depthBias = 0.0008;
-        float isOccluder = sampleDepth < depth - depthBias ? 1.0 : 0.0;
+        float isOccluder = surfaceSeparation > 0.015 ? 1.0 : 0.0;
         float weight = mix(0.35, 1.0, hemisphereWeight) * rangeWeight;
         occlusion += isOccluder * weight;
         weightSum += weight;
@@ -291,22 +302,40 @@ vec3 sampleGBufferColor(ivec2 samplePixel)
     return max(sampleAlbedoAo.rgb, vec3(0.0)) * 0.65 + max(sampleMaterial.rgb, vec3(0.0));
 }
 
+vec3 sampleGBufferNormal(DeferredLightingConstants constants, ivec2 samplePixel)
+{
+    uint normalImageIndex = pc.normalImageIndex;
+    if (constants.gbufferIndices.x != INVALID_IMAGE_INDEX) {
+        normalImageIndex = constants.gbufferIndices.x;
+    }
+    vec3 packedNormal = imageLoad(storageImages[nonuniformEXT(int(normalImageIndex))], samplePixel).xyz;
+    return normalize(packedNormal * 2.0 - 1.0);
+}
+
 vec3 computeScreenSpaceReflection(ivec2 pixel, ivec2 size, vec3 worldPosition, vec3 normal, vec3 viewDir, vec3 skyReflection, float roughness, float metallic)
 {
     if (pc.ssrParams.x < 0.5 || roughness > 0.92) {
         return skyReflection;
     }
 
+    float dielectricSsrFade = 1.0 - smoothstep(0.06, 0.16, roughness);
+    float materialSsrWeight = mix(0.03 * dielectricSsrFade, 1.0, metallic);
+    if (materialSsrWeight <= 0.001) {
+        return skyReflection;
+    }
+
+    DeferredLightingConstants lightingConstants = lightingConstantsBuffers[nonuniformEXT(int(pc.lightingConstantsBufferIndex))].values;
     vec3 reflectionDirection = normalize(reflect(-viewDir, normal));
     if (dot(reflectionDirection, normal) <= 0.0) {
         return skyReflection;
     }
 
-    const int stepCount = 28;
+    const int stepCount = 48;
     float maxDistance = max(pc.ssrParams.y, 0.5);
     float stride = maxDistance / float(stepCount);
     float thickness = max(pc.ssrParams.z, 0.01);
-    vec3 rayOrigin = worldPosition + normal * 0.04;
+    vec3 rayOrigin = worldPosition + normal * max(0.035, thickness * 0.35);
+    float samePlaneRejectDistance = max(0.035, thickness * 0.45);
 
     for (int stepIndex = 1; stepIndex <= stepCount; ++stepIndex) {
         vec3 rayPosition = rayOrigin + reflectionDirection * (stride * float(stepIndex));
@@ -322,7 +351,10 @@ vec3 computeScreenSpaceReflection(ivec2 pixel, ivec2 size, vec3 worldPosition, v
         }
 
         ivec2 samplePixel = clamp(ivec2(sampleUv * vec2(size)), ivec2(0), size - ivec2(1));
-        float sampleDepth = texture(sampledImages[nonuniformEXT(int(pc.depthImageIndex))], sampleUv).r;
+        if (samplePixel == pixel) {
+            continue;
+        }
+        float sampleDepth = fetchDepth(samplePixel, size);
         if (sampleDepth >= 0.99999) {
             continue;
         }
@@ -331,13 +363,20 @@ vec3 computeScreenSpaceReflection(ivec2 pixel, ivec2 size, vec3 worldPosition, v
         float hitDistance = dot(sampleWorld - rayOrigin, reflectionDirection);
         float rayDistance = stride * float(stepIndex);
         float distanceError = rayDistance - hitDistance;
-        if (distanceError >= 0.0 && distanceError < thickness + rayDistance * 0.025) {
+        vec3 sampleNormal = sampleGBufferNormal(lightingConstants, samplePixel);
+        float samePlaneDistance = abs(dot(sampleWorld - worldPosition, normal));
+        bool samePlaneSelfHit = samePlaneDistance < samePlaneRejectDistance && dot(sampleNormal, normal) > 0.96;
+        float facingRay = -dot(sampleNormal, reflectionDirection);
+        float hitWindow = thickness + rayDistance * 0.018;
+        if (!samePlaneSelfHit && facingRay > 0.015 && distanceError >= -thickness * 0.2 && distanceError < hitWindow) {
             float edgeFade = smoothstep(0.0, 0.08, sampleUv.x) * smoothstep(1.0, 0.92, sampleUv.x)
                 * smoothstep(0.0, 0.08, sampleUv.y) * smoothstep(1.0, 0.92, sampleUv.y);
-            float roughnessFade = 1.0 - smoothstep(0.35, 0.95, roughness);
-            float metalBoost = mix(0.35, 1.0, metallic);
+            float roughnessFade = 1.0 - smoothstep(0.18, 0.72, roughness);
+            float hitConfidence = 1.0 - smoothstep(max(hitWindow * 0.35, 0.0001), hitWindow, abs(distanceError));
+            float normalConfidence = smoothstep(0.015, 0.35, facingRay);
             vec3 hitColor = sampleGBufferColor(samplePixel);
-            return mix(skyReflection, hitColor, clamp(edgeFade * roughnessFade * metalBoost * pc.ssrParams.w, 0.0, 1.0));
+            float reflectionWeight = edgeFade * roughnessFade * materialSsrWeight * hitConfidence * normalConfidence * pc.ssrParams.w;
+            return mix(skyReflection, hitColor, clamp(reflectionWeight, 0.0, 1.0));
         }
     }
 
@@ -365,8 +404,7 @@ vec3 computeScreenSpaceGi(ivec2 pixel, ivec2 size, vec3 worldPosition, vec3 norm
     for (int sampleIndex = 0; sampleIndex < sampleCount; ++sampleIndex) {
         vec2 scaledOffset = offsets[sampleIndex] * radiusPixels * (0.35 + 0.055 * float(sampleIndex));
         ivec2 samplePixel = clamp(pixel + ivec2(round(scaledOffset)), ivec2(0), size - ivec2(1));
-        vec2 sampleUv = (vec2(samplePixel) + 0.5) / vec2(size);
-        float sampleDepth = texture(sampledImages[nonuniformEXT(int(pc.depthImageIndex))], sampleUv).r;
+        float sampleDepth = fetchDepth(samplePixel, size);
         if (sampleDepth >= 0.99999) {
             continue;
         }
@@ -676,7 +714,7 @@ float computeDirectionalShadow(vec3 worldPosition, vec3 shadingNormal, vec3 geom
             for (int x = -blockerRadius; x <= blockerRadius; ++x) {
                 vec2 offset = vec2(x, y) * texelSize * max(filterRadius, 1.0);
                 vec2 sampleUv = clamp(shadowUv + offset, atlasMin, atlasMax);
-                float blockerDepth = texture(sampledImages[nonuniformEXT(int(constants.shadowIndices.x))], sampleUv).r;
+                float blockerDepth = fetchShadowDepth(constants.shadowIndices.x, sampleUv);
                 if (blockerDepth < receiverDepth) {
                     blockerDepthSum += blockerDepth;
                     blockerCount += 1.0;
@@ -701,7 +739,7 @@ float computeDirectionalShadow(vec3 worldPosition, vec3 shadingNormal, vec3 geom
             }
             float weight = 1.0 - smoothstep(max(filterRadius - 1.0, 0.0), filterRadius + 0.35, distanceToCenter);
             vec2 sampleUv = clamp(shadowUv + vec2(x, y) * texelSize, atlasMin, atlasMax);
-            float blockerDepth = texture(sampledImages[nonuniformEXT(int(constants.shadowIndices.x))], sampleUv).r;
+            float blockerDepth = fetchShadowDepth(constants.shadowIndices.x, sampleUv);
             visibility += (receiverDepth <= blockerDepth ? 1.0 : 0.0) * weight;
             weightSum += weight;
         }
@@ -736,7 +774,7 @@ float computeContactShadow(DeferredLightingConstants constants, ivec2 pixel, ive
         }
 
         ivec2 samplePixel = clamp(ivec2(sampleUv * vec2(size)), ivec2(0), size - ivec2(1));
-        float sampleDepth = texture(sampledImages[nonuniformEXT(int(pc.depthImageIndex))], sampleUv).r;
+        float sampleDepth = fetchDepth(samplePixel, size);
         if (sampleDepth >= 0.99999 || samplePixel == pixel) {
             continue;
         }
@@ -814,7 +852,7 @@ void main() {
     vec4 albedoAo = imageLoad(storageImages[nonuniformEXT(int(pc.albedoImageIndex))], pixel);
     vec4 normalRoughness = imageLoad(storageImages[nonuniformEXT(int(pc.normalImageIndex))], pixel);
     vec4 emissiveMetallic = imageLoad(storageImages[nonuniformEXT(int(pc.materialImageIndex))], pixel);
-    float depth = texture(sampledImages[nonuniformEXT(int(pc.depthImageIndex))], uv).r;
+    float depth = fetchDepth(pixel, size);
 
     vec3 N = normalize(normalRoughness.xyz * 2.0 - 1.0);
     vec3 geometricNormal = N;
@@ -825,7 +863,7 @@ void main() {
     }
     float roughness = clamp(normalRoughness.w, 0.045, 1.0);
     float metallic = clamp(emissiveMetallic.a, 0.0, 1.0);
-    float ao = clamp(albedoAo.a, 0.0, 1.0);
+    float ao = pc.ssaoParams.x >= 0.5 ? clamp(albedoAo.a, 0.0, 1.0) : 1.0;
     vec3 baseColor = max(albedoAo.rgb, vec3(0.0));
     vec3 emissive = max(emissiveMetallic.rgb, vec3(0.0));
 
@@ -838,7 +876,7 @@ void main() {
     vec3 F0 = mix(vec3(0.04), baseColor, metallic);
     vec4 rayEffects = sampleRayEffects(lightingConstants, pixel, size);
     if (lightingConstants.rayEffects.z != 0u) {
-        ao *= clamp(rayEffects.g, 0.0, 1.0);
+        ao *= mix(1.0, clamp(rayEffects.g, 0.0, 1.0), 0.45);
     }
     vec3 direct = evaluatePbrLight(baseColor,
         metallic,
@@ -848,7 +886,8 @@ void main() {
         L,
         max(lightingConstants.directionalColor.rgb, vec3(0.0)) * pc.lightDirectionAndIntensity.w);
     float shadowFactor = computeDirectionalShadow(worldPosition, N, geometricNormal, L);
-    float rtShadowFactor = lightingConstants.rayEffects.y != 0u ? clamp(rayEffects.r, 0.0, 1.0) : 1.0;
+    float lightFacing = smoothstep(0.02, 0.16, max(dot(N, L), 0.0));
+    float rtShadowFactor = lightingConstants.rayEffects.y != 0u ? mix(1.0, clamp(rayEffects.r, 0.0, 1.0), lightFacing) : 1.0;
     float contactShadow = computeContactShadow(lightingConstants, pixel, size, worldPosition, N, L, depth);
     direct *= shadowFactor * contactShadow * rtShadowFactor;
     direct += evaluateLocalLights(lightingConstants, baseColor, metallic, roughness, worldPosition, N, V);
@@ -870,11 +909,15 @@ void main() {
             max(lightingConstants.pointColor.rgb, vec3(0.0)) * pointIntensity * attenuation);
     }
 
+    float directionalStrength = max(pc.lightDirectionAndIntensity.w, 0.0);
+    float iblShadowWeight = smoothstep(0.02, 0.20, directionalStrength);
+    float iblShadow = mix(1.0, shadowFactor, 0.20 * iblShadowWeight);
+    iblShadow *= mix(1.0, contactShadow, 0.15 * iblShadowWeight);
     vec3 indirectBounce = computeScreenSpaceGi(pixel, size, worldPosition, N, baseColor) * ao * (1.0 - metallic);
     indirectBounce += computeDdgiComposite(lightingConstants, worldPosition, N, baseColor, metallic) * ao;
     vec4 rtGi = sampleRayGlobalIllumination(lightingConstants, pixel, size);
     indirectBounce += max(rtGi.rgb, vec3(0.0)) * clamp(rtGi.a, 0.0, 1.0) * ao * (1.0 - metallic) * 0.35;
-    vec3 ambientDiffuse = sampleDiffuseIbl(N) * baseColor * (1.0 - metallic) * ao + indirectBounce;
+    vec3 ambientDiffuse = sampleDiffuseIbl(N) * baseColor * (1.0 - metallic) * ao * iblShadow + indirectBounce;
     vec3 reflectionColor = computeScreenSpaceReflection(pixel, size, worldPosition, N, V, sampleSpecularIbl(R, N, V, roughness), roughness, metallic);
     if (lightingConstants.rayEffects.w != 0u) {
         float rtReflectionMiss = clamp(rayEffects.b, 0.0, 1.0);

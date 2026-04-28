@@ -221,9 +221,12 @@ void DeferredLightingPass::SetRestirDiResolve(GraphTextureHandle restirDirectLig
     _restirDirectLightingEnabled = enabled && static_cast<bool>(restirDirectLighting);
 }
 
-void DeferredLightingPass::SetAmbientOcclusion(bool enabled, float radius, float intensity)
+void DeferredLightingPass::SetAmbientOcclusion(bool enabled, bool screenSpaceEnabled, float radius, float intensity)
 {
-    _ssaoParams = glm::vec4(enabled ? 1.0f : 0.0f, std::max(radius, 0.01f), std::clamp(intensity, 0.0f, 4.0f), 0.0f);
+    _ssaoParams = glm::vec4(enabled ? 1.0f : 0.0f,
+        std::max(radius, 0.01f),
+        (enabled && screenSpaceEnabled) ? std::clamp(intensity, 0.0f, 4.0f) : 0.0f,
+        0.0f);
 }
 
 void DeferredLightingPass::SetScreenSpaceReflections(bool enabled, float maxDistance, float thickness, float intensity)

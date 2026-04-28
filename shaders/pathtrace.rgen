@@ -87,6 +87,8 @@ const uint DEBUG_PDF = 10u;
 const uint kInvalidResourceIndex = 0xFFFFFFFFu;
 const uint PT_FLAG_NEE = 1u;
 const uint PT_FLAG_RUSSIAN_ROULETTE = 2u;
+const uint PT_FLAG_GI = 4u;
+const uint PT_FLAG_AO = 8u;
 
 vec3 sampleEnvironmentMap(uint imageIndex, vec3 direction)
 {
@@ -399,7 +401,8 @@ vec3 traceSample(
     primaryNormal = vec3(0.0, 1.0, 0.0);
     primaryDepth = 0.0;
 
-    uint bounceLimit = clamp(pc.pathTraceParams.z, 1u, 12u);
+    bool globalIlluminationEnabled = (pc.pathTraceFlags & PT_FLAG_GI) != 0u;
+    uint bounceLimit = globalIlluminationEnabled ? clamp(pc.pathTraceParams.z, 1u, 12u) : 1u;
     for (uint bounce = 0u; bounce < bounceLimit; ++bounce) {
         payload.radianceDistance = vec4(0.0);
         payload.albedoMetallic = vec4(0.0);
@@ -450,6 +453,9 @@ vec3 traceSample(
         }
         radiance += throughput * (emissive + direct);
         directOut += throughput * direct;
+        if (!globalIlluminationEnabled) {
+            break;
+        }
 
         vec3 F0 = mix(vec3(0.04), albedo, metallic);
         vec3 F = FresnelSchlick(max(dot(normal, viewDir), 0.0), F0);

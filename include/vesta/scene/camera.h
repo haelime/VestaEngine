@@ -68,6 +68,7 @@ private:
     float _nearPlane{ 0.05f };
     float _farPlane{ 5000.0f };
     bool _rightMouseDown{ false };
+    bool _middleMouseDown{ false };
     bool _firstMouseSample{ true };
     int32_t _lastMouseX{ 0 };
     int32_t _lastMouseY{ 0 };

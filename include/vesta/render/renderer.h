@@ -1,12 +1,14 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <deque>
 #include <filesystem>
 #include <functional>
 #include <future>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -34,6 +36,16 @@ enum class RendererDisplayMode : uint32_t {
     DeferredLighting = 1,
     Gaussian = 2,
     PathTrace = 3,
+    RayTracing = 4,
+};
+
+enum class AntiAliasingMode : uint32_t {
+    None = 0,
+    FXAA = 1,
+    TAA = 2,
+    TAAU = 3,
+    MSAA = 4,
+    DLSS = 5,
 };
 
 enum class RendererPreset : uint32_t {
@@ -121,6 +133,7 @@ enum class SceneLoadState : uint32_t {
     ReadyToSwap = 7,
     Ready = 8,
     Failed = 9,
+    Cancelled = 10,
 };
 
 enum class SceneUploadMode : uint32_t {
@@ -137,7 +150,7 @@ enum class SceneUploadContinuation : uint32_t {
 
 [[nodiscard]] constexpr bool IsValidSceneLoadTransition(SceneLoadState from, SceneLoadState to)
 {
-    if (from == to || to == SceneLoadState::Failed) {
+    if (from == to || to == SceneLoadState::Failed || to == SceneLoadState::Cancelled) {
         return true;
     }
 
@@ -161,6 +174,7 @@ enum class SceneUploadContinuation : uint32_t {
         return to == SceneLoadState::Ready;
     case SceneLoadState::Ready:
     case SceneLoadState::Failed:
+    case SceneLoadState::Cancelled:
     default:
         return to == SceneLoadState::Parsing;
     }
@@ -190,9 +204,18 @@ struct SceneLoadStatus {
     float textureUploadMs{ 0.0f };
     float blasMs{ 0.0f };
     float tlasMs{ 0.0f };
+    float progress{ 0.0f };
     uint64_t pendingUploadBytes{ 0 };
+    uint64_t completedUploadBytes{ 0 };
+    uint64_t totalUploadBytes{ 0 };
     uint32_t pendingUploadCopies{ 0 };
+    uint32_t uploadedTextures{ 0 };
+    uint32_t totalTextures{ 0 };
+    bool cancelRequested{ false };
 };
+
+struct RendererSettings;
+void ApplyDisplayModePassSelection(RendererSettings& settings, RendererDisplayMode mode);
 
 struct SceneUploadOptions {
     bool useDeviceLocalSceneBuffers{ true };
@@ -392,8 +415,8 @@ struct RendererSettings {
     bool frameTimingCapture{ false };
     bool benchmarkOverlay{ false };
     bool enableVSync{ true };
-    bool enableFpsLimit{ false };
-    uint32_t fpsLimit{ 60 };
+    bool enableFpsLimit{ true };
+    uint32_t fpsLimit{ 165 };
     bool enableFrustumCulling{ true };
     bool enableDistanceCulling{ false };
     bool useIndirectDraw{ false };
@@ -414,6 +437,7 @@ struct RendererSettings {
     bool pathTraceRussianRoulette{ true };
     uint32_t pathTraceRussianRouletteDepth{ 3 };
     float pathTraceFireflyClamp{ 8.0f };
+    AntiAliasingMode antiAliasingMode{ AntiAliasingMode::TAA };
     PathTraceDebugView pathTraceDebugView{ PathTraceDebugView::Final };
     RendererDebugView debugView{ RendererDebugView::FinalColor };
     GaussianDebugView gaussianDebugView{ GaussianDebugView::Final };
@@ -464,6 +488,9 @@ struct RendererSettings {
     bool enableVignette{ false };
     bool enableMotionBlur{ false };
     bool enableFxaa{ true };
+    bool enableMsaa{ false };
+    bool enableDlss{ false };
+    uint32_t msaaSampleCount{ 4 };
     float motionBlurStrength{ 0.35f };
     float bloomThreshold{ 1.0f };
     float bloomIntensity{ 0.1f };
@@ -495,6 +522,7 @@ struct RendererSettings {
     float pathTraceDenoiserTemporalBlend{ 0.88f };
     uint32_t pathTraceDenoiserIterations{ 3 };
     bool enableSsao{ true };
+    bool enableAmbientOcclusion{ true };
     float ssaoRadius{ 0.75f };
     float ssaoIntensity{ 1.35f };
     bool enableTaa{ true };
@@ -504,6 +532,7 @@ struct RendererSettings {
     float ssrThickness{ 0.18f };
     float ssrIntensity{ 0.65f };
     bool enableSsgi{ true };
+    bool enableGlobalIllumination{ true };
     float ssgiRadius{ 1.4f };
     float ssgiIntensity{ 0.32f };
     uint32_t ssgiSampleCount{ 10 };
@@ -522,7 +551,7 @@ struct RendererSettings {
     float animationTimeSeconds{ 0.0f };
     bool animateDirectionalLight{ false };
     bool animateEnvironment{ false };
-    glm::vec4 lightDirectionAndIntensity{ -0.4f, -1.0f, -0.3f, 2.0f };
+    glm::vec4 lightDirectionAndIntensity{ -0.4f, -1.0f, -0.3f, 1.0f };
     glm::vec4 directionalLightColor{ 1.0f, 1.0f, 1.0f, 0.0f };
     bool enablePointLight{ false };
     glm::vec4 pointLightPositionAndIntensity{ 0.0f, 2.0f, 0.0f, 4.0f };
@@ -535,7 +564,7 @@ struct RendererSettings {
     glm::vec4 areaLightPositionAndIntensity{ 0.0f, 3.2f, 0.0f, 5.0f };
     glm::vec4 areaLightNormalAndSize{ 0.0f, -1.0f, 0.0f, 2.0f };
     glm::vec4 areaLightColor{ 0.86f, 0.92f, 1.0f, 0.0f };
-    float environmentIntensity{ 1.0f };
+    float environmentIntensity{ 2.0f };
     float environmentRotationDegrees{ 0.0f };
     uint32_t environmentPreset{ 0 };
     std::filesystem::path externalHdriPath{};
@@ -545,8 +574,8 @@ struct RendererSettings {
     uint32_t externalHdriHeight{ 0 };
     uint32_t externalHdriChannels{ 0 };
     std::string externalHdriStatus{ "Procedural IBL" };
-    float environmentDiffuseStrength{ 0.22f };
-    float environmentSpecularStrength{ 0.45f };
+    float environmentDiffuseStrength{ 1.0f };
+    float environmentSpecularStrength{ 1.0f };
     float cameraExposureEv{ 0.0f };
     float cameraApertureRadius{ 0.0f };
     float cameraFocalDistance{ 5.0f };
@@ -799,6 +828,7 @@ public:
     bool LoadScene(const std::filesystem::path& path);
     bool LoadSceneAsync(const std::filesystem::path& path);
     bool ReloadSceneAsync();
+    bool CancelSceneLoad();
     bool LoadExternalEnvironmentMap(const std::filesystem::path& path);
     void ClearExternalEnvironmentMap();
     bool EnsureRayTracingScene();
@@ -857,6 +887,13 @@ private:
         float parseMs{ 0.0f };
         float prepareMs{ 0.0f };
         bool success{ false };
+        bool cancelled{ false };
+    };
+
+    struct AsyncSceneLoadProgress {
+        std::atomic<float> progress{ 0.0f };
+        std::mutex messageMutex;
+        std::string message;
     };
 
     struct RetiredSceneEntry {
@@ -967,6 +1004,8 @@ private:
     std::vector<RenderGraphPassTiming> _lastRenderGraphTimings;
     std::string _lastShaderReloadMessage;
     std::future<AsyncSceneLoadResult> _sceneLoadFuture;
+    std::shared_ptr<std::atomic_bool> _sceneLoadCancellationToken;
+    std::shared_ptr<AsyncSceneLoadProgress> _sceneLoadProgress;
     std::future<VisibilityCullResult> _visibilityFuture;
     SceneLoadStatus _sceneLoadStatus;
     PendingSceneUpload _pendingSceneUpload;
@@ -975,6 +1014,7 @@ private:
     FrameSnapshot _frameSnapshot;
     std::shared_ptr<const vesta::scene::PreparedScene> _visibleSceneToken;
     bool _sceneLoadInProgress{ false };
+    bool _sceneLoadCancelRequested{ false };
     bool _visibilityCullInProgress{ false };
     bool _visibilityDirty{ true };
     OverlayDrawFn _overlayDrawFn;

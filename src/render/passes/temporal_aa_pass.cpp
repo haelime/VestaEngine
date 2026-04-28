@@ -18,7 +18,7 @@ struct TemporalAAPushConstants {
     uint32_t depthImageIndex{ 0 };
     uint32_t motionImageIndex{ 0 };
     uint32_t reactiveImageIndex{ kInvalidResourceIndex };
-    uint32_t historyImageIndex{ 0 };
+    uint32_t historyReadImageIndex{ 0 };
     uint32_t frameIndex{ 0 };
     float feedback{ 0.88f };
     uint32_t enabled{ 1 };
@@ -28,7 +28,7 @@ struct TemporalAAPushConstants {
     float reactiveMaskStrength{ 0.65f };
     float reactiveMetallicThreshold{ 0.55f };
     float reactiveEmissiveThreshold{ 0.08f };
-    uint32_t reserved2{ 0 };
+    uint32_t historyWriteImageIndex{ 0 };
     uint32_t reserved3{ 0 };
     uint32_t reserved4{ 0 };
     glm::mat4 inverseViewProjection{ 1.0f };
@@ -95,32 +95,40 @@ void TemporalAAPass::SetDebugView(RendererDebugView debugView)
 
 void TemporalAAPass::EnsureHistoryImage(RenderDevice& device, VkExtent3D extent)
 {
-    if (_historyImage && _historyExtent.width == extent.width && _historyExtent.height == extent.height
+    if (_historyImages[0] && _historyImages[1] && _historyExtent.width == extent.width && _historyExtent.height == extent.height
         && _historyExtent.depth == extent.depth) {
         return;
     }
 
     DestroyHistoryImage(device);
-    _historyImage = device.CreateImage(ImageDesc{
-        .extent = extent,
-        .format = VK_FORMAT_R16G16B16A16_SFLOAT,
-        .usage = VK_IMAGE_USAGE_STORAGE_BIT,
-        .aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT,
-        .registerBindlessStorage = true,
-        .debugName = "TemporalAA.History",
-    });
+    for (size_t index = 0; index < _historyImages.size(); ++index) {
+        _historyImages[index] = device.CreateImage(ImageDesc{
+            .extent = extent,
+            .format = VK_FORMAT_R16G16B16A16_SFLOAT,
+            .usage = VK_IMAGE_USAGE_STORAGE_BIT,
+            .aspectFlags = VK_IMAGE_ASPECT_COLOR_BIT,
+            .registerBindlessStorage = true,
+            .debugName = index == 0u ? "TemporalAA.HistoryA" : "TemporalAA.HistoryB",
+        });
+    }
     _historyExtent = extent;
+    _historyReadIndex = 0;
     _historyInitialized = false;
 }
 
 void TemporalAAPass::DestroyHistoryImage(RenderDevice& device)
 {
-    if (_historyImage) {
+    if (_historyImages[0] || _historyImages[1]) {
         device.WaitIdle();
-        device.DestroyImage(_historyImage);
-        _historyImage = {};
+        for (ImageHandle& image : _historyImages) {
+            if (image) {
+                device.DestroyImage(image);
+                image = {};
+            }
+        }
     }
     _historyExtent = {};
+    _historyReadIndex = 0;
     _historyInitialized = false;
 }
 
@@ -177,18 +185,31 @@ void TemporalAAPass::Execute(const RenderGraphContext& context)
     const ImageHandle depthHandle = context.GetTextureHandle(_depth);
     const VkExtent3D outputExtent = context.GetTextureExtent(_output);
     EnsureHistoryImage(context.GetDevice(), outputExtent);
+    const uint32_t historyReadIndex = _historyReadIndex;
+    const uint32_t historyWriteIndex = 1u - historyReadIndex;
+    const ImageHandle historyReadImage = _historyImages[historyReadIndex];
+    const ImageHandle historyWriteImage = _historyImages[historyWriteIndex];
+    const bool historyWasInitialized = _historyInitialized;
 
     const VkImageSubresourceRange colorRange = vkutil::make_image_subresource_range(VK_IMAGE_ASPECT_COLOR_BIT);
     vkutil::transition_image(context.GetCommandBuffer(),
-        context.GetDevice().GetImage(_historyImage),
-        _historyInitialized ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED,
+        context.GetDevice().GetImage(historyReadImage),
+        historyWasInitialized ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED,
         VK_IMAGE_LAYOUT_GENERAL,
-        _historyInitialized ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_2_NONE,
-        _historyInitialized ? VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT : VK_ACCESS_2_NONE,
+        historyWasInitialized ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_2_NONE,
+        historyWasInitialized ? (VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT) : VK_ACCESS_2_NONE,
         VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
-        VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+        VK_ACCESS_2_SHADER_STORAGE_READ_BIT,
         colorRange);
-    _historyInitialized = true;
+    vkutil::transition_image(context.GetCommandBuffer(),
+        context.GetDevice().GetImage(historyWriteImage),
+        historyWasInitialized ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED,
+        VK_IMAGE_LAYOUT_GENERAL,
+        historyWasInitialized ? VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_2_NONE,
+        historyWasInitialized ? (VK_ACCESS_2_SHADER_STORAGE_READ_BIT | VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT) : VK_ACCESS_2_NONE,
+        VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+        VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT,
+        colorRange);
 
     const TemporalAAPushConstants pushConstants{
         .inputImageIndex = context.GetDevice().GetImageResource(inputHandle).bindless.storageImage,
@@ -200,14 +221,15 @@ void TemporalAAPass::Execute(const RenderGraphContext& context)
         .reactiveImageIndex = _reactive
             ? context.GetDevice().GetImageResource(reactiveHandle).bindless.storageImage
             : kInvalidResourceIndex,
-        .historyImageIndex = context.GetDevice().GetImageResource(_historyImage).bindless.storageImage,
-        .frameIndex = _frameIndex,
+        .historyReadImageIndex = context.GetDevice().GetImageResource(historyReadImage).bindless.storageImage,
+        .frameIndex = historyWasInitialized ? _frameIndex : 0u,
         .feedback = _feedback,
         .enabled = _enabled ? 1u : 0u,
         .debugView = static_cast<uint32_t>(_debugView),
         .sharpness = _upscalerSharpness,
         .materialReactiveMask = _materialReactiveMask ? 1u : 0u,
         .reactiveMaskStrength = _reactiveMaskStrength,
+        .historyWriteImageIndex = context.GetDevice().GetImageResource(historyWriteImage).bindless.storageImage,
         .inverseViewProjection = _inverseViewProjection,
         .previousViewProjection = _hasPreviousViewProjection ? _previousViewProjection : _viewProjection,
     };
@@ -225,6 +247,8 @@ void TemporalAAPass::Execute(const RenderGraphContext& context)
 
     _previousViewProjection = _viewProjection;
     _hasPreviousViewProjection = true;
+    _historyReadIndex = historyWriteIndex;
+    _historyInitialized = true;
 }
 
 void TemporalAAPass::Shutdown(RenderDevice& device)

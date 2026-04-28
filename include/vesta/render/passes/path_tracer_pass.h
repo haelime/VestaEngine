@@ -33,6 +33,7 @@ public:
     void SetLens(glm::vec4 cameraRightAperture, glm::vec4 cameraUpFocalDistance);
     void SetSamplesPerPixel(uint32_t samplesPerPixel);
     void SetMaxBounces(uint32_t maxBounces);
+    void SetFeatureToggles(bool globalIllumination, bool ambientOcclusion);
     void SetIntegratorControls(bool nextEventEstimation, bool russianRoulette, uint32_t russianRouletteDepth, float fireflyClamp);
     void SetDebugView(PathTraceDebugView debugView);
     [[nodiscard]] PathTraceBackend GetActiveBackend() const { return _activeBackend; }
@@ -63,6 +64,8 @@ private:
     glm::vec4 _cameraUpFocalDistance{ 0.0f, 1.0f, 0.0f, 5.0f };
     uint32_t _samplesPerPixel{ 1 };
     uint32_t _maxBounces{ 4 };
+    bool _globalIllumination{ true };
+    bool _ambientOcclusion{ true };
     bool _nextEventEstimation{ true };
     bool _russianRoulette{ true };
     uint32_t _russianRouletteDepth{ 3 };

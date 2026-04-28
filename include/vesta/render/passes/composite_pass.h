@@ -75,7 +75,7 @@ public:
         bool fxaaEnabled,
         bool motionBlurEnabled,
         float motionBlurStrength);
-    void SetAmbientOcclusion(bool enabled, float radius, float intensity);
+    void SetAmbientOcclusion(bool enabled, bool screenSpaceEnabled, float radius, float intensity);
     void SetShadowCascadeDebug(uint32_t cascadeCount, float splitLambda, bool overlayEnabled);
     void SetCameraMatrices(const glm::mat4& viewProjection, const glm::mat4& inverseViewProjection);
     void SetDepthRange(float nearPlane, float farPlane);

@@ -181,8 +181,23 @@ void Camera::HandleEvent(const SDL_Event& event)
         return;
     }
 
+    if (event.type == SDL_MOUSEBUTTONDOWN && event.button.button == SDL_BUTTON_MIDDLE) {
+        DisableOrbit();
+        _middleMouseDown = true;
+        _firstMouseSample = true;
+        SDL_SetRelativeMouseMode(SDL_TRUE);
+        return;
+    }
+
     if (event.type == SDL_MOUSEBUTTONUP && event.button.button == SDL_BUTTON_RIGHT) {
         _rightMouseDown = false;
+        _firstMouseSample = true;
+        SDL_SetRelativeMouseMode(SDL_FALSE);
+        return;
+    }
+
+    if (event.type == SDL_MOUSEBUTTONUP && event.button.button == SDL_BUTTON_MIDDLE) {
+        _middleMouseDown = false;
         _firstMouseSample = true;
         SDL_SetRelativeMouseMode(SDL_FALSE);
         return;
@@ -205,6 +220,23 @@ void Camera::HandleEvent(const SDL_Event& event)
         if (IsOrbitEnabled()) {
             UpdatePositionFromOrbit();
         }
+        _movedThisFrame = true;
+        return;
+    }
+
+    if (event.type == SDL_MOUSEMOTION && _middleMouseDown) {
+        int32_t deltaX = event.motion.xrel;
+        int32_t deltaY = event.motion.yrel;
+        if (_firstMouseSample) {
+            deltaX = 0;
+            deltaY = 0;
+            _firstMouseSample = false;
+        }
+
+        const glm::vec3 right = glm::normalize(glm::cross(_forward, _up));
+        const float panScale = _moveSpeed * 0.01f;
+        _position -= right * (static_cast<float>(deltaX) * panScale);
+        _position += _up * (static_cast<float>(deltaY) * panScale);
         _movedThisFrame = true;
         return;
     }

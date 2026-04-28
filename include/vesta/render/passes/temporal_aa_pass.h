@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 
 #include <glm/glm.hpp>
@@ -51,7 +52,8 @@ private:
     glm::mat4 _inverseViewProjection{ 1.0f };
     glm::mat4 _previousViewProjection{ 1.0f };
     bool _hasPreviousViewProjection{ false };
-    ImageHandle _historyImage{};
+    std::array<ImageHandle, 2> _historyImages{};
+    uint32_t _historyReadIndex{ 0 };
     VkExtent3D _historyExtent{};
     bool _historyInitialized{ false };
     VkPipelineLayout _pipelineLayout{ VK_NULL_HANDLE };

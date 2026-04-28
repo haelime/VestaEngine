@@ -42,7 +42,7 @@ public:
         bool denoiserEnabled,
         bool temporalEnabled);
     void SetRestirDiResolve(GraphTextureHandle restirDirectLighting, bool enabled);
-    void SetAmbientOcclusion(bool enabled, float radius, float intensity);
+    void SetAmbientOcclusion(bool enabled, bool screenSpaceEnabled, float radius, float intensity);
     void SetScreenSpaceReflections(bool enabled, float maxDistance, float thickness, float intensity);
     void SetScreenSpaceGlobalIllumination(bool enabled, float radius, float intensity, uint32_t sampleCount);
     void SetDdgi(bool enabled,

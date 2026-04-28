@@ -14,7 +14,7 @@ layout(push_constant) uniform TemporalAAPushConstants {
     uint depthImageIndex;
     uint motionImageIndex;
     uint reactiveImageIndex;
-    uint historyImageIndex;
+    uint historyReadImageIndex;
     uint frameIndex;
     float feedback;
     uint enabled;
@@ -24,7 +24,7 @@ layout(push_constant) uniform TemporalAAPushConstants {
     float reactiveMaskStrength;
     float reactiveMetallicThreshold;
     float reactiveEmissiveThreshold;
-    uint reserved2;
+    uint historyWriteImageIndex;
     mat4 inverseViewProjection;
     mat4 previousViewProjection;
 } pc;
@@ -165,7 +165,7 @@ void main()
         }
         validHistory = previousUv.x >= 0.0 && previousUv.y >= 0.0 && previousUv.x <= 1.0 && previousUv.y <= 1.0;
         ivec2 historyPixel = clamp(ivec2(previousUv * vec2(size)), ivec2(0), size - ivec2(1));
-        history = imageLoad(storageImages[nonuniformEXT(int(pc.historyImageIndex))], historyPixel);
+        history = imageLoad(storageImages[nonuniformEXT(int(pc.historyReadImageIndex))], historyPixel);
         vec3 historyColor = clampHistoryToNeighborhood(inputPixel, inputSize, history.rgb);
         float historyDepth = history.a;
         float depthDelta = abs(currentDepth - historyDepth);
@@ -210,5 +210,5 @@ void main()
     }
 
     imageStore(storageImages[nonuniformEXT(int(pc.outputImageIndex))], pixel, vec4(outputColor, 1.0));
-    imageStore(storageImages[nonuniformEXT(int(pc.historyImageIndex))], pixel, vec4(temporalColor, currentDepth));
+    imageStore(storageImages[nonuniformEXT(int(pc.historyWriteImageIndex))], pixel, vec4(temporalColor, currentDepth));
 }

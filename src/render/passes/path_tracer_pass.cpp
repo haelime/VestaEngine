@@ -162,6 +162,12 @@ void PathTracerPass::SetMaxBounces(uint32_t maxBounces)
     _maxBounces = std::clamp(maxBounces, 1u, 12u);
 }
 
+void PathTracerPass::SetFeatureToggles(bool globalIllumination, bool ambientOcclusion)
+{
+    _globalIllumination = globalIllumination;
+    _ambientOcclusion = ambientOcclusion;
+}
+
 void PathTracerPass::SetIntegratorControls(
     bool nextEventEstimation, bool russianRoulette, uint32_t russianRouletteDepth, float fireflyClamp)
 {
@@ -452,7 +458,8 @@ void PathTracerPass::Execute(const RenderGraphContext& context)
             .emissiveTriangleCount = static_cast<uint32_t>(_scene->GetEmissiveTriangles().size()),
             .russianRouletteDepth = _russianRouletteDepth,
             .fireflyClamp = _fireflyClamp,
-            .pathTraceFlags = (_nextEventEstimation ? 1u : 0u) | (_russianRoulette ? 2u : 0u),
+            .pathTraceFlags = (_nextEventEstimation ? 1u : 0u) | (_russianRoulette ? 2u : 0u)
+                | (_globalIllumination ? 4u : 0u) | (_ambientOcclusion ? 8u : 0u),
             .reserved0 = _environmentImageIndex,
             .accumulationImageIndices0 = glm::uvec4(
                 PackStorageImagePair(accumulationIndex(0), accumulationIndex(1)),
@@ -559,6 +566,8 @@ void PathTracerPass::Execute(const RenderGraphContext& context)
         .frameIndex = _frameIndex,
         .debugView = static_cast<uint32_t>(_debugView),
         .reserved0 = _environmentImageIndex,
+        .reserved1 = (_nextEventEstimation ? 1u : 0u) | (_russianRoulette ? 2u : 0u)
+            | (_globalIllumination ? 4u : 0u) | (_ambientOcclusion ? 8u : 0u),
     };
 
     VkCommandBuffer commandBuffer = context.GetCommandBuffer();

@@ -270,6 +270,13 @@ SceneMaterial MakeDefaultMaterial()
     return SceneMaterial{};
 }
 
+SceneMaterial MakeDefaultObjMaterial()
+{
+    SceneMaterial material = MakeDefaultMaterial();
+    material.materialParams.x = 0.0f;
+    return material;
+}
+
 std::vector<glm::vec4> GenerateTangents(std::span<const glm::vec3> positions,
     std::span<const glm::vec3> normals,
     std::span<const glm::vec2> texCoords,
@@ -975,7 +982,7 @@ std::vector<ObjMaterialRecord> ParseObjMaterialLibraries(
                 flushCurrent();
                 hasCurrent = true;
                 current.name = TrimAscii(trimmed.substr(tag.size()));
-                current.material = MakeDefaultMaterial();
+                current.material = MakeDefaultObjMaterial();
             } else if (hasCurrent && tag == "Kd") {
                 float r = 0.8f;
                 float g = 0.8f;
@@ -999,6 +1006,16 @@ std::vector<ObjMaterialRecord> ParseObjMaterialLibraries(
                 float shininess = 32.0f;
                 if (stream >> shininess) {
                     current.material.materialParams.y = glm::clamp(std::sqrt(2.0f / (std::max(shininess, 1.0f) + 2.0f)), 0.04f, 1.0f);
+                }
+            } else if (hasCurrent && tag == "Pr") {
+                float roughness = 1.0f;
+                if (stream >> roughness) {
+                    current.material.materialParams.y = glm::clamp(roughness, 0.04f, 1.0f);
+                }
+            } else if (hasCurrent && tag == "Pm") {
+                float metallic = 0.0f;
+                if (stream >> metallic) {
+                    current.material.materialParams.x = glm::clamp(metallic, 0.0f, 1.0f);
                 }
             } else if (hasCurrent && (tag == "map_Kd" || tag == "map_BaseColor")) {
                 std::string rest;
@@ -1102,7 +1119,7 @@ bool ParseObjMesh(const std::filesystem::path& path, ParsedScene& parsedScene)
     std::unordered_map<std::string, uint32_t> materialLookup;
 
     parsedScene.materials.clear();
-    parsedScene.materials.push_back(MakeDefaultMaterial());
+    parsedScene.materials.push_back(MakeDefaultObjMaterial());
     materialLookup.emplace("default", 0u);
 
     struct ObjPrimitiveBuilder {

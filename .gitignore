@@ -4,6 +4,8 @@
 /.vs
 /assets/brickadia
 /assets/benchmark_scenes/
+/assets/demo/
+/docs/goals.md
 *.vcxproj.user
 
 # CMake build trees

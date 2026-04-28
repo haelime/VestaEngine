@@ -1,9 +1,12 @@
 #include <vesta/render/vulkan/vk_engine.h>
 
+#include <array>
 #include <iostream>
 #include <optional>
 #include <string>
 #include <string_view>
+
+#include <glm/glm.hpp>
 
 namespace {
 void PrintUsage()
@@ -12,7 +15,7 @@ void PrintUsage()
         << "Usage: VestaEngine [options]\n"
         << "  --scene <path>                Load a scene at startup.\n"
         << "  --preset <recommended|performance|balanced|quality>\n"
-        << "  --mode <composite|raster|deferred|gaussian|pathtrace>\n"
+        << "  --mode <composite|raster|deferred|raytrace|gaussian|pathtrace>\n"
         << "  --compare <off|split|difference>\n"
         << "  --debug-view <final|albedo|normal|world-position|depth|uv|material-id|object-id|roughness|metallic|emissive|ao|motion-vector|direct|indirect|reflection|rt-gi|denoised|difference-reference|wireframe|mip-level|shadow-map|overdraw|history-color|history-depth|reprojection|disocclusion|jitter|contact-shadow|shadow-cascade>\n"
         << "  --pt-debug <final|albedo|normal|depth|direct|indirect|ray-count|diffuse-bounce|specular-bounce|throughput|pdf>\n"
@@ -25,6 +28,9 @@ void PrintUsage()
         << "  --pt-rr <on|off>              Toggle path tracing Russian roulette termination.\n"
         << "  --pt-rr-depth <1-12>          Bounce depth where Russian roulette starts.\n"
         << "  --pt-firefly-clamp <value>    Clamp path throughput/fireflies; 0 disables.\n"
+        << "  --gi <on|off>                 Toggle global illumination family effects.\n"
+        << "  --ao <on|off>                 Toggle ambient occlusion family effects.\n"
+        << "  --aa <none|fxaa|taa|taau|msaa|dlss> Select anti-aliasing mode.\n"
         << "  --ssao <on|off>               Toggle raster screen-space ambient occlusion.\n"
         << "  --ssao-radius <value>         SSAO world-space sample radius.\n"
         << "  --ssao-intensity <value>      SSAO darkening strength.\n"
@@ -62,6 +68,8 @@ void PrintUsage()
         << "  --ibl-diffuse <0-2>           Diffuse environment lighting strength.\n"
         << "  --ibl-specular <0-2>          Specular environment reflection strength.\n"
         << "  --hdri <path>                 Load an external HDRI/image for environment sampling.\n"
+        << "  --camera-position <x,y,z>     Set startup camera position.\n"
+        << "  --camera-rotation <yaw,pitch,roll> Set startup camera rotation in degrees.\n"
         << "  --benchmark <csv-path>        Run a timed benchmark and exit.\n"
         << "  --screenshot <png-path>       Save a PNG capture during benchmark.\n"
         << "  --benchmark-seconds <value>   Benchmark capture duration.\n"
@@ -100,9 +108,23 @@ std::optional<vesta::render::RendererDisplayMode> ParseDisplayMode(std::string_v
     if (value == "gaussian") {
         return vesta::render::RendererDisplayMode::Gaussian;
     }
+    if (value == "raytrace" || value == "ray-trace" || value == "raytracing" || value == "ray-tracing") {
+        return vesta::render::RendererDisplayMode::RayTracing;
+    }
     if (value == "pathtrace" || value == "path-trace") {
         return vesta::render::RendererDisplayMode::PathTrace;
     }
+    return std::nullopt;
+}
+
+std::optional<vesta::render::AntiAliasingMode> ParseAntiAliasingMode(std::string_view value)
+{
+    if (value == "none" || value == "off") { return vesta::render::AntiAliasingMode::None; }
+    if (value == "fxaa" || value == "faa") { return vesta::render::AntiAliasingMode::FXAA; }
+    if (value == "taa") { return vesta::render::AntiAliasingMode::TAA; }
+    if (value == "taau" || value == "temporal-upscaler") { return vesta::render::AntiAliasingMode::TAAU; }
+    if (value == "msaa") { return vesta::render::AntiAliasingMode::MSAA; }
+    if (value == "dlss") { return vesta::render::AntiAliasingMode::DLSS; }
     return std::nullopt;
 }
 
@@ -243,6 +265,30 @@ bool TryParseUint(const char* value, uint32_t& output)
     } catch (...) {
         return false;
     }
+}
+
+std::optional<glm::vec3> ParseVec3(std::string_view value)
+{
+    std::array<float, 3> components{};
+    size_t begin = 0;
+    for (size_t index = 0; index < components.size(); ++index) {
+        const size_t comma = value.find(',', begin);
+        const std::string token(value.substr(begin, comma == std::string_view::npos ? std::string_view::npos : comma - begin));
+        float component = 0.0f;
+        if (!TryParseFloat(token.c_str(), component)) {
+            return std::nullopt;
+        }
+        components[index] = component;
+        if (index + 1u < components.size()) {
+            if (comma == std::string_view::npos) {
+                return std::nullopt;
+            }
+            begin = comma + 1u;
+        } else if (comma != std::string_view::npos) {
+            return std::nullopt;
+        }
+    }
+    return glm::vec3(components[0], components[1], components[2]);
 }
 
 std::optional<bool> ParseToggle(std::string_view value)
@@ -452,6 +498,42 @@ int main(int argc, char* argv[])
                 return 1;
             }
             options.startupPathTraceFireflyClamp = clampValue;
+            continue;
+        }
+        if (argument == "--gi") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            options.startupGlobalIlluminationEnabled = ParseToggle(value);
+            if (!options.startupGlobalIlluminationEnabled.has_value()) {
+                std::cerr << "Invalid GI toggle: " << value << "\n";
+                return 1;
+            }
+            continue;
+        }
+        if (argument == "--ao") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            options.startupAmbientOcclusionEnabled = ParseToggle(value);
+            if (!options.startupAmbientOcclusionEnabled.has_value()) {
+                std::cerr << "Invalid AO toggle: " << value << "\n";
+                return 1;
+            }
+            continue;
+        }
+        if (argument == "--aa") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            options.startupAntiAliasingMode = ParseAntiAliasingMode(value);
+            if (!options.startupAntiAliasingMode.has_value()) {
+                std::cerr << "Unknown anti-aliasing mode: " << value << "\n";
+                return 1;
+            }
             continue;
         }
         if (argument == "--ssao") {
@@ -885,6 +967,30 @@ int main(int argc, char* argv[])
             options.startupExternalHdriPath = value;
             continue;
         }
+        if (argument == "--camera-position") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            options.startupCameraPosition = ParseVec3(value);
+            if (!options.startupCameraPosition.has_value()) {
+                std::cerr << "Invalid camera position: " << value << "\n";
+                return 1;
+            }
+            continue;
+        }
+        if (argument == "--camera-rotation") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            options.startupCameraRotation = ParseVec3(value);
+            if (!options.startupCameraRotation.has_value()) {
+                std::cerr << "Invalid camera rotation: " << value << "\n";
+                return 1;
+            }
+            continue;
+        }
         if (argument == "--ibl-diffuse") {
             const char* value = requireValue(argument);
             if (value == nullptr) {
@@ -916,7 +1022,7 @@ int main(int argc, char* argv[])
             if (value == nullptr) {
                 return 1;
             }
-            BenchmarkConfig benchmark;
+            BenchmarkConfig benchmark = options.benchmark.value_or(BenchmarkConfig{});
             benchmark.csvOutputPath = value;
             options.benchmark = benchmark;
             continue;

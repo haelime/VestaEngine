@@ -313,9 +313,12 @@ void CompositePass::SetPostProcess(float saturation,
     _motionBlurStrength = std::clamp(motionBlurStrength, 0.0f, 2.0f);
 }
 
-void CompositePass::SetAmbientOcclusion(bool enabled, float radius, float intensity)
+void CompositePass::SetAmbientOcclusion(bool enabled, bool screenSpaceEnabled, float radius, float intensity)
 {
-    _ssaoParams = glm::vec4(enabled ? 1.0f : 0.0f, std::max(radius, 0.01f), std::clamp(intensity, 0.0f, 4.0f), 0.0f);
+    _ssaoParams = glm::vec4(enabled ? 1.0f : 0.0f,
+        std::max(radius, 0.01f),
+        (enabled && screenSpaceEnabled) ? std::clamp(intensity, 0.0f, 4.0f) : 0.0f,
+        0.0f);
 }
 
 void CompositePass::SetShadowCascadeDebug(uint32_t cascadeCount, float splitLambda, bool overlayEnabled)

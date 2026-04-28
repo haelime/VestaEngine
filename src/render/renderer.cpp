@@ -235,7 +235,8 @@ bool NeedsDeferredPass(const RendererSettings& settings)
         return true;
     }
 
-    return settings.displayMode == RendererDisplayMode::Composite || settings.displayMode == RendererDisplayMode::DeferredLighting;
+    return settings.displayMode == RendererDisplayMode::Composite || settings.displayMode == RendererDisplayMode::DeferredLighting
+        || settings.displayMode == RendererDisplayMode::RayTracing;
 }
 
 bool NeedsGaussianPass(const RendererSettings& settings)
@@ -267,6 +268,26 @@ bool NeedsPathDenoisePass(const RendererSettings& settings)
     return NeedsPathTracePass(settings) && settings.enablePathTraceDenoiser && settings.pathTraceDebugView == PathTraceDebugView::Final;
 }
 
+bool EffectiveRtAmbientOcclusion(const RendererSettings& settings)
+{
+    return settings.enableAmbientOcclusion && (settings.enableRtAmbientOcclusion || settings.displayMode == RendererDisplayMode::RayTracing);
+}
+
+bool EffectiveRtGlobalIllumination(const RendererSettings& settings)
+{
+    return settings.enableGlobalIllumination && (settings.enableRtGlobalIllumination || settings.displayMode == RendererDisplayMode::RayTracing);
+}
+
+bool EffectiveRtShadows(const RendererSettings& settings)
+{
+    return settings.enableRtShadows || settings.displayMode == RendererDisplayMode::RayTracing;
+}
+
+bool EffectiveRtReflections(const RendererSettings& settings)
+{
+    return settings.enableRtReflections || settings.displayMode == RendererDisplayMode::RayTracing;
+}
+
 bool IsTemporalDebugView(RendererDebugView debugView)
 {
     return debugView == RendererDebugView::TemporalHistoryColor
@@ -284,8 +305,8 @@ bool NeedsTemporalAAPass(const RendererSettings& settings)
 
 bool IsRayEffectsRequested(const RendererSettings& settings)
 {
-    return settings.enableRtShadows || settings.enableRtAmbientOcclusion || settings.enableRtReflections
-        || settings.enableRtGlobalIllumination;
+    return EffectiveRtShadows(settings) || EffectiveRtAmbientOcclusion(settings) || EffectiveRtReflections(settings)
+        || EffectiveRtGlobalIllumination(settings);
 }
 
 bool IsRestirRequested(const RendererSettings& settings)
@@ -474,6 +495,38 @@ void ApplySceneLoadState(SceneLoadStatus& status, SceneLoadState nextState, std:
     ValidateSceneLoadTransition(status, nextState, context);
     status.state = nextState;
     status.message = std::move(message);
+    switch (nextState) {
+    case SceneLoadState::Parsing:
+        status.progress = std::max(status.progress, 0.05f);
+        break;
+    case SceneLoadState::Preparing:
+        status.progress = std::max(status.progress, 0.15f);
+        break;
+    case SceneLoadState::UploadingGeometry:
+        status.progress = std::max(status.progress, 0.22f);
+        break;
+    case SceneLoadState::UploadingTextures:
+        status.progress = std::max(status.progress, 0.62f);
+        break;
+    case SceneLoadState::BuildingBLAS:
+        status.progress = std::max(status.progress, 0.86f);
+        break;
+    case SceneLoadState::BuildingTLAS:
+        status.progress = std::max(status.progress, 0.93f);
+        break;
+    case SceneLoadState::ReadyToSwap:
+        status.progress = std::max(status.progress, 0.98f);
+        break;
+    case SceneLoadState::Ready:
+        status.progress = 1.0f;
+        break;
+    case SceneLoadState::Failed:
+    case SceneLoadState::Cancelled:
+    case SceneLoadState::Idle:
+    default:
+        status.progress = 0.0f;
+        break;
+    }
 }
 
 float ClampPathTraceScale(float scale)
@@ -827,19 +880,21 @@ void ConfigureDeferredLightingPass(Renderer& renderer, IRenderPass& pass, const 
     lightingPass.SetRayEffects(resources.rayEffects,
         resources.rayReflection,
         resources.rayGlobalIllumination,
-        settings.enableRtShadows,
-        settings.enableRtAmbientOcclusion,
-        settings.enableRtReflections,
+        EffectiveRtShadows(settings),
+        EffectiveRtAmbientOcclusion(settings),
+        EffectiveRtReflections(settings),
         settings.rtDenoiser,
         settings.rtTemporalAccumulation);
     lightingPass.SetRestirDiResolve(
-        resources.restirDirectLighting, settings.enableRestirDi || settings.enableRestirGi || settings.enableRestirPt);
-    lightingPass.SetAmbientOcclusion(settings.enableSsao, settings.ssaoRadius, settings.ssaoIntensity);
+        resources.restirDirectLighting,
+        settings.enableRestirDi || (settings.enableGlobalIllumination && settings.enableRestirGi) || settings.enableRestirPt);
+    lightingPass.SetAmbientOcclusion(
+        settings.enableAmbientOcclusion, settings.enableSsao, settings.ssaoRadius, settings.ssaoIntensity);
     lightingPass.SetScreenSpaceReflections(
         settings.enableSsr, settings.ssrMaxDistance, settings.ssrThickness, settings.ssrIntensity);
     lightingPass.SetScreenSpaceGlobalIllumination(
-        settings.enableSsgi, settings.ssgiRadius, settings.ssgiIntensity, settings.ssgiSampleCount);
-    lightingPass.SetDdgi(settings.enableDdgi,
+        settings.enableGlobalIllumination && settings.enableSsgi, settings.ssgiRadius, settings.ssgiIntensity, settings.ssgiSampleCount);
+    lightingPass.SetDdgi(settings.enableGlobalIllumination && settings.enableDdgi,
         settings.ddgiProbeCountX,
         settings.ddgiProbeCountY,
         settings.ddgiProbeCountZ,
@@ -893,10 +948,10 @@ void ConfigureRayEffectsPass(Renderer& renderer, IRenderPass& pass, const Render
     rayEffectsPass.SetFrameSlot(renderer.GetFrameSlot());
     rayEffectsPass.SetFrameIndex(renderer.GetPathTraceFrameIndex());
     rayEffectsPass.SetLight(settings.lightDirectionAndIntensity);
-    rayEffectsPass.SetControls(settings.enableRtShadows,
-        settings.enableRtAmbientOcclusion,
-        settings.enableRtReflections,
-        settings.enableRtGlobalIllumination,
+    rayEffectsPass.SetControls(EffectiveRtShadows(settings),
+        EffectiveRtAmbientOcclusion(settings),
+        EffectiveRtReflections(settings),
+        EffectiveRtGlobalIllumination(settings),
         settings.rtShadowSamples,
         settings.rtAoSamples,
         settings.rtReflectionSamples,
@@ -1045,6 +1100,7 @@ void ConfigurePathTracerPass(Renderer& renderer, IRenderPass& pass, const Render
         glm::vec4(renderer.GetCamera().GetUp(), settings.cameraFocalDistance));
     pathTracerPass.SetSamplesPerPixel(settings.pathTraceSamplesPerPixel);
     pathTracerPass.SetMaxBounces(settings.pathTraceMaxBounces);
+    pathTracerPass.SetFeatureToggles(settings.enableGlobalIllumination, settings.enableAmbientOcclusion);
     pathTracerPass.SetIntegratorControls(settings.pathTraceNextEventEstimation,
         settings.pathTraceRussianRoulette,
         settings.pathTraceRussianRouletteDepth,
@@ -1153,7 +1209,10 @@ void ConfigureCompositePass(Renderer& renderer, IRenderPass& pass, const Rendere
         renderer.GetSettings().enableMotionBlur,
         renderer.GetSettings().motionBlurStrength);
     compositePass.SetAmbientOcclusion(
-        renderer.GetSettings().enableSsao, renderer.GetSettings().ssaoRadius, renderer.GetSettings().ssaoIntensity);
+        renderer.GetSettings().enableAmbientOcclusion,
+        renderer.GetSettings().enableSsao,
+        renderer.GetSettings().ssaoRadius,
+        renderer.GetSettings().ssaoIntensity);
     compositePass.SetShadowCascadeDebug(renderer.GetSettings().shadowCascadeCount,
         renderer.GetSettings().shadowCascadeLambda,
         renderer.GetSettings().showShadowCascadeOverlay);
@@ -1161,6 +1220,35 @@ void ConfigureCompositePass(Renderer& renderer, IRenderPass& pass, const Rendere
     compositePass.SetDepthRange(renderer.GetCamera().GetNearPlane(), renderer.GetCamera().GetFarPlane());
 }
 } // namespace
+
+void ApplyDisplayModePassSelection(RendererSettings& settings, RendererDisplayMode mode)
+{
+    settings.displayMode = mode;
+    switch (mode) {
+    case RendererDisplayMode::DeferredLighting:
+    case RendererDisplayMode::RayTracing:
+        settings.enableRaster = true;
+        settings.enableGaussian = false;
+        settings.enablePathTracing = false;
+        break;
+    case RendererDisplayMode::Gaussian:
+        settings.enableRaster = false;
+        settings.enableGaussian = true;
+        settings.enablePathTracing = false;
+        break;
+    case RendererDisplayMode::PathTrace:
+        settings.enableRaster = false;
+        settings.enableGaussian = false;
+        settings.enablePathTracing = true;
+        break;
+    case RendererDisplayMode::Composite:
+    default:
+        settings.enableRaster = true;
+        settings.enableGaussian = true;
+        settings.enablePathTracing = true;
+        break;
+    }
+}
 
 TransientImageKey TransientImagePool::MakeKey(const ImageDesc& desc)
 {
@@ -1333,16 +1421,19 @@ void Renderer::HandleEvent(const SDL_Event& event)
 
     switch (event.key.keysym.sym) {
     case SDLK_1:
-        _settings.displayMode = RendererDisplayMode::DeferredLighting;
+        ApplyDisplayModePassSelection(_settings, RendererDisplayMode::DeferredLighting);
         break;
     case SDLK_2:
-        _settings.displayMode = RendererDisplayMode::Gaussian;
+        ApplyDisplayModePassSelection(_settings, RendererDisplayMode::Gaussian);
         break;
     case SDLK_3:
-        _settings.displayMode = RendererDisplayMode::PathTrace;
+        ApplyDisplayModePassSelection(_settings, RendererDisplayMode::RayTracing);
         break;
     case SDLK_4:
-        _settings.displayMode = RendererDisplayMode::Composite;
+        ApplyDisplayModePassSelection(_settings, RendererDisplayMode::PathTrace);
+        break;
+    case SDLK_5:
+        ApplyDisplayModePassSelection(_settings, RendererDisplayMode::Composite);
         break;
     case SDLK_g:
         _settings.enableGaussian = !_settings.enableGaussian;
@@ -2029,9 +2120,12 @@ void Renderer::EndSceneEditDrag()
 
 SceneUploadOptions Renderer::GetSceneUploadOptions() const
 {
+    const bool needsRayTracingScene = _settings.displayMode == RendererDisplayMode::RayTracing
+        || (_settings.displayMode == RendererDisplayMode::PathTrace && GetActivePathTraceBackend() == PathTraceBackend::HardwareRT)
+        || IsRayEffectsRequested(_settings);
     return SceneUploadOptions{
         .useDeviceLocalSceneBuffers = _settings.useDeviceLocalSceneBuffers,
-        .buildRayTracingStructuresOnLoad = _settings.buildRayTracingStructuresOnLoad,
+        .buildRayTracingStructuresOnLoad = _settings.buildRayTracingStructuresOnLoad && needsRayTracingScene,
         .textureStreamingEnabled = _settings.textureStreamingEnabled,
         .useDeviceLocalTextures = _settings.useDeviceLocalTextures,
     };
@@ -2071,29 +2165,49 @@ bool Renderer::LoadSceneAsync(const std::filesystem::path& path)
     }
 
     const std::filesystem::path resolvedPath = vkutil::resolve_runtime_path(path);
+    _sceneLoadCancelRequested = false;
+    _sceneLoadCancellationToken = std::make_shared<std::atomic_bool>(false);
+    _sceneLoadProgress = std::make_shared<AsyncSceneLoadProgress>();
     _sceneLoadStatus = SceneLoadStatus{
         .state = SceneLoadState::Parsing,
         .path = resolvedPath,
         .message = "Parsing and preparing " + resolvedPath.filename().string() + "...",
+        .progress = 0.05f,
     };
     _sceneLoadInProgress = true;
-    _sceneLoadFuture = _jobs.Submit(vesta::core::JobPriority::Background, [resolvedPath]() {
+    std::shared_ptr<std::atomic_bool> cancellationToken = _sceneLoadCancellationToken;
+    std::shared_ptr<AsyncSceneLoadProgress> loadProgress = _sceneLoadProgress;
+    _sceneLoadFuture = _jobs.Submit(vesta::core::JobPriority::Background, [resolvedPath, cancellationToken, loadProgress]() {
         AsyncSceneLoadResult result;
         result.path = resolvedPath;
         const auto parseStart = std::chrono::steady_clock::now();
 
         try {
             vesta::scene::Scene loadedScene;
+            if (loadProgress) {
+                loadProgress->progress.store(0.08f, std::memory_order_relaxed);
+                std::scoped_lock lock(loadProgress->messageMutex);
+                loadProgress->message = "Parsing";
+            }
             result.success = loadedScene.ParseFromFile(resolvedPath);
+            result.cancelled = cancellationToken != nullptr && cancellationToken->load(std::memory_order_relaxed);
             result.parseMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - parseStart).count();
-            if (result.success) {
+            if (result.success && !result.cancelled) {
                 const auto prepareStart = std::chrono::steady_clock::now();
+                if (loadProgress) {
+                    loadProgress->progress.store(0.15f, std::memory_order_relaxed);
+                    std::scoped_lock lock(loadProgress->messageMutex);
+                    loadProgress->message = "Preparing";
+                }
                 result.success = loadedScene.PrepareParsedScene();
+                result.cancelled = cancellationToken != nullptr && cancellationToken->load(std::memory_order_relaxed);
                 result.prepareMs =
                     std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - prepareStart).count();
             }
-            if (result.success) {
+            if (result.success && !result.cancelled) {
                 result.scene = std::move(loadedScene);
+            } else if (result.cancelled) {
+                result.errorMessage = "Scene load cancelled.";
             } else {
                 result.errorMessage = result.prepareMs > 0.0f ? "Failed to prepare scene file." : "Failed to parse scene file.";
             }
@@ -2108,6 +2222,39 @@ bool Renderer::LoadSceneAsync(const std::filesystem::path& path)
         }
         return result;
     });
+    return true;
+}
+
+bool Renderer::CancelSceneLoad()
+{
+    if (!_sceneLoadInProgress && !_pendingSceneUpload.active && !_sceneLoadFuture.valid()) {
+        return false;
+    }
+
+    _sceneLoadCancelRequested = true;
+    if (_sceneLoadCancellationToken) {
+        _sceneLoadCancellationToken->store(true, std::memory_order_relaxed);
+    }
+    _sceneLoadStatus.cancelRequested = true;
+    _sceneLoadStatus.message = "Cancelling "
+        + (_sceneLoadStatus.path.empty() ? std::string("scene") : _sceneLoadStatus.path.filename().string()) + "...";
+
+    if (_pendingSceneUpload.active) {
+        _device.FlushUploadBatch();
+        _pendingSceneUpload.scene.DestroyGpu(_device);
+        _pendingSceneUpload = {};
+        _sceneLoadInProgress = _sceneLoadFuture.valid();
+        ApplySceneLoadState(_sceneLoadStatus, SceneLoadState::Cancelled, "Scene load cancelled.", "CancelSceneLoad");
+        _sceneLoadStatus.cancelRequested = _sceneLoadInProgress;
+        _sceneLoadStatus.uploadStage.clear();
+        _sceneLoadStatus.lastBlockingWait.clear();
+        _sceneLoadStatus.pendingUploadBytes = 0;
+        _sceneLoadStatus.pendingUploadCopies = 0;
+        return true;
+    }
+
+    ApplySceneLoadState(_sceneLoadStatus, SceneLoadState::Cancelled, _sceneLoadStatus.message, "CancelSceneLoad");
+    _sceneLoadStatus.cancelRequested = true;
     return true;
 }
 
@@ -3094,10 +3241,10 @@ RayEffectsStats Renderer::GetRayEffectsStats() const
     stats.aoSamples = std::clamp(_settings.rtAoSamples, 1u, 8u);
     stats.reflectionSamples = std::clamp(_settings.rtReflectionSamples, 1u, 8u);
     stats.giSamples = std::clamp(_settings.rtGiSamples, 1u, 8u);
-    stats.shadowsRequested = _settings.enableRtShadows;
-    stats.aoRequested = _settings.enableRtAmbientOcclusion;
-    stats.reflectionsRequested = _settings.enableRtReflections;
-    stats.giRequested = _settings.enableRtGlobalIllumination;
+    stats.shadowsRequested = EffectiveRtShadows(_settings);
+    stats.aoRequested = EffectiveRtAmbientOcclusion(_settings);
+    stats.reflectionsRequested = EffectiveRtReflections(_settings);
+    stats.giRequested = EffectiveRtGlobalIllumination(_settings);
     stats.rayQueryAvailable = _device.GetRayTracingSupport().rayQueryFeatures.rayQuery == VK_TRUE;
     stats.rtPipelineAvailable = _device.GetRayTracingSupport().rayTracingPipelineFeatures.rayTracingPipeline == VK_TRUE;
     stats.tlasAvailable = _scene.HasRayTracingScene();
@@ -3216,11 +3363,14 @@ std::vector<RenderPassDebugInfo> Renderer::GetRenderPassDebugInfo() const
             const uint32_t rayEffectsHeight =
                 _settings.rtHalfResolution ? std::max(1u, (extent.height + 1u) / 2u) : extent.height;
             const uint64_t rayPixels = static_cast<uint64_t>(rayEffectsWidth) * rayEffectsHeight;
-            info.shadowRayCount = _settings.enableRtShadows ? rayPixels * std::clamp(_settings.rtShadowSamples, 1u, 8u) : 0ull;
-            info.diffuseRayCount =
-                _settings.enableRtAmbientOcclusion ? rayPixels * std::clamp(_settings.rtAoSamples, 1u, 8u) : 0ull;
+            info.shadowRayCount = EffectiveRtShadows(_settings) ? rayPixels * std::clamp(_settings.rtShadowSamples, 1u, 8u) : 0ull;
+            const uint64_t aoRayCount =
+                EffectiveRtAmbientOcclusion(_settings) ? rayPixels * std::clamp(_settings.rtAoSamples, 1u, 8u) : 0ull;
+            const uint64_t giRayCount =
+                EffectiveRtGlobalIllumination(_settings) ? rayPixels * std::clamp(_settings.rtGiSamples, 1u, 8u) : 0ull;
+            info.diffuseRayCount = aoRayCount + giRayCount;
             info.specularRayCount =
-                _settings.enableRtReflections ? rayPixels * std::clamp(_settings.rtReflectionSamples, 1u, 8u) : 0ull;
+                EffectiveRtReflections(_settings) ? rayPixels * std::clamp(_settings.rtReflectionSamples, 1u, 8u) : 0ull;
             info.rayCount = info.shadowRayCount + info.diffuseRayCount + info.specularRayCount;
         } else if (entry.id == "restir-di") {
             const RestirStats restirStats = GetRestirStats();
@@ -3847,13 +3997,47 @@ void Renderer::PumpSceneLoadRequests()
 
     using namespace std::chrono_literals;
     if (_sceneLoadFuture.wait_for(0ms) != std::future_status::ready) {
+        if (_sceneLoadProgress && !_sceneLoadStatus.cancelRequested) {
+            const float progress = _sceneLoadProgress->progress.load(std::memory_order_relaxed);
+            std::string progressMessage;
+            {
+                std::scoped_lock lock(_sceneLoadProgress->messageMutex);
+                progressMessage = _sceneLoadProgress->message;
+            }
+            if (progress > 0.0f) {
+                _sceneLoadStatus.progress = std::max(_sceneLoadStatus.progress, progress);
+            }
+            if (!progressMessage.empty()) {
+                const std::string sceneName =
+                    _sceneLoadStatus.path.empty() ? std::string("scene") : _sceneLoadStatus.path.filename().string();
+                _sceneLoadStatus.message = progressMessage + " " + sceneName + "...";
+            }
+        }
         return;
     }
 
     AsyncSceneLoadResult result = _sceneLoadFuture.get();
 
+    if (_sceneLoadCancelRequested || result.cancelled) {
+        _sceneLoadInProgress = false;
+        _sceneLoadCancelRequested = false;
+        _sceneLoadCancellationToken.reset();
+        _sceneLoadProgress.reset();
+        ApplySceneLoadState(_sceneLoadStatus,
+            SceneLoadState::Cancelled,
+            "Scene load cancelled.",
+            "PumpSceneLoadRequests::Cancelled");
+        _sceneLoadStatus.path = result.path;
+        _sceneLoadStatus.cancelRequested = false;
+        _sceneLoadStatus.pendingUploadBytes = 0;
+        _sceneLoadStatus.pendingUploadCopies = 0;
+        return;
+    }
+
     if (!result.success) {
         _sceneLoadInProgress = false;
+        _sceneLoadCancellationToken.reset();
+        _sceneLoadProgress.reset();
         const std::string sceneName = result.path.empty() ? std::string("scene") : result.path.filename().string();
         _sceneLoadStatus.state = SceneLoadState::Failed;
         _sceneLoadStatus.path = result.path;
@@ -3876,6 +4060,9 @@ void Renderer::PumpSceneLoadRequests()
     _sceneLoadStatus.parseMs = result.parseMs;
     _sceneLoadStatus.prepareMs = result.prepareMs;
     _sceneLoadStatus.message = "Uploading " + result.path.filename().string() + "...";
+    _sceneLoadStatus.progress = std::max(_sceneLoadStatus.progress, 0.22f);
+    _sceneLoadCancellationToken.reset();
+    _sceneLoadProgress.reset();
     if (UsesStreamingUpload(_settings)) {
         StartPendingSceneUpload(std::move(result.scene), result.parseMs, result.prepareMs);
     } else {
@@ -3893,6 +4080,21 @@ void Renderer::PumpSceneLoadRequests()
 void Renderer::PumpPendingSceneUpload()
 {
     if (!_pendingSceneUpload.active) {
+        return;
+    }
+
+    if (_sceneLoadCancelRequested) {
+        _device.FlushUploadBatch();
+        _pendingSceneUpload.scene.DestroyGpu(_device);
+        _pendingSceneUpload = {};
+        _sceneLoadInProgress = false;
+        _sceneLoadCancelRequested = false;
+        ApplySceneLoadState(_sceneLoadStatus, SceneLoadState::Cancelled, "Scene load cancelled.", "PumpPendingSceneUpload::Cancelled");
+        _sceneLoadStatus.cancelRequested = false;
+        _sceneLoadStatus.uploadStage.clear();
+        _sceneLoadStatus.lastBlockingWait.clear();
+        _sceneLoadStatus.pendingUploadBytes = 0;
+        _sceneLoadStatus.pendingUploadCopies = 0;
         return;
     }
 
@@ -3935,6 +4137,50 @@ void Renderer::PumpPendingSceneUpload()
         _sceneLoadStatus.message = "Pending scene upload lost its prepared scene.";
         return;
     }
+
+    const uint64_t geometryUploadBytes =
+        static_cast<uint64_t>(sizeof(vesta::scene::SceneVertex)) * prepared->vertices.size()
+        + static_cast<uint64_t>(sizeof(vesta::scene::GaussianPrimitive)) * prepared->gaussians.size()
+        + static_cast<uint64_t>(sizeof(vesta::scene::SceneMaterial)) * prepared->materials.size()
+        + static_cast<uint64_t>(sizeof(uint32_t)) * prepared->indices.size()
+        + static_cast<uint64_t>(sizeof(vesta::scene::SceneTriangle)) * prepared->triangles.size();
+    uint64_t textureUploadBytes = 0;
+    for (const vesta::scene::SceneTextureAsset& texture : prepared->textures) {
+        if (texture.IsValid()) {
+            textureUploadBytes += static_cast<uint64_t>(texture.rgba8Pixels.size());
+        }
+    }
+    const uint64_t totalUploadBytes = std::max<uint64_t>(geometryUploadBytes + textureUploadBytes, 1u);
+    const auto updateProgress = [&]() {
+        uint64_t completedBytes = 0;
+        completedBytes += std::min<uint64_t>(_pendingSceneUpload.vertexOffsetBytes,
+            static_cast<uint64_t>(sizeof(vesta::scene::SceneVertex)) * prepared->vertices.size());
+        completedBytes += std::min<uint64_t>(_pendingSceneUpload.gaussianOffsetBytes,
+            static_cast<uint64_t>(sizeof(vesta::scene::GaussianPrimitive)) * prepared->gaussians.size());
+        completedBytes += std::min<uint64_t>(_pendingSceneUpload.materialOffsetBytes,
+            static_cast<uint64_t>(sizeof(vesta::scene::SceneMaterial)) * prepared->materials.size());
+        completedBytes += std::min<uint64_t>(_pendingSceneUpload.indexOffsetBytes,
+            static_cast<uint64_t>(sizeof(uint32_t)) * prepared->indices.size());
+        completedBytes += std::min<uint64_t>(_pendingSceneUpload.triangleOffsetBytes,
+            static_cast<uint64_t>(sizeof(vesta::scene::SceneTriangle)) * prepared->triangles.size());
+        uint64_t completedTextureBytes = 0;
+        for (size_t textureIndex = 0; textureIndex < std::min(_pendingSceneUpload.textureIndex, prepared->textures.size()); ++textureIndex) {
+            if (prepared->textures[textureIndex].IsValid()) {
+                completedTextureBytes += static_cast<uint64_t>(prepared->textures[textureIndex].rgba8Pixels.size());
+            }
+        }
+        completedBytes += completedTextureBytes;
+        _sceneLoadStatus.completedUploadBytes = std::min(completedBytes, totalUploadBytes);
+        _sceneLoadStatus.totalUploadBytes = totalUploadBytes;
+        _sceneLoadStatus.pendingUploadBytes = totalUploadBytes - _sceneLoadStatus.completedUploadBytes;
+        _sceneLoadStatus.pendingUploadCopies = static_cast<uint32_t>(
+            (_sceneLoadStatus.pendingUploadBytes + uploadChunkBytes - 1u) / uploadChunkBytes);
+        _sceneLoadStatus.uploadedTextures = static_cast<uint32_t>(std::min(_pendingSceneUpload.textureIndex, prepared->textures.size()));
+        _sceneLoadStatus.totalTextures = static_cast<uint32_t>(prepared->textures.size());
+        const float byteProgress = static_cast<float>(_sceneLoadStatus.completedUploadBytes) / static_cast<float>(totalUploadBytes);
+        _sceneLoadStatus.progress = std::max(_sceneLoadStatus.progress, 0.22f + byteProgress * 0.62f);
+    };
+    updateProgress();
 
     size_t remainingUploadBudget = uploadChunkBytes;
     while (_pendingSceneUpload.active) {
@@ -4149,6 +4395,10 @@ void Renderer::PumpPendingSceneUpload()
                 std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - uploadStart).count();
             _sceneLoadStatus.geometryUploadMs = _pendingSceneUpload.uploadMs;
             _sceneLoadStatus.textureUploadMs = _pendingSceneUpload.textureUploadMs;
+            _sceneLoadStatus.completedUploadBytes = _sceneLoadStatus.totalUploadBytes;
+            _sceneLoadStatus.pendingUploadBytes = 0;
+            _sceneLoadStatus.pendingUploadCopies = 0;
+            _sceneLoadStatus.uploadedTextures = _sceneLoadStatus.totalTextures;
             _sceneLoadInProgress = false;
             ApplyLoadedScene(std::move(_pendingSceneUpload.scene));
             _pendingSceneUpload = {};
@@ -4173,6 +4423,7 @@ void Renderer::PumpPendingSceneUpload()
     _sceneLoadStatus.textureUploadMs = _pendingSceneUpload.textureUploadMs;
     _sceneLoadStatus.blasMs = _pendingSceneUpload.scene.GetBottomLevelBuildMs();
     _sceneLoadStatus.tlasMs = _pendingSceneUpload.scene.GetTopLevelBuildMs();
+    updateProgress();
 }
 
 void Renderer::PumpVisibilityResults()
@@ -4462,9 +4713,10 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
     const bool useRestirPass = IsRestirRequested(_settings)
         && (_restirReservoirBuffer || _restirGiReservoirBuffer || _restirPtReservoirBuffer);
     const bool useRestirResolvePass = useDeferredPass && useRestirPass
-        && ((_settings.enableRestirDi && _restirReservoirBuffer) || (_settings.enableRestirGi && _restirGiReservoirBuffer)
+        && ((_settings.enableRestirDi && _restirReservoirBuffer)
+            || (_settings.enableGlobalIllumination && _settings.enableRestirGi && _restirGiReservoirBuffer)
             || (_settings.enableRestirPt && _restirPtReservoirBuffer));
-    const bool useDdgiProbeUpdatePass = _settings.enableDdgi && _ddgiIrradianceBuffer && _ddgiVisibilityBuffer
+    const bool useDdgiProbeUpdatePass = _settings.enableGlobalIllumination && _settings.enableDdgi && _ddgiIrradianceBuffer && _ddgiVisibilityBuffer
         && _device.GetRayTracingSupport().rayQueryFeatures.rayQuery == VK_TRUE && _scene.HasRayTracingScene();
     const bool useGaussianPass = NeedsGaussianPass(_settings);
     const bool usePathTracePass = NeedsPathTracePass(_settings);
@@ -4542,12 +4794,12 @@ RenderGraph Renderer::BuildFrameGraph(uint32_t swapchainImageIndex)
             rayEffectsDesc.extent.height = std::max(1u, (rasterRenderExtent.height + 1u) / 2u);
         }
         resources.rayEffects = graph.CreateTexture("RayEffects", rayEffectsDesc);
-        if (_settings.enableRtReflections) {
+        if (EffectiveRtReflections(_settings)) {
             ImageDesc rayReflectionDesc = rayEffectsDesc;
             rayReflectionDesc.debugName = "RayEffects.Reflection";
             resources.rayReflection = graph.CreateTexture("RayEffects.Reflection", rayReflectionDesc);
         }
-        if (_settings.enableRtGlobalIllumination) {
+        if (EffectiveRtGlobalIllumination(_settings)) {
             ImageDesc rayGiDesc = rayEffectsDesc;
             rayGiDesc.debugName = "RayEffects.GI";
             resources.rayGlobalIllumination = graph.CreateTexture("RayEffects.GI", rayGiDesc);

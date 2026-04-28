@@ -151,7 +151,7 @@ vec3 resolveShadowCascadeColor(ivec2 pixel)
 
 float computeScreenSpaceAo(ivec2 pixel, ivec2 size, vec3 worldPosition, vec3 normal, float depth)
 {
-    if (pc.ssaoParams.x < 0.5 || depth >= 0.99999 || !hasImage(pc.imageIndices2.w)) {
+    if (pc.ssaoParams.x < 0.5 || pc.ssaoParams.z <= 0.0 || depth >= 0.99999 || !hasImage(pc.imageIndices2.w)) {
         return 1.0;
     }
 
@@ -180,9 +180,10 @@ float computeScreenSpaceAo(ivec2 pixel, ivec2 size, vec3 worldPosition, vec3 nor
             continue;
         }
 
-        float hemisphereWeight = max(dot(normal, delta / distanceToSample), 0.0);
+        float surfaceSeparation = dot(normal, delta);
+        float hemisphereWeight = max(surfaceSeparation / max(distanceToSample, 0.0001), 0.0);
         float rangeWeight = smoothstep(pc.ssaoParams.y, 0.0, distanceToSample);
-        float isOccluder = sampleDepth < depth - 0.0008 ? 1.0 : 0.0;
+        float isOccluder = surfaceSeparation > 0.015 ? 1.0 : 0.0;
         float weight = mix(0.35, 1.0, hemisphereWeight) * rangeWeight;
         occlusion += isOccluder * weight;
         weightSum += weight;
@@ -288,7 +289,7 @@ vec3 resolveDebugView(ivec2 pixel)
         vec4 normalRoughness = loadStorage(pc.imageIndices2.y, clampedPixel);
         vec3 normal = normalize(normalRoughness.xyz * 2.0 - 1.0);
         vec3 worldPosition = reconstructWorldPosition(clampedPixel, size, depth);
-        float materialAo = clamp(loadStorage(pc.imageIndices2.x, clampedPixel).a, 0.0, 1.0);
+        float materialAo = pc.ssaoParams.x >= 0.5 ? clamp(loadStorage(pc.imageIndices2.x, clampedPixel).a, 0.0, 1.0) : 1.0;
         return vec3(materialAo * computeScreenSpaceAo(clampedPixel, size, worldPosition, normal, depth));
     }
     if (debugView == 12u) {
