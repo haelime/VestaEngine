@@ -3,9 +3,11 @@
 #include <array>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <glm/glm.hpp>
@@ -250,6 +252,11 @@ struct GpuScene {
     float topLevelBuildMs{ 0.0f };
 };
 
+struct SceneParseCallbacks {
+    std::function<bool()> isCancelled;
+    std::function<void(float, std::string_view)> reportProgress;
+};
+
 class Scene {
 public:
     Scene() = default;
@@ -260,6 +267,7 @@ public:
 
     // ParseFromFile reads the source asset into a CPU-side intermediate form.
     bool ParseFromFile(const std::filesystem::path& path);
+    bool ParseFromFile(const std::filesystem::path& path, const SceneParseCallbacks& callbacks);
     // PrepareParsedScene flattens ParsedScene into the CPU buffers consumed by
     // raster, Gaussian, and path tracing passes.
     bool PrepareParsedScene();

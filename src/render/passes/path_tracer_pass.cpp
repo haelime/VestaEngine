@@ -405,7 +405,9 @@ void PathTracerPass::Setup(RenderGraphBuilder& builder)
 
 void PathTracerPass::Execute(const RenderGraphContext& context)
 {
-    _activeBackend = PathTraceBackend::Compute;
+    const bool wantsHardwareRt = _backendPreference == PathTraceBackend::HardwareRT
+        || (_backendPreference == PathTraceBackend::Auto && context.GetDevice().IsRayTracingSupported());
+    _activeBackend = wantsHardwareRt ? PathTraceBackend::HardwareRT : PathTraceBackend::Compute;
 
     // Empty output is still preferable to leaving stale accumulation around when
     // the pass is disabled or the scene has not finished loading.
@@ -414,7 +416,6 @@ void PathTracerPass::Execute(const RenderGraphContext& context)
         return;
     }
 
-    const bool wantsHardwareRt = _backendPreference != PathTraceBackend::Compute;
     const bool canUseHardwareRt = wantsHardwareRt && context.GetDevice().IsRayTracingSupported()
         && _scene->HasRayTracingScene() && _rtPipeline != VK_NULL_HANDLE;
 
@@ -531,7 +532,30 @@ void PathTracerPass::Execute(const RenderGraphContext& context)
         return;
     }
 
+    if (wantsHardwareRt) {
+        ClearOutput(context, _output);
+        if (_normalGuide) {
+            ClearOutput(context, _normalGuide);
+        }
+        if (_depthGuide) {
+            ClearOutput(context, _depthGuide);
+        }
+        return;
+    }
+
     if (_pipeline == VK_NULL_HANDLE) {
+        ClearOutput(context, _output);
+        if (_normalGuide) {
+            ClearOutput(context, _normalGuide);
+        }
+        if (_depthGuide) {
+            ClearOutput(context, _depthGuide);
+        }
+        return;
+    }
+
+    constexpr size_t kMaxComputePathTraceTriangles = 250000;
+    if (_scene->GetTriangles().size() > kMaxComputePathTraceTriangles) {
         ClearOutput(context, _output);
         if (_normalGuide) {
             ClearOutput(context, _normalGuide);

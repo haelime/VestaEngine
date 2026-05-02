@@ -74,12 +74,11 @@ struct BenchmarkScenePreset {
     const char* purpose;
 };
 
-constexpr std::array<BenchmarkScenePreset, 10> kBenchmarkScenePresets{
+constexpr std::array<BenchmarkScenePreset, 9> kBenchmarkScenePresets{
     BenchmarkScenePreset{ "Sponza Atrium", "assets/benchmark_scenes/sponza/sponza.obj", "Large raster/PBR scene" },
-    BenchmarkScenePreset{ "Amazon Bistro Exterior", "assets/benchmark_scenes/bistro_exterior/exterior.obj", "Large outdoor stress scene" },
-    BenchmarkScenePreset{ "Amazon Bistro Interior", "assets/benchmark_scenes/bistro_interior/interior.obj", "Interior lighting stress scene" },
     BenchmarkScenePreset{ "Amazon Bistro 5.2 Exterior", "assets/benchmark_scenes/Bistro_v5_2/BistroExterior.fbx", "Large outdoor stress scene" },
     BenchmarkScenePreset{ "Amazon Bistro 5.2 Interior", "assets/benchmark_scenes/Bistro_v5_2/BistroInterior.fbx", "Interior lighting stress scene" },
+    BenchmarkScenePreset{ "San Miguel", "assets/benchmark_scenes/san_miguel/san-miguel.obj", "Large textured GI scene" },
     BenchmarkScenePreset{ "San Miguel Low Poly", "assets/benchmark_scenes/san_miguel/san-miguel-low-poly.obj", "Large textured GI scene" },
     BenchmarkScenePreset{ "Cornell Box", "assets/benchmark_scenes/cornell_box/cornell-box.obj", "Reference path-tracing scene" },
     BenchmarkScenePreset{ "Stanford Bunny", "assets/benchmark_scenes/stanford_bunny/bunny/reconstruction/bun_zipper.ply", "Classic mesh validation model" },
@@ -3519,8 +3518,21 @@ void VestaEngine::build_main_menu_bar()
             ImGui::EndMenu();
         }
 
-        const std::string& sceneStatus = _renderer.GetSceneLoadStatusMessage();
-        if (!sceneStatus.empty()) {
+        const auto& sceneLoadStatus = _renderer.GetSceneLoadStatus();
+        const std::string& sceneStatus = sceneLoadStatus.message;
+        if (sceneLoadInProgress) {
+            const float progress = std::clamp(sceneLoadStatus.progress, 0.0f, 1.0f);
+            const std::string overlay = fmt::format("{:.0f}%", progress * 100.0f);
+            const std::string sceneName = sceneLoadStatus.path.empty() ? std::string("scene") : sceneLoadStatus.path.filename().string();
+            ImGui::Separator();
+            ImGui::TextDisabled("Loading %s", sceneName.c_str());
+            ImGui::SameLine();
+            ImGui::ProgressBar(progress, ImVec2(150.0f, 0.0f), overlay.c_str());
+            ImGui::SameLine();
+            if (ImGui::SmallButton(sceneLoadStatus.cancelRequested ? "Cancelling" : "Cancel")) {
+                _renderer.CancelSceneLoad();
+            }
+        } else if (!sceneStatus.empty()) {
             ImGui::Separator();
             ImGui::TextDisabled("%s", sceneStatus.c_str());
         }

@@ -939,6 +939,18 @@ float Luminance(glm::vec3 color)
     return glm::dot(color, glm::vec3(0.2126f, 0.7152f, 0.0722f));
 }
 
+bool SceneParseCancelled(const SceneParseCallbacks* callbacks)
+{
+    return callbacks != nullptr && callbacks->isCancelled && callbacks->isCancelled();
+}
+
+void ReportSceneParseProgress(const SceneParseCallbacks* callbacks, float progress, std::string_view message)
+{
+    if (callbacks != nullptr && callbacks->reportProgress) {
+        callbacks->reportProgress(glm::clamp(progress, 0.0f, 1.0f), message);
+    }
+}
+
 std::vector<ObjMaterialRecord> ParseObjMaterialLibraries(
     const std::filesystem::path& objPath,
     ParsedScene& parsedScene,
@@ -1106,12 +1118,13 @@ const T* ResolveObjIndexedValue(std::span<const T> values, int objIndex)
     return &values[static_cast<size_t>(resolved)];
 }
 
-bool ParseObjMesh(const std::filesystem::path& path, ParsedScene& parsedScene)
+bool ParseObjMesh(const std::filesystem::path& path, ParsedScene& parsedScene, const SceneParseCallbacks* callbacks)
 {
     std::ifstream input(path);
     if (!input.is_open()) {
         return false;
     }
+    const uint64_t fileBytes = std::filesystem::file_size(path);
 
     std::vector<glm::vec3> positions;
     std::vector<glm::vec3> normals;
@@ -1172,7 +1185,19 @@ bool ParseObjMesh(const std::filesystem::path& path, ParsedScene& parsedScene)
     std::string line;
     std::vector<ObjVertexKey> face;
     face.reserve(8);
+    uint64_t consumedBytes = 0;
+    uint32_t lineCounter = 0;
     while (std::getline(input, line)) {
+        consumedBytes += static_cast<uint64_t>(line.size() + 1u);
+        if ((++lineCounter & 4095u) == 0u) {
+            if (SceneParseCancelled(callbacks)) {
+                return false;
+            }
+            const float progress = fileBytes > 0u ? static_cast<float>(
+                std::min<uint64_t>(consumedBytes, fileBytes)) / static_cast<float>(fileBytes)
+                                                  : 0.0f;
+            ReportSceneParseProgress(callbacks, progress, fmt::format("Parsing OBJ {:.0f}%", progress * 100.0f));
+        }
         const std::string_view trimmed = TrimAsciiView(line);
         if (trimmed.empty() || trimmed.front() == '#') {
             continue;
@@ -1229,6 +1254,10 @@ bool ParseObjMesh(const std::filesystem::path& path, ParsedScene& parsedScene)
             }
         }
     }
+    if (SceneParseCancelled(callbacks)) {
+        return false;
+    }
+    ReportSceneParseProgress(callbacks, 1.0f, "Parsing OBJ 100%");
 
     const uint32_t objectIndex = static_cast<uint32_t>(parsedScene.objects.size());
     const uint32_t firstPrimitive = static_cast<uint32_t>(parsedScene.primitives.size());
@@ -2791,10 +2820,20 @@ bool Scene::LoadFromFile(const std::filesystem::path& path)
 
 bool Scene::ParseFromFile(const std::filesystem::path& path)
 {
+    static const SceneParseCallbacks kNoCallbacks{};
+    return ParseFromFile(path, kNoCallbacks);
+}
+
+bool Scene::ParseFromFile(const std::filesystem::path& path, const SceneParseCallbacks& callbacks)
+{
     _parsed.reset();
     _prepared.reset();
 
     if (!std::filesystem::exists(path)) {
+        return false;
+    }
+    const SceneParseCallbacks* callbackPtr = &callbacks;
+    if (SceneParseCancelled(callbackPtr)) {
         return false;
     }
 
@@ -2805,6 +2844,7 @@ bool Scene::ParseFromFile(const std::filesystem::path& path)
     const std::string extension = ToLowerExtension(path);
 
     if (std::filesystem::is_directory(path)) {
+        ReportSceneParseProgress(callbackPtr, 0.05f, "Parsing Gaussian folder");
         if (!ParseGaussianPly(path, parsedScene)) {
             return false;
         }
@@ -2813,6 +2853,7 @@ bool Scene::ParseFromFile(const std::filesystem::path& path)
     }
 
     if (extension == ".ply") {
+        ReportSceneParseProgress(callbackPtr, 0.05f, "Parsing PLY");
         if (!ParseMeshPly(path, parsedScene) && !ParseGaussianPly(path, parsedScene)) {
             return false;
         }
@@ -2821,6 +2862,7 @@ bool Scene::ParseFromFile(const std::filesystem::path& path)
     }
 
     if (extension == ".fbx") {
+        ReportSceneParseProgress(callbackPtr, 0.05f, "Parsing FBX");
         if (!ParseFbxMesh(path, parsedScene)) {
             return false;
         }
@@ -2829,7 +2871,7 @@ bool Scene::ParseFromFile(const std::filesystem::path& path)
     }
 
     if (extension == ".obj") {
-        if (!ParseObjMesh(path, parsedScene)) {
+        if (!ParseObjMesh(path, parsedScene, callbackPtr)) {
             return false;
         }
         _parsed = std::move(parsed);
@@ -2838,12 +2880,17 @@ bool Scene::ParseFromFile(const std::filesystem::path& path)
 
     fastgltf::Parser parser(fastgltf::Extensions::KHR_mesh_quantization);
     fastgltf::GltfDataBuffer data;
+    ReportSceneParseProgress(callbackPtr, 0.05f, "Reading glTF");
     if (!data.loadFromFile(path)) {
+        return false;
+    }
+    if (SceneParseCancelled(callbackPtr)) {
         return false;
     }
 
     const fastgltf::GltfType type = fastgltf::determineGltfFileType(&data);
     std::optional<fastgltf::Expected<fastgltf::Asset>> asset;
+    ReportSceneParseProgress(callbackPtr, 0.20f, "Parsing glTF");
     if (type == fastgltf::GltfType::GLB) {
         asset.emplace(parser.loadBinaryGLTF(&data, path.parent_path(), kLoadOptions));
     } else if (type == fastgltf::GltfType::glTF) {
@@ -2853,6 +2900,9 @@ bool Scene::ParseFromFile(const std::filesystem::path& path)
     }
 
     if (!asset.has_value() || asset->error() != fastgltf::Error::None) {
+        return false;
+    }
+    if (SceneParseCancelled(callbackPtr)) {
         return false;
     }
 
@@ -2929,6 +2979,7 @@ bool Scene::ParseFromFile(const std::filesystem::path& path)
 
     const size_t sceneIndex = gltf.defaultScene.value_or(0);
     const fastgltf::Scene& rootScene = gltf.scenes.at(sceneIndex);
+    ReportSceneParseProgress(callbackPtr, 0.50f, "Flattening glTF");
 
     std::function<void(size_t, const glm::mat4&)> appendNode = [&](size_t nodeIndex, const glm::mat4& parentMatrix) {
         const fastgltf::Node& node = gltf.nodes.at(nodeIndex);

@@ -268,6 +268,12 @@ bool NeedsPathDenoisePass(const RendererSettings& settings)
     return NeedsPathTracePass(settings) && settings.enablePathTraceDenoiser && settings.pathTraceDebugView == PathTraceDebugView::Final;
 }
 
+bool WantsHardwarePathTracing(const RendererSettings& settings, const RenderDevice& device)
+{
+    return settings.pathTraceBackend == PathTraceBackend::HardwareRT
+        || (settings.pathTraceBackend == PathTraceBackend::Auto && device.IsRayTracingSupported());
+}
+
 bool EffectiveRtAmbientOcclusion(const RendererSettings& settings)
 {
     return settings.enableAmbientOcclusion && (settings.enableRtAmbientOcclusion || settings.displayMode == RendererDisplayMode::RayTracing);
@@ -1464,6 +1470,10 @@ void Renderer::Update(float deltaSeconds)
     PumpSceneLoadRequests();
     PumpPendingSceneUpload();
     PumpVisibilityResults();
+    if (!_sceneLoadInProgress && NeedsPathTracePass(_settings) && WantsHardwarePathTracing(_settings, _device)
+        && !_scene.HasRayTracingScene()) {
+        EnsureRayTracingScene();
+    }
 
     _frameTimeMs = deltaSeconds * 1000.0f;
     _smoothedFrameTimeMs = _smoothedFrameTimeMs <= 0.0f ? _frameTimeMs : (_smoothedFrameTimeMs * 0.9f + _frameTimeMs * 0.1f);
@@ -1848,7 +1858,7 @@ bool Renderer::SetSelectedObjectPosition(glm::vec3 position)
     }
 
     const bool rebuildRayTracing = _scene.HasRayTracingScene() && _settings.enablePathTracing
-        && GetActivePathTraceBackend() == PathTraceBackend::HardwareRT;
+        && WantsHardwarePathTracing(_settings, _device);
     OnSceneEdited(rebuildRayTracing);
     return true;
 }
@@ -1869,7 +1879,7 @@ bool Renderer::RotateSelectedObject(glm::vec3 eulerDeltaDegrees)
     }
 
     const bool rebuildRayTracing = _scene.HasRayTracingScene() && _settings.enablePathTracing
-        && GetActivePathTraceBackend() == PathTraceBackend::HardwareRT;
+        && WantsHardwarePathTracing(_settings, _device);
     OnSceneEdited(rebuildRayTracing);
     return true;
 }
@@ -1885,7 +1895,7 @@ bool Renderer::ScaleSelectedObject(float uniformScale)
     }
 
     const bool rebuildRayTracing = _scene.HasRayTracingScene() && _settings.enablePathTracing
-        && GetActivePathTraceBackend() == PathTraceBackend::HardwareRT;
+        && WantsHardwarePathTracing(_settings, _device);
     OnSceneEdited(rebuildRayTracing);
     return true;
 }
@@ -2111,7 +2121,7 @@ void Renderer::EndSceneEditDrag()
 {
     if (_selectionDragging && _selectionEditedSinceDragStart) {
         const bool rebuildRayTracing = _selection.kind == SelectionKind::Object && _scene.HasRayTracingScene()
-            && _settings.enablePathTracing && GetActivePathTraceBackend() == PathTraceBackend::HardwareRT;
+            && _settings.enablePathTracing && WantsHardwarePathTracing(_settings, _device);
         OnSceneEdited(rebuildRayTracing);
     }
     _selectionDragging = false;
@@ -2121,7 +2131,7 @@ void Renderer::EndSceneEditDrag()
 SceneUploadOptions Renderer::GetSceneUploadOptions() const
 {
     const bool needsRayTracingScene = _settings.displayMode == RendererDisplayMode::RayTracing
-        || (_settings.displayMode == RendererDisplayMode::PathTrace && GetActivePathTraceBackend() == PathTraceBackend::HardwareRT)
+        || (_settings.displayMode == RendererDisplayMode::PathTrace && WantsHardwarePathTracing(_settings, _device))
         || IsRayEffectsRequested(_settings);
     return SceneUploadOptions{
         .useDeviceLocalSceneBuffers = _settings.useDeviceLocalSceneBuffers,
@@ -2189,7 +2199,21 @@ bool Renderer::LoadSceneAsync(const std::filesystem::path& path)
                 std::scoped_lock lock(loadProgress->messageMutex);
                 loadProgress->message = "Parsing";
             }
-            result.success = loadedScene.ParseFromFile(resolvedPath);
+            vesta::scene::SceneParseCallbacks parseCallbacks{
+                .isCancelled = [cancellationToken]() {
+                    return cancellationToken != nullptr && cancellationToken->load(std::memory_order_relaxed);
+                },
+                .reportProgress = [loadProgress](float progress, std::string_view message) {
+                    if (!loadProgress) {
+                        return;
+                    }
+                    const float parseProgress = 0.08f + std::clamp(progress, 0.0f, 1.0f) * 0.07f;
+                    loadProgress->progress.store(parseProgress, std::memory_order_relaxed);
+                    std::scoped_lock lock(loadProgress->messageMutex);
+                    loadProgress->message = std::string(message);
+                },
+            };
+            result.success = loadedScene.ParseFromFile(resolvedPath, parseCallbacks);
             result.cancelled = cancellationToken != nullptr && cancellationToken->load(std::memory_order_relaxed);
             result.parseMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - parseStart).count();
             if (result.success && !result.cancelled) {

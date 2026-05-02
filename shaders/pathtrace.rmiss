@@ -31,6 +31,9 @@ layout(push_constant) uniform PathTracePushConstants {
     float fireflyClamp;
     uint pathTraceFlags;
     uint reserved0;
+    uint reserved1;
+    uint reserved2;
+    uint reserved3;
     uvec4 accumulationImageIndices0;
     uvec4 accumulationImageIndices1;
     uvec4 pathTraceParams;
