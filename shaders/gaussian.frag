@@ -34,10 +34,6 @@ void main()
         discard;
     }
 
-    float depthWeight = pc.cameraPositionAndSceneType.w > 0.5
-        ? clamp(10.0 / (0.25 + inViewDepth), 0.35, 10.0)
-        : 1.0;
-    float weight = alpha * depthWeight * depthWeight;
-    outAccum = vec4(inColor.rgb * weight, weight);
+    outAccum = vec4(inColor.rgb * alpha, alpha);
     outReveal = vec4(alpha);
 }
