@@ -506,13 +506,13 @@ void ApplySceneLoadState(SceneLoadStatus& status, SceneLoadState nextState, std:
         status.progress = std::max(status.progress, 0.05f);
         break;
     case SceneLoadState::Preparing:
-        status.progress = std::max(status.progress, 0.15f);
+        status.progress = std::max(status.progress, 0.60f);
         break;
     case SceneLoadState::UploadingGeometry:
-        status.progress = std::max(status.progress, 0.22f);
+        status.progress = std::max(status.progress, 0.80f);
         break;
     case SceneLoadState::UploadingTextures:
-        status.progress = std::max(status.progress, 0.62f);
+        status.progress = std::max(status.progress, 0.88f);
         break;
     case SceneLoadState::BuildingBLAS:
         status.progress = std::max(status.progress, 0.86f);
@@ -533,6 +533,19 @@ void ApplySceneLoadState(SceneLoadStatus& status, SceneLoadState nextState, std:
         status.progress = 0.0f;
         break;
     }
+}
+
+void AppendSceneLoadLog(SceneLoadStatus& status, std::string message)
+{
+    if (message.empty()) {
+        return;
+    }
+    fmt::println("[SceneLoad] {}", message);
+    constexpr size_t kMaxSceneLoadLogs = 128;
+    if (status.logMessages.size() >= kMaxSceneLoadLogs) {
+        status.logMessages.erase(status.logMessages.begin());
+    }
+    status.logMessages.push_back(std::move(message));
 }
 
 float ClampPathTraceScale(float scale)
@@ -2207,10 +2220,17 @@ bool Renderer::LoadSceneAsync(const std::filesystem::path& path)
                     if (!loadProgress) {
                         return;
                     }
-                    const float parseProgress = 0.08f + std::clamp(progress, 0.0f, 1.0f) * 0.07f;
+                    const float parseProgress = 0.08f + std::clamp(progress, 0.0f, 1.0f) * 0.52f;
                     loadProgress->progress.store(parseProgress, std::memory_order_relaxed);
                     std::scoped_lock lock(loadProgress->messageMutex);
                     loadProgress->message = std::string(message);
+                },
+                .reportLog = [loadProgress](std::string_view message) {
+                    if (!loadProgress) {
+                        return;
+                    }
+                    std::scoped_lock lock(loadProgress->messageMutex);
+                    loadProgress->logMessages.emplace_back(message);
                 },
             };
             result.success = loadedScene.ParseFromFile(resolvedPath, parseCallbacks);
@@ -2219,11 +2239,32 @@ bool Renderer::LoadSceneAsync(const std::filesystem::path& path)
             if (result.success && !result.cancelled) {
                 const auto prepareStart = std::chrono::steady_clock::now();
                 if (loadProgress) {
-                    loadProgress->progress.store(0.15f, std::memory_order_relaxed);
+                    loadProgress->progress.store(0.60f, std::memory_order_relaxed);
                     std::scoped_lock lock(loadProgress->messageMutex);
                     loadProgress->message = "Preparing";
                 }
-                result.success = loadedScene.PrepareParsedScene();
+                vesta::scene::SceneParseCallbacks prepareCallbacks{
+                    .isCancelled = [cancellationToken]() {
+                        return cancellationToken != nullptr && cancellationToken->load(std::memory_order_relaxed);
+                    },
+                    .reportProgress = [loadProgress](float progress, std::string_view message) {
+                        if (!loadProgress) {
+                            return;
+                        }
+                        const float prepareProgress = 0.60f + std::clamp(progress, 0.0f, 1.0f) * 0.20f;
+                        loadProgress->progress.store(prepareProgress, std::memory_order_relaxed);
+                        std::scoped_lock lock(loadProgress->messageMutex);
+                        loadProgress->message = std::string(message);
+                    },
+                    .reportLog = [loadProgress](std::string_view message) {
+                        if (!loadProgress) {
+                            return;
+                        }
+                        std::scoped_lock lock(loadProgress->messageMutex);
+                        loadProgress->logMessages.emplace_back(message);
+                    },
+                };
+                result.success = loadedScene.PrepareParsedScene(prepareCallbacks);
                 result.cancelled = cancellationToken != nullptr && cancellationToken->load(std::memory_order_relaxed);
                 result.prepareMs =
                     std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - prepareStart).count();
@@ -2262,6 +2303,7 @@ bool Renderer::CancelSceneLoad()
     _sceneLoadStatus.cancelRequested = true;
     _sceneLoadStatus.message = "Cancelling "
         + (_sceneLoadStatus.path.empty() ? std::string("scene") : _sceneLoadStatus.path.filename().string()) + "...";
+    AppendSceneLoadLog(_sceneLoadStatus, _sceneLoadStatus.message);
 
     if (_pendingSceneUpload.active) {
         _device.FlushUploadBatch();
@@ -4024,11 +4066,22 @@ void Renderer::PumpSceneLoadRequests()
         if (_sceneLoadProgress && !_sceneLoadStatus.cancelRequested) {
             const float progress = _sceneLoadProgress->progress.load(std::memory_order_relaxed);
             std::string progressMessage;
+            std::vector<std::string> progressLogs;
             {
                 std::scoped_lock lock(_sceneLoadProgress->messageMutex);
                 progressMessage = _sceneLoadProgress->message;
+                progressLogs.swap(_sceneLoadProgress->logMessages);
+            }
+            for (std::string& logMessage : progressLogs) {
+                AppendSceneLoadLog(_sceneLoadStatus, std::move(logMessage));
             }
             if (progress > 0.0f) {
+                if (progress >= 0.60f && _sceneLoadStatus.state == SceneLoadState::Parsing) {
+                    ApplySceneLoadState(_sceneLoadStatus,
+                        SceneLoadState::Preparing,
+                        _sceneLoadStatus.message,
+                        "PumpSceneLoadRequests::AsyncPrepareProgress");
+                }
                 _sceneLoadStatus.progress = std::max(_sceneLoadStatus.progress, progress);
             }
             if (!progressMessage.empty()) {
@@ -4041,6 +4094,16 @@ void Renderer::PumpSceneLoadRequests()
     }
 
     AsyncSceneLoadResult result = _sceneLoadFuture.get();
+    if (_sceneLoadProgress) {
+        std::vector<std::string> progressLogs;
+        {
+            std::scoped_lock lock(_sceneLoadProgress->messageMutex);
+            progressLogs.swap(_sceneLoadProgress->logMessages);
+        }
+        for (std::string& logMessage : progressLogs) {
+            AppendSceneLoadLog(_sceneLoadStatus, std::move(logMessage));
+        }
+    }
 
     if (_sceneLoadCancelRequested || result.cancelled) {
         _sceneLoadInProgress = false;
@@ -4202,7 +4265,7 @@ void Renderer::PumpPendingSceneUpload()
         _sceneLoadStatus.uploadedTextures = static_cast<uint32_t>(std::min(_pendingSceneUpload.textureIndex, prepared->textures.size()));
         _sceneLoadStatus.totalTextures = static_cast<uint32_t>(prepared->textures.size());
         const float byteProgress = static_cast<float>(_sceneLoadStatus.completedUploadBytes) / static_cast<float>(totalUploadBytes);
-        _sceneLoadStatus.progress = std::max(_sceneLoadStatus.progress, 0.22f + byteProgress * 0.62f);
+        _sceneLoadStatus.progress = std::max(_sceneLoadStatus.progress, 0.80f + byteProgress * 0.14f);
     };
     updateProgress();
 

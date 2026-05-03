@@ -212,6 +212,7 @@ struct SceneLoadStatus {
     uint32_t uploadedTextures{ 0 };
     uint32_t totalTextures{ 0 };
     bool cancelRequested{ false };
+    std::vector<std::string> logMessages;
 };
 
 struct RendererSettings;
@@ -894,6 +895,7 @@ private:
         std::atomic<float> progress{ 0.0f };
         std::mutex messageMutex;
         std::string message;
+        std::vector<std::string> logMessages;
     };
 
     struct RetiredSceneEntry {

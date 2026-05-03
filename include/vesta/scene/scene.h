@@ -255,6 +255,7 @@ struct GpuScene {
 struct SceneParseCallbacks {
     std::function<bool()> isCancelled;
     std::function<void(float, std::string_view)> reportProgress;
+    std::function<void(std::string_view)> reportLog;
 };
 
 class Scene {
@@ -271,6 +272,7 @@ public:
     // PrepareParsedScene flattens ParsedScene into the CPU buffers consumed by
     // raster, Gaussian, and path tracing passes.
     bool PrepareParsedScene();
+    bool PrepareParsedScene(const SceneParseCallbacks& callbacks);
     // LoadFromFile is the convenience wrapper used by most call sites today.
     bool LoadFromFile(const std::filesystem::path& path);
     void AllocateGpuResources(render::RenderDevice& device, const render::SceneUploadOptions& options);

@@ -16,6 +16,7 @@
 #include <stdexcept>
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 #include <string_view>
 
 #include <fastgltf/glm_element_traits.hpp>
@@ -475,9 +476,11 @@ struct FbxProperty {
     double doubleValue{ 0.0 };
     bool boolValue{ false };
     std::string stringValue;
+    std::vector<float> floatArray;
     std::vector<int32_t> int32Array;
     std::vector<int64_t> int64Array;
     std::vector<double> doubleArray;
+    std::vector<uint8_t> uint8Array;
 };
 
 struct FbxNode {
@@ -788,6 +791,24 @@ uint32_t AddFbxTextureAsset(ParsedScene& parsedScene,
     return index;
 }
 
+size_t FbxNumericArraySize(const FbxProperty& property)
+{
+    if (!property.doubleArray.empty()) {
+        return property.doubleArray.size();
+    }
+    return property.floatArray.size();
+}
+
+double FbxNumericArrayAt(const FbxProperty& property, size_t index)
+{
+    if (!property.doubleArray.empty()) {
+        return property.doubleArray[index];
+    }
+    return static_cast<double>(property.floatArray[index]);
+}
+
+void ReportSceneParseLog(const SceneParseCallbacks* callbacks, std::string_view message);
+
 std::string TrimAscii(std::string_view value)
 {
     size_t begin = 0;
@@ -888,9 +909,44 @@ std::filesystem::path ResolveObjTexturePath(const std::filesystem::path& objPath
 uint32_t AddObjTextureAsset(ParsedScene& parsedScene,
     std::unordered_map<std::string, uint32_t>& textureCache,
     const std::filesystem::path& path,
-    bool srgb)
+    bool srgb,
+    const SceneParseCallbacks* callbacks,
+    uint32_t& decodedTextureCount,
+    uint32_t& missingTextureLogCount,
+    std::string_view slot)
 {
-    return AddFbxTextureAsset(parsedScene, textureCache, path, srgb);
+    if (path.empty()) {
+        if (missingTextureLogCount < 32u) {
+            ReportSceneParseLog(callbacks, fmt::format("Missing OBJ material texture for {}", slot));
+        }
+        ++missingTextureLogCount;
+        return render::kInvalidResourceIndex;
+    }
+
+    const std::string cacheKey = path.lexically_normal().string() + (srgb ? "|srgb" : "|linear");
+    if (const auto it = textureCache.find(cacheKey); it != textureCache.end()) {
+        return it->second;
+    }
+
+    ++decodedTextureCount;
+    if (decodedTextureCount == 1u || decodedTextureCount % 16u == 0u) {
+        ReportSceneParseLog(callbacks,
+            fmt::format("Decoding OBJ material texture {}: {}", decodedTextureCount, path.filename().string()));
+    }
+
+    const std::optional<SceneTextureAsset> texture = DecodeTextureFile(path, srgb);
+    if (!texture.has_value()) {
+        if (missingTextureLogCount < 32u) {
+            ReportSceneParseLog(callbacks, fmt::format("Failed OBJ material texture {}: {}", slot, path.string()));
+        }
+        ++missingTextureLogCount;
+        return render::kInvalidResourceIndex;
+    }
+
+    const uint32_t index = static_cast<uint32_t>(parsedScene.textures.size());
+    parsedScene.textures.push_back(*texture);
+    textureCache.emplace(cacheKey, index);
+    return index;
 }
 
 struct ObjMaterialRecord {
@@ -951,15 +1007,25 @@ void ReportSceneParseProgress(const SceneParseCallbacks* callbacks, float progre
     }
 }
 
+void ReportSceneParseLog(const SceneParseCallbacks* callbacks, std::string_view message)
+{
+    if (callbacks != nullptr && callbacks->reportLog) {
+        callbacks->reportLog(message);
+    }
+}
+
 std::vector<ObjMaterialRecord> ParseObjMaterialLibraries(
     const std::filesystem::path& objPath,
     ParsedScene& parsedScene,
-    std::span<const std::filesystem::path> materialPaths)
+    std::span<const std::filesystem::path> materialPaths,
+    std::unordered_map<std::string, uint32_t>& textureCache,
+    const SceneParseCallbacks* callbacks)
 {
     std::vector<ObjMaterialRecord> records;
-    std::unordered_map<std::string, uint32_t> textureCache;
     ObjMaterialRecord current;
     bool hasCurrent = false;
+    uint32_t decodedTextureCount = 0;
+    uint32_t missingTextureLogCount = 0;
 
     auto flushCurrent = [&]() {
         if (hasCurrent) {
@@ -976,8 +1042,13 @@ std::vector<ObjMaterialRecord> ParseObjMaterialLibraries(
     };
 
     for (const std::filesystem::path& materialPath : materialPaths) {
+        if (SceneParseCancelled(callbacks)) {
+            return {};
+        }
+        ReportSceneParseLog(callbacks, fmt::format("Parsing OBJ material library {}", materialPath.filename().string()));
         std::ifstream input(materialPath);
         if (!input.is_open()) {
+            ReportSceneParseLog(callbacks, fmt::format("Missing OBJ material library {}", materialPath.string()));
             continue;
         }
 
@@ -1033,12 +1104,26 @@ std::vector<ObjMaterialRecord> ParseObjMaterialLibraries(
                 std::string rest;
                 std::getline(stream, rest);
                 const std::filesystem::path texturePath = ResolveObjTexturePath(objPath, ExtractObjMapFilename(rest));
-                current.material.textureIndices0.x = AddObjTextureAsset(parsedScene, textureCache, texturePath, true);
+                current.material.textureIndices0.x = AddObjTextureAsset(parsedScene,
+                    textureCache,
+                    texturePath,
+                    true,
+                    callbacks,
+                    decodedTextureCount,
+                    missingTextureLogCount,
+                    "base color");
             } else if (hasCurrent && (tag == "map_Bump" || tag == "bump" || tag == "map_Kn" || tag == "map_normal")) {
                 std::string rest;
                 std::getline(stream, rest);
                 const std::filesystem::path texturePath = ResolveObjTexturePath(objPath, ExtractObjMapFilename(rest));
-                current.material.textureIndices0.z = AddObjTextureAsset(parsedScene, textureCache, texturePath, false);
+                current.material.textureIndices0.z = AddObjTextureAsset(parsedScene,
+                    textureCache,
+                    texturePath,
+                    false,
+                    callbacks,
+                    decodedTextureCount,
+                    missingTextureLogCount,
+                    "normal");
                 if (current.material.textureIndices0.z != render::kInvalidResourceIndex) {
                     current.material.materialParams.w = 1.0f;
                 }
@@ -1046,11 +1131,22 @@ std::vector<ObjMaterialRecord> ParseObjMaterialLibraries(
                 std::string rest;
                 std::getline(stream, rest);
                 const std::filesystem::path texturePath = ResolveObjTexturePath(objPath, ExtractObjMapFilename(rest));
-                current.material.textureIndices0.y = AddObjTextureAsset(parsedScene, textureCache, texturePath, false);
+                current.material.textureIndices0.y = AddObjTextureAsset(parsedScene,
+                    textureCache,
+                    texturePath,
+                    false,
+                    callbacks,
+                    decodedTextureCount,
+                    missingTextureLogCount,
+                    "roughness");
             }
         }
     }
     flushCurrent();
+    if (missingTextureLogCount > 32u) {
+        ReportSceneParseLog(callbacks,
+            fmt::format("Suppressed {} additional missing OBJ material texture messages", missingTextureLogCount - 32u));
+    }
     return records;
 }
 
@@ -1130,6 +1226,9 @@ bool ParseObjMesh(const std::filesystem::path& path, ParsedScene& parsedScene, c
     std::vector<glm::vec3> normals;
     std::vector<glm::vec2> texCoords;
     std::unordered_map<std::string, uint32_t> materialLookup;
+    std::unordered_map<std::string, uint32_t> textureCache;
+    std::unordered_set<std::string> loadedMaterialLibraries;
+    uint32_t skippedDuplicateMtllibs = 0;
 
     parsedScene.materials.clear();
     parsedScene.materials.push_back(MakeDefaultObjMaterial());
@@ -1226,7 +1325,18 @@ bool ParseObjMesh(const std::filesystem::path& path, ParsedScene& parsedScene, c
         } else if (tag == "mtllib") {
             const std::string_view rest = TrimAsciiView(std::string_view(cursor, static_cast<size_t>(end - cursor)));
             std::vector<std::filesystem::path> libraries = ParseObjMtllibs(path, rest);
-            for (const ObjMaterialRecord& record : ParseObjMaterialLibraries(path, parsedScene, libraries)) {
+            std::vector<std::filesystem::path> newLibraries;
+            newLibraries.reserve(libraries.size());
+            for (const std::filesystem::path& library : libraries) {
+                const std::string key = library.lexically_normal().string();
+                if (loadedMaterialLibraries.insert(key).second) {
+                    newLibraries.push_back(library);
+                } else {
+                    ++skippedDuplicateMtllibs;
+                }
+            }
+            for (const ObjMaterialRecord& record :
+                ParseObjMaterialLibraries(path, parsedScene, newLibraries, textureCache, callbacks)) {
                 const uint32_t index = static_cast<uint32_t>(parsedScene.materials.size());
                 parsedScene.materials.push_back(record.material);
                 materialLookup.emplace(record.name, index);
@@ -1258,19 +1368,35 @@ bool ParseObjMesh(const std::filesystem::path& path, ParsedScene& parsedScene, c
         return false;
     }
     ReportSceneParseProgress(callbacks, 1.0f, "Parsing OBJ 100%");
+    if (skippedDuplicateMtllibs > 0u) {
+        ReportSceneParseLog(callbacks,
+            fmt::format("Skipped {} duplicate OBJ mtllib directive(s)", skippedDuplicateMtllibs));
+    }
 
     const uint32_t objectIndex = static_cast<uint32_t>(parsedScene.objects.size());
     const uint32_t firstPrimitive = static_cast<uint32_t>(parsedScene.primitives.size());
+    uint32_t primitiveOrdinal = 0;
+    const uint32_t primitiveCount = static_cast<uint32_t>(primitiveBuilders.size());
     for (auto& [_, builder] : primitiveBuilders) {
+        if (SceneParseCancelled(callbacks)) {
+            return false;
+        }
         ParsedPrimitive& primitive = builder.primitive;
         if (primitive.positions.empty() || primitive.indices.empty()) {
             continue;
+        }
+        const float tangentProgress = primitiveCount > 0u ? static_cast<float>(primitiveOrdinal) / static_cast<float>(primitiveCount) : 1.0f;
+        if ((primitiveOrdinal % 8u) == 0u || primitiveOrdinal + 1u == primitiveCount) {
+            ReportSceneParseProgress(callbacks,
+                0.90f + tangentProgress * 0.10f,
+                fmt::format("Generating OBJ tangents {}/{}", primitiveOrdinal + 1u, std::max(primitiveCount, 1u)));
         }
         primitive.objectIndex = objectIndex;
         primitive.worldTransform = glm::mat4(1.0f);
         primitive.tangents = GenerateTangents(primitive.positions, primitive.normals, primitive.texCoords, primitive.indices);
         primitive.hasTangents = true;
         parsedScene.primitives.push_back(std::move(primitive));
+        ++primitiveOrdinal;
     }
 
     if (parsedScene.primitives.size() == firstPrimitive) {
@@ -1557,6 +1683,11 @@ bool ReadFbxProperty(std::span<const std::byte> bytes, size_t& offset, FbxProper
         return ReadLittleEndian(bytes, offset, property.doubleValue);
     case 'L':
         return ReadLittleEndian(bytes, offset, property.int64Value);
+    case 'b':
+    case 'c':
+        return DecodeFbxArray(bytes, offset, sizeof(uint8_t), property.uint8Array);
+    case 'f':
+        return DecodeFbxArray(bytes, offset, sizeof(float), property.floatArray);
     case 'i':
         return DecodeFbxArray(bytes, offset, sizeof(int32_t), property.int32Array);
     case 'l':
@@ -1646,7 +1777,7 @@ bool ReadFbxNode(std::span<const std::byte> bytes, size_t& offset, bool wideOffs
     return true;
 }
 
-std::optional<FbxNode> ParseBinaryFbxTree(const std::filesystem::path& path)
+std::optional<FbxNode> ParseBinaryFbxTree(const std::filesystem::path& path, const SceneParseCallbacks* callbacks)
 {
     std::ifstream input(path, std::ios::binary | std::ios::ate);
     if (!input.is_open()) {
@@ -1657,12 +1788,17 @@ std::optional<FbxNode> ParseBinaryFbxTree(const std::filesystem::path& path)
     if (fileSize <= 27) {
         return std::nullopt;
     }
+    ReportSceneParseLog(callbacks, fmt::format("Reading FBX file {:.1f} MiB", static_cast<double>(fileSize) / (1024.0 * 1024.0)));
     input.seekg(0, std::ios::beg);
 
     std::vector<std::byte> storage(static_cast<size_t>(fileSize));
     if (!input.read(reinterpret_cast<char*>(storage.data()), fileSize)) {
         return std::nullopt;
     }
+    if (SceneParseCancelled(callbacks)) {
+        return std::nullopt;
+    }
+    ReportSceneParseLog(callbacks, "Parsing FBX node tree");
     const std::span<const std::byte> bytes(storage);
     constexpr std::array<std::byte, 23> kMagic = {
         std::byte{ 'K' }, std::byte{ 'a' }, std::byte{ 'y' }, std::byte{ 'd' }, std::byte{ 'a' }, std::byte{ 'r' }, std::byte{ 'a' },
@@ -1684,6 +1820,9 @@ std::optional<FbxNode> ParseBinaryFbxTree(const std::filesystem::path& path)
     root.name = "Root";
     const bool wideOffsets = version >= 7500;
     while (offset < bytes.size()) {
+        if (SceneParseCancelled(callbacks)) {
+            return std::nullopt;
+        }
         FbxNode node;
         bool isNull = false;
         const size_t before = offset;
@@ -1710,25 +1849,26 @@ bool AppendFbxGeometry(
         return false;
     }
 
-    const std::vector<double>& verticesRaw = verticesNode->properties.front().doubleArray;
+    const FbxProperty& verticesRaw = verticesNode->properties.front();
     const std::vector<int32_t>& polygonIndicesRaw = indicesNode->properties.front().int32Array;
-    if (verticesRaw.size() < 3 || polygonIndicesRaw.size() < 3 || verticesRaw.size() % 3 != 0) {
+    const size_t vertexComponentCount = FbxNumericArraySize(verticesRaw);
+    if (vertexComponentCount < 3 || polygonIndicesRaw.size() < 3 || vertexComponentCount % 3 != 0) {
         return false;
     }
 
-    std::vector<glm::vec3> controlPoints(verticesRaw.size() / 3);
+    std::vector<glm::vec3> controlPoints(vertexComponentCount / 3);
     for (size_t i = 0; i < controlPoints.size(); ++i) {
-        controlPoints[i] = glm::vec3(static_cast<float>(verticesRaw[i * 3 + 0]),
-            static_cast<float>(verticesRaw[i * 3 + 1]),
-            static_cast<float>(verticesRaw[i * 3 + 2]));
+        controlPoints[i] = glm::vec3(static_cast<float>(FbxNumericArrayAt(verticesRaw, i * 3 + 0)),
+            static_cast<float>(FbxNumericArrayAt(verticesRaw, i * 3 + 1)),
+            static_cast<float>(FbxNumericArrayAt(verticesRaw, i * 3 + 2)));
     }
 
     const FbxNode* normalsNode = nullptr;
     if (const FbxNode* layerNormal = FindChildNode(geometryNode, "LayerElementNormal")) {
         normalsNode = FindChildNode(*layerNormal, "Normals");
     }
-    const std::vector<double>* normalsRaw = normalsNode != nullptr && !normalsNode->properties.empty()
-        ? &normalsNode->properties.front().doubleArray
+    const FbxProperty* normalsRaw = normalsNode != nullptr && !normalsNode->properties.empty()
+        ? &normalsNode->properties.front()
         : nullptr;
 
     const FbxNode* uvNode = nullptr;
@@ -1740,12 +1880,12 @@ bool AppendFbxGeometry(
             break;
         }
     }
-    const std::vector<double>* uvRaw = uvNode != nullptr && !uvNode->properties.empty() ? &uvNode->properties.front().doubleArray : nullptr;
+    const FbxProperty* uvRaw = uvNode != nullptr && !uvNode->properties.empty() ? &uvNode->properties.front() : nullptr;
     const std::vector<int32_t>* uvIndices = uvIndexNode != nullptr && !uvIndexNode->properties.empty() ? &uvIndexNode->properties.front().int32Array : nullptr;
 
     ParsedPrimitive primitive;
     primitive.materialIndex = materialIndex;
-    primitive.hasNormals = normalsRaw != nullptr && !normalsRaw->empty();
+    primitive.hasNormals = normalsRaw != nullptr && FbxNumericArraySize(*normalsRaw) > 0u;
 
     std::vector<uint32_t> polygonVertexToPrimitiveVertex(polygonIndicesRaw.size(), std::numeric_limits<uint32_t>::max());
     auto appendPolygonVertex = [&](size_t polygonVertexIndex) -> uint32_t {
@@ -1763,13 +1903,15 @@ bool AppendFbxGeometry(
         primitive.positions.push_back(controlPoints[controlPointIndex]);
         glm::vec3 normal(0.0f, 1.0f, 0.0f);
         if (normalsRaw != nullptr) {
+            const size_t normalComponentCount = FbxNumericArraySize(*normalsRaw);
             const size_t polygonVertexNormalOffset = polygonVertexIndex * 3;
             const size_t controlPointNormalOffset = static_cast<size_t>(controlPointIndex) * 3;
-            const size_t normalOffset = polygonVertexNormalOffset + 2 < normalsRaw->size() ? polygonVertexNormalOffset : controlPointNormalOffset;
-            if (normalOffset + 2 < normalsRaw->size()) {
-                normal = glm::vec3(static_cast<float>((*normalsRaw)[normalOffset + 0]),
-                    static_cast<float>((*normalsRaw)[normalOffset + 1]),
-                    static_cast<float>((*normalsRaw)[normalOffset + 2]));
+            const size_t normalOffset =
+                polygonVertexNormalOffset + 2 < normalComponentCount ? polygonVertexNormalOffset : controlPointNormalOffset;
+            if (normalOffset + 2 < normalComponentCount) {
+                normal = glm::vec3(static_cast<float>(FbxNumericArrayAt(*normalsRaw, normalOffset + 0)),
+                    static_cast<float>(FbxNumericArrayAt(*normalsRaw, normalOffset + 1)),
+                    static_cast<float>(FbxNumericArrayAt(*normalsRaw, normalOffset + 2)));
             }
         }
         primitive.normals.push_back(normal);
@@ -1780,8 +1922,10 @@ bool AppendFbxGeometry(
             if (uvIndices != nullptr && polygonVertexIndex < uvIndices->size() && (*uvIndices)[polygonVertexIndex] >= 0) {
                 uvIndex = static_cast<size_t>((*uvIndices)[polygonVertexIndex]);
             }
-            if (uvIndex * 2 + 1 < uvRaw->size()) {
-                uv = glm::vec2(static_cast<float>((*uvRaw)[uvIndex * 2 + 0]), 1.0f - static_cast<float>((*uvRaw)[uvIndex * 2 + 1]));
+            const size_t uvComponentCount = FbxNumericArraySize(*uvRaw);
+            if (uvIndex * 2 + 1 < uvComponentCount) {
+                uv = glm::vec2(static_cast<float>(FbxNumericArrayAt(*uvRaw, uvIndex * 2 + 0)),
+                    1.0f - static_cast<float>(FbxNumericArrayAt(*uvRaw, uvIndex * 2 + 1)));
             }
         }
         primitive.texCoords.push_back(uv);
@@ -1826,12 +1970,14 @@ bool AppendFbxGeometry(
     return true;
 }
 
-bool ParseFbxMesh(const std::filesystem::path& path, ParsedScene& parsedScene)
+bool ParseFbxMesh(const std::filesystem::path& path, ParsedScene& parsedScene, const SceneParseCallbacks* callbacks)
 {
-    std::optional<FbxNode> root = ParseBinaryFbxTree(path);
+    ReportSceneParseProgress(callbacks, 0.05f, "Reading FBX");
+    std::optional<FbxNode> root = ParseBinaryFbxTree(path, callbacks);
     if (!root.has_value()) {
         return false;
     }
+    ReportSceneParseProgress(callbacks, 0.20f, "Parsing FBX materials");
 
     const FbxNode* objectsNode = FindChildNode(*root, "Objects");
     if (objectsNode == nullptr) {
@@ -1848,6 +1994,9 @@ bool ParseFbxMesh(const std::filesystem::path& path, ParsedScene& parsedScene)
     std::unordered_map<std::string, uint32_t> textureCache;
 
     for (const FbxNode& child : objectsNode->children) {
+        if (SceneParseCancelled(callbacks)) {
+            return false;
+        }
         if (child.name == "Material" && !child.properties.empty()) {
             SceneMaterial material = MakeDefaultMaterial();
             if (const FbxNode* properties = FindChildNode(child, "Properties70")) {
@@ -1895,7 +2044,11 @@ bool ParseFbxMesh(const std::filesystem::path& path, ParsedScene& parsedScene)
 
     std::unordered_map<int64_t, FbxModelInfo> models;
     std::unordered_map<int64_t, int64_t> geometryToModel;
+    ReportSceneParseProgress(callbacks, 0.35f, "Resolving FBX models");
     for (const FbxNode& child : objectsNode->children) {
+        if (SceneParseCancelled(callbacks)) {
+            return false;
+        }
         if (child.name == "Model" && !child.properties.empty()) {
             const int64_t modelId = FbxPropertyAsInt64(child.properties[0]);
             models.emplace(modelId,
@@ -1938,6 +2091,7 @@ bool ParseFbxMesh(const std::filesystem::path& path, ParsedScene& parsedScene)
         }
     }
 
+    ReportSceneParseProgress(callbacks, 0.50f, "Resolving FBX textures");
     for (const auto& [textureId, videoId] : textureToVideo) {
         if (textures[textureId].path.empty()) {
             textures[textureId].path = textures[videoId].path;
@@ -1958,7 +2112,12 @@ bool ParseFbxMesh(const std::filesystem::path& path, ParsedScene& parsedScene)
     }
 
     const std::vector<FbxTextureSet> discoveredTextureSets = DiscoverFbxTextureSets(path);
+    ReportSceneParseLog(callbacks, fmt::format("Discovered {} FBX texture set(s)", discoveredTextureSets.size()));
+    ReportSceneParseProgress(callbacks, 0.60f, "Decoding FBX material textures");
     for (auto& [_, material] : materials) {
+        if (SceneParseCancelled(callbacks)) {
+            return false;
+        }
         FbxTextureSet explicitSet{
             .key = NormalizeTextureMatchKey(material.name),
             .baseColor = material.baseColorPath,
@@ -1993,6 +2152,9 @@ bool ParseFbxMesh(const std::filesystem::path& path, ParsedScene& parsedScene)
 
     if (!materials.empty() && !discoveredTextureSets.empty()) {
         for (auto& [_, model] : models) {
+            if (SceneParseCancelled(callbacks)) {
+                return false;
+            }
             const FbxTextureSet* selectedSet = SelectFbxTextureSet(discoveredTextureSets, model.name);
             if (selectedSet == nullptr) {
                 continue;
@@ -2024,7 +2186,11 @@ bool ParseFbxMesh(const std::filesystem::path& path, ParsedScene& parsedScene)
         }
     }
 
+    ReportSceneParseProgress(callbacks, 0.78f, "Flattening FBX geometry");
     for (const FbxNode& child : objectsNode->children) {
+        if (SceneParseCancelled(callbacks)) {
+            return false;
+        }
         if (child.name == "Geometry") {
             const int64_t geometryId = child.properties.empty() ? 0 : FbxPropertyAsInt64(child.properties[0]);
             glm::mat4 worldTransform(1.0f);
@@ -2863,7 +3029,7 @@ bool Scene::ParseFromFile(const std::filesystem::path& path, const SceneParseCal
 
     if (extension == ".fbx") {
         ReportSceneParseProgress(callbackPtr, 0.05f, "Parsing FBX");
-        if (!ParseFbxMesh(path, parsedScene)) {
+        if (!ParseFbxMesh(path, parsedScene, callbackPtr)) {
             return false;
         }
         _parsed = std::move(parsed);
@@ -2982,6 +3148,9 @@ bool Scene::ParseFromFile(const std::filesystem::path& path, const SceneParseCal
     ReportSceneParseProgress(callbackPtr, 0.50f, "Flattening glTF");
 
     std::function<void(size_t, const glm::mat4&)> appendNode = [&](size_t nodeIndex, const glm::mat4& parentMatrix) {
+        if (SceneParseCancelled(callbackPtr)) {
+            return;
+        }
         const fastgltf::Node& node = gltf.nodes.at(nodeIndex);
         const glm::mat4 worldMatrix = parentMatrix * NodeToMatrix(node);
 
@@ -3071,6 +3240,9 @@ bool Scene::ParseFromFile(const std::filesystem::path& path, const SceneParseCal
         }
 
         appendNode(rootScene.nodeIndices[rootIndex], rootTransform);
+        if (SceneParseCancelled(callbackPtr)) {
+            return false;
+        }
     }
     if (!parsedScene.primitives.empty()) {
         parsedScene.sceneKind = SceneKind::Mesh;
@@ -3081,11 +3253,18 @@ bool Scene::ParseFromFile(const std::filesystem::path& path, const SceneParseCal
 
 bool Scene::PrepareParsedScene()
 {
+    static const SceneParseCallbacks kNoCallbacks{};
+    return PrepareParsedScene(kNoCallbacks);
+}
+
+bool Scene::PrepareParsedScene(const SceneParseCallbacks& callbacks)
+{
     _prepared.reset();
     const std::shared_ptr<ParsedScene> parsed = _parsed;
     if (!parsed || !parsed->IsLoaded()) {
         return false;
     }
+    const SceneParseCallbacks* callbackPtr = &callbacks;
 
     auto prepared = std::make_shared<PreparedScene>();
     PreparedScene& sceneData = *prepared;
@@ -3105,6 +3284,10 @@ bool Scene::PrepareParsedScene()
     }
 
     if (parsed->sceneKind == SceneKind::Gaussian || parsed->sceneKind == SceneKind::PointCloud) {
+        if (SceneParseCancelled(callbackPtr)) {
+            return false;
+        }
+        ReportSceneParseProgress(callbackPtr, 0.40f, "Preparing gaussian buffers");
         sceneData.vertices = parsed->gaussianVertices;
         sceneData.gaussians = parsed->gaussianPrimitives;
         if (!sceneData.objects.empty()) {
@@ -3112,7 +3295,17 @@ bool Scene::PrepareParsedScene()
             sceneData.objects.front().vertexCount = static_cast<uint32_t>(sceneData.vertices.size());
         }
     } else {
+        uint32_t primitiveOrdinal = 0;
+        const uint32_t primitiveCount = static_cast<uint32_t>(std::max<size_t>(parsed->primitives.size(), 1u));
         for (const ParsedPrimitive& primitive : parsed->primitives) {
+            if (SceneParseCancelled(callbackPtr)) {
+                return false;
+            }
+            if ((primitiveOrdinal % 8u) == 0u || primitiveOrdinal + 1u == primitiveCount) {
+                ReportSceneParseProgress(callbackPtr,
+                    static_cast<float>(primitiveOrdinal) / static_cast<float>(primitiveCount),
+                    fmt::format("Preparing scene buffers {}/{}", primitiveOrdinal + 1u, primitiveCount));
+            }
             const uint32_t baseVertex = static_cast<uint32_t>(sceneData.vertices.size());
             const glm::mat3 normalMatrix = glm::transpose(glm::inverse(glm::mat3(primitive.worldTransform)));
             const glm::mat3 tangentMatrix = glm::mat3(primitive.worldTransform);
@@ -3215,6 +3408,7 @@ bool Scene::PrepareParsedScene()
                 });
             }
             sceneObject.triangleCount += static_cast<uint32_t>(primitive.indices.size() / 3);
+            ++primitiveOrdinal;
         }
     }
 
@@ -3233,6 +3427,9 @@ bool Scene::PrepareParsedScene()
         const float gaussianSceneRadius = sceneData.bounds.radius;
         if (parsed->gaussianUsesNativeScale) {
             for (size_t gaussianIndex = 0; gaussianIndex < sceneData.vertices.size(); ++gaussianIndex) {
+                if ((gaussianIndex & 4095u) == 0u && SceneParseCancelled(callbackPtr)) {
+                    return false;
+                }
                 SceneVertex& vertex = sceneData.vertices[gaussianIndex];
                 vertex.position = ApplyGaussianImportTransform(vertex.position);
                 vertex.normal = NormalizeGaussianScaleForScene(vertex.normal, gaussianSceneRadius);
@@ -3254,6 +3451,9 @@ bool Scene::PrepareParsedScene()
             const float pointCloudBaseSize =
                 glm::clamp(120.0f / std::sqrt(static_cast<float>(std::max<size_t>(sceneData.vertices.size(), 1))), 0.16f, 0.42f);
             for (size_t gaussianIndex = 0; gaussianIndex < sceneData.vertices.size(); ++gaussianIndex) {
+                if ((gaussianIndex & 4095u) == 0u && SceneParseCancelled(callbackPtr)) {
+                    return false;
+                }
                 SceneVertex& vertex = sceneData.vertices[gaussianIndex];
                 vertex.normal = glm::vec3(1.0f);
                 vertex.tangent = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);

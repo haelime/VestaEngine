@@ -231,5 +231,6 @@ private:
         vesta::render::RendererSettings savedSettings{};
         vesta::render::SceneLoadState lastSceneLoadState{ vesta::render::SceneLoadState::Idle };
         std::string lastSceneLoadMessage;
+        size_t lastSceneLoadLogCount{ 0 };
     } _startupState;
 };

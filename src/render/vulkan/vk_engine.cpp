@@ -1928,6 +1928,13 @@ void VestaEngine::update_startup_state()
             _startupState.startupSceneResolved = true;
         }
     }
+    if (_startupState.lastSceneLoadLogCount > sceneLoadStatus.logMessages.size()) {
+        _startupState.lastSceneLoadLogCount = 0;
+    }
+    for (size_t logIndex = _startupState.lastSceneLoadLogCount; logIndex < sceneLoadStatus.logMessages.size(); ++logIndex) {
+        log_startup_event("Scene load: " + sceneLoadStatus.logMessages[logIndex]);
+    }
+    _startupState.lastSceneLoadLogCount = sceneLoadStatus.logMessages.size();
 
     if (!_startupState.firstFramePresented) {
         _startupState.firstFramePresented = true;
