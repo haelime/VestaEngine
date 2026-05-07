@@ -14,6 +14,7 @@ layout(push_constant) uniform GeometryPushConstants {
     mat4 viewProjection;
     mat4 previousViewProjection;
     uint materialBufferIndex;
+    float emissionIntensity;
 } pc;
 
 layout(location = 0) out vec3 outNormal;

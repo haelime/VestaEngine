@@ -433,6 +433,7 @@ struct RendererSettings {
     bool gaussianFastCulling{ true };
     float pathTraceResolutionScale{ 0.5f };
     uint32_t pathTraceSamplesPerPixel{ 1 };
+    uint32_t pathTraceTargetFrames{ 128 };
     uint32_t pathTraceMaxBounces{ 4 };
     bool pathTraceNextEventEstimation{ true };
     bool pathTraceRussianRoulette{ true };
@@ -565,6 +566,7 @@ struct RendererSettings {
     glm::vec4 areaLightPositionAndIntensity{ 0.0f, 3.2f, 0.0f, 5.0f };
     glm::vec4 areaLightNormalAndSize{ 0.0f, -1.0f, 0.0f, 2.0f };
     glm::vec4 areaLightColor{ 0.86f, 0.92f, 1.0f, 0.0f };
+    float emissiveIntensity{ 1.0f };
     float environmentIntensity{ 2.0f };
     float environmentRotationDegrees{ 0.0f };
     uint32_t environmentPreset{ 0 };
@@ -937,6 +939,7 @@ private:
         size_t triangleOffsetBytes{ 0 };
         size_t textureIndex{ 0 };
         bool active{ false };
+        bool releasedPreviousSceneGpu{ false };
     };
 
     void InitializeCommands();

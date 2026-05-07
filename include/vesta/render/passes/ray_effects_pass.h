@@ -25,6 +25,7 @@ public:
     void SetFrameSlot(uint32_t frameSlot);
     void SetFrameIndex(uint32_t frameIndex);
     void SetLight(glm::vec4 lightDirectionAndIntensity);
+    void SetEmissionIntensity(float intensity);
     void SetControls(bool shadowsEnabled,
         bool ambientOcclusionEnabled,
         bool reflectionsEnabled,
@@ -57,6 +58,7 @@ private:
     uint32_t _frameSlot{ 0 };
     uint32_t _frameIndex{ 0 };
     glm::vec4 _lightDirectionAndIntensity{ -0.4f, -1.0f, -0.3f, 2.0f };
+    float _emissionIntensity{ 1.0f };
     bool _shadowsEnabled{ false };
     bool _ambientOcclusionEnabled{ false };
     bool _reflectionsEnabled{ false };

@@ -41,6 +41,7 @@
 namespace vesta::scene {
 namespace {
 constexpr uint32_t kRealtimeGaussianSortLimit = 200000;
+constexpr uint32_t kMaxDecodedDdsDimension = 1024;
 
 constexpr auto kLoadOptions = fastgltf::Options::DontRequireValidAssetMember | fastgltf::Options::LoadGLBBuffers
     | fastgltf::Options::LoadExternalBuffers | fastgltf::Options::LoadExternalImages | fastgltf::Options::GenerateMeshIndices;
@@ -242,8 +243,232 @@ std::optional<SceneTextureAsset> DecodeTextureAsset(
     return textureAsset;
 }
 
+uint32_t ReadLe32(const std::vector<std::byte>& bytes, size_t offset)
+{
+    if (offset + sizeof(uint32_t) > bytes.size()) {
+        return 0u;
+    }
+    uint32_t value = 0;
+    std::memcpy(&value, bytes.data() + offset, sizeof(uint32_t));
+    return value;
+}
+
+uint16_t ReadLe16(const std::vector<std::byte>& bytes, size_t offset)
+{
+    if (offset + sizeof(uint16_t) > bytes.size()) {
+        return 0u;
+    }
+    uint16_t value = 0;
+    std::memcpy(&value, bytes.data() + offset, sizeof(uint16_t));
+    return value;
+}
+
+glm::u8vec4 DecodeRgb565(uint16_t value)
+{
+    const uint8_t r5 = static_cast<uint8_t>((value >> 11u) & 0x1fu);
+    const uint8_t g6 = static_cast<uint8_t>((value >> 5u) & 0x3fu);
+    const uint8_t b5 = static_cast<uint8_t>(value & 0x1fu);
+    return glm::u8vec4(
+        static_cast<uint8_t>((r5 << 3u) | (r5 >> 2u)),
+        static_cast<uint8_t>((g6 << 2u) | (g6 >> 4u)),
+        static_cast<uint8_t>((b5 << 3u) | (b5 >> 2u)),
+        255u);
+}
+
+void WriteDdsPixel(SceneTextureAsset& texture, uint32_t x, uint32_t y, const glm::u8vec4& color)
+{
+    if (x >= texture.width || y >= texture.height) {
+        return;
+    }
+    const size_t offset = (static_cast<size_t>(y) * texture.width + x) * 4u;
+    texture.rgba8Pixels[offset + 0] = color.r;
+    texture.rgba8Pixels[offset + 1] = color.g;
+    texture.rgba8Pixels[offset + 2] = color.b;
+    texture.rgba8Pixels[offset + 3] = color.a;
+}
+
+std::array<uint8_t, 8> DecodeDdsAlphaPalette(uint8_t alpha0, uint8_t alpha1)
+{
+    std::array<uint8_t, 8> palette{};
+    palette[0] = alpha0;
+    palette[1] = alpha1;
+    if (alpha0 > alpha1) {
+        for (uint32_t i = 1; i < 7; ++i) {
+            palette[i + 1] = static_cast<uint8_t>(((7u - i) * alpha0 + i * alpha1) / 7u);
+        }
+    } else {
+        for (uint32_t i = 1; i < 5; ++i) {
+            palette[i + 1] = static_cast<uint8_t>(((5u - i) * alpha0 + i * alpha1) / 5u);
+        }
+        palette[6] = 0u;
+        palette[7] = 255u;
+    }
+    return palette;
+}
+
+std::array<uint8_t, 16> DecodeDdsAlphaBlock(const std::byte* block)
+{
+    const std::array<uint8_t, 8> palette =
+        DecodeDdsAlphaPalette(static_cast<uint8_t>(block[0]), static_cast<uint8_t>(block[1]));
+    uint64_t bits = 0;
+    for (uint32_t i = 0; i < 6; ++i) {
+        bits |= static_cast<uint64_t>(static_cast<uint8_t>(block[2 + i])) << (8u * i);
+    }
+
+    std::array<uint8_t, 16> values{};
+    for (uint32_t i = 0; i < 16; ++i) {
+        values[i] = palette[(bits >> (3u * i)) & 0x7u];
+    }
+    return values;
+}
+
+void DecodeDdsColorBlock(const std::vector<std::byte>& bytes,
+    size_t offset,
+    bool dxt1,
+    const std::array<uint8_t, 16>* alphaValues,
+    SceneTextureAsset& texture,
+    uint32_t blockX,
+    uint32_t blockY)
+{
+    const uint16_t color0 = ReadLe16(bytes, offset + 0u);
+    const uint16_t color1 = ReadLe16(bytes, offset + 2u);
+    const uint32_t colorBits = ReadLe32(bytes, offset + 4u);
+    std::array<glm::u8vec4, 4> palette{};
+    palette[0] = DecodeRgb565(color0);
+    palette[1] = DecodeRgb565(color1);
+    if (!dxt1 || color0 > color1) {
+        palette[2] = glm::u8vec4((2u * palette[0].r + palette[1].r) / 3u,
+            (2u * palette[0].g + palette[1].g) / 3u,
+            (2u * palette[0].b + palette[1].b) / 3u,
+            255u);
+        palette[3] = glm::u8vec4((palette[0].r + 2u * palette[1].r) / 3u,
+            (palette[0].g + 2u * palette[1].g) / 3u,
+            (palette[0].b + 2u * palette[1].b) / 3u,
+            255u);
+    } else {
+        palette[2] = glm::u8vec4((palette[0].r + palette[1].r) / 2u,
+            (palette[0].g + palette[1].g) / 2u,
+            (palette[0].b + palette[1].b) / 2u,
+            255u);
+        palette[3] = glm::u8vec4(0u, 0u, 0u, 0u);
+    }
+
+    for (uint32_t y = 0; y < 4; ++y) {
+        for (uint32_t x = 0; x < 4; ++x) {
+            const uint32_t texel = y * 4u + x;
+            glm::u8vec4 color = palette[(colorBits >> (2u * texel)) & 0x3u];
+            if (alphaValues != nullptr) {
+                color.a = (*alphaValues)[texel];
+            }
+            WriteDdsPixel(texture, blockX * 4u + x, blockY * 4u + y, color);
+        }
+    }
+}
+
+std::optional<SceneTextureAsset> DecodeDdsTextureFile(const std::filesystem::path& imagePath, bool srgb)
+{
+    std::ifstream input(imagePath, std::ios::binary | std::ios::ate);
+    if (!input.is_open()) {
+        return std::nullopt;
+    }
+    const std::streamsize fileSize = input.tellg();
+    if (fileSize < 128) {
+        return std::nullopt;
+    }
+    input.seekg(0, std::ios::beg);
+    std::vector<std::byte> bytes(static_cast<size_t>(fileSize));
+    if (!input.read(reinterpret_cast<char*>(bytes.data()), fileSize)) {
+        return std::nullopt;
+    }
+    if (bytes[0] != std::byte{ 'D' } || bytes[1] != std::byte{ 'D' } || bytes[2] != std::byte{ 'S' } || bytes[3] != std::byte{ ' ' }) {
+        return std::nullopt;
+    }
+
+    const uint32_t sourceHeight = ReadLe32(bytes, 12u);
+    const uint32_t sourceWidth = ReadLe32(bytes, 16u);
+    const uint32_t mipCount = std::max(1u, ReadLe32(bytes, 28u));
+    const std::string fourCc(reinterpret_cast<const char*>(bytes.data() + 84u), 4u);
+    const bool isDxt1 = fourCc == "DXT1";
+    const bool isDxt3 = fourCc == "DXT3";
+    const bool isDxt5 = fourCc == "DXT5";
+    const bool isAti2 = fourCc == "ATI2" || fourCc == "BC5U";
+    if (sourceWidth == 0u || sourceHeight == 0u || (!isDxt1 && !isDxt3 && !isDxt5 && !isAti2)) {
+        return std::nullopt;
+    }
+
+    const uint32_t bytesPerBlock = isDxt1 ? 8u : 16u;
+    size_t dataOffset = fourCc == "DX10" ? 148u : 128u;
+    uint32_t width = sourceWidth;
+    uint32_t height = sourceHeight;
+    for (uint32_t mip = 0; mip + 1u < mipCount && std::max(width, height) > kMaxDecodedDdsDimension; ++mip) {
+        const uint32_t blocksX = std::max(1u, (width + 3u) / 4u);
+        const uint32_t blocksY = std::max(1u, (height + 3u) / 4u);
+        dataOffset += static_cast<size_t>(blocksX) * blocksY * bytesPerBlock;
+        width = std::max(1u, width / 2u);
+        height = std::max(1u, height / 2u);
+    }
+
+    const uint32_t blocksX = std::max(1u, (width + 3u) / 4u);
+    const uint32_t blocksY = std::max(1u, (height + 3u) / 4u);
+    const size_t mipBytes = static_cast<size_t>(blocksX) * blocksY * bytesPerBlock;
+    if (dataOffset + mipBytes > bytes.size()) {
+        return std::nullopt;
+    }
+
+    SceneTextureAsset textureAsset;
+    textureAsset.name = imagePath.filename().string();
+    textureAsset.srgb = srgb;
+    textureAsset.width = width;
+    textureAsset.height = height;
+    textureAsset.rgba8Pixels.resize(static_cast<size_t>(width) * height * 4u);
+
+    for (uint32_t by = 0; by < blocksY; ++by) {
+        for (uint32_t bx = 0; bx < blocksX; ++bx) {
+            const size_t blockOffset = dataOffset + (static_cast<size_t>(by) * blocksX + bx) * bytesPerBlock;
+            if (isDxt1) {
+                DecodeDdsColorBlock(bytes, blockOffset, true, nullptr, textureAsset, bx, by);
+            } else if (isDxt3) {
+                std::array<uint8_t, 16> alphaValues{};
+                for (uint32_t i = 0; i < 16; ++i) {
+                    const uint8_t packed = static_cast<uint8_t>(bytes[blockOffset + i / 2u]);
+                    const uint8_t alpha4 = (i & 1u) == 0u ? packed & 0x0fu : packed >> 4u;
+                    alphaValues[i] = static_cast<uint8_t>((alpha4 << 4u) | alpha4);
+                }
+                DecodeDdsColorBlock(bytes, blockOffset + 8u, false, &alphaValues, textureAsset, bx, by);
+            } else if (isDxt5) {
+                const std::array<uint8_t, 16> alphaValues = DecodeDdsAlphaBlock(bytes.data() + blockOffset);
+                DecodeDdsColorBlock(bytes, blockOffset + 8u, false, &alphaValues, textureAsset, bx, by);
+            } else if (isAti2) {
+                const std::array<uint8_t, 16> redValues = DecodeDdsAlphaBlock(bytes.data() + blockOffset);
+                const std::array<uint8_t, 16> greenValues = DecodeDdsAlphaBlock(bytes.data() + blockOffset + 8u);
+                for (uint32_t y = 0; y < 4; ++y) {
+                    for (uint32_t x = 0; x < 4; ++x) {
+                        const uint32_t texel = y * 4u + x;
+                        const float nx = static_cast<float>(redValues[texel]) / 255.0f * 2.0f - 1.0f;
+                        const float ny = static_cast<float>(greenValues[texel]) / 255.0f * 2.0f - 1.0f;
+                        const float nz = std::sqrt(std::max(0.0f, 1.0f - nx * nx - ny * ny));
+                        WriteDdsPixel(textureAsset,
+                            bx * 4u + x,
+                            by * 4u + y,
+                            glm::u8vec4(redValues[texel], greenValues[texel], static_cast<uint8_t>(std::round(nz * 255.0f)), 255u));
+                    }
+                }
+            }
+        }
+    }
+    return textureAsset;
+}
+
 std::optional<SceneTextureAsset> DecodeTextureFile(const std::filesystem::path& imagePath, bool srgb)
 {
+    std::string extension = imagePath.extension().string();
+    std::transform(extension.begin(), extension.end(), extension.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    if (extension == ".dds") {
+        return DecodeDdsTextureFile(imagePath, srgb);
+    }
+
     int width = 0;
     int height = 0;
     int channelCount = 0;
@@ -499,6 +724,15 @@ const FbxNode* FindChildNode(const FbxNode& node, std::string_view name)
     return nullptr;
 }
 
+std::string_view FbxChildStringValue(const FbxNode& node, std::string_view childName)
+{
+    const FbxNode* child = FindChildNode(node, childName);
+    if (child == nullptr || child->properties.empty()) {
+        return {};
+    }
+    return child->properties.front().stringValue;
+}
+
 int64_t FbxPropertyAsInt64(const FbxProperty& property)
 {
     switch (property.type) {
@@ -552,6 +786,53 @@ std::optional<glm::vec3> ReadFbxPropertyVec3(const FbxNode& propertyNode, std::s
     return glm::vec3(static_cast<float>(FbxPropertyAsDouble(propertyNode.properties[4])),
         static_cast<float>(FbxPropertyAsDouble(propertyNode.properties[5])),
         static_cast<float>(FbxPropertyAsDouble(propertyNode.properties[6])));
+}
+
+uint32_t ResolveFbxMaterialSlot(std::span<const uint32_t> materialSlots, uint32_t fallbackMaterialIndex, int32_t slot)
+{
+    if (slot >= 0 && static_cast<size_t>(slot) < materialSlots.size()) {
+        return materialSlots[static_cast<size_t>(slot)];
+    }
+    return fallbackMaterialIndex;
+}
+
+std::vector<uint32_t> ReadFbxPolygonMaterials(const FbxNode& geometryNode,
+    std::span<const uint32_t> materialSlots,
+    uint32_t fallbackMaterialIndex,
+    size_t polygonCount)
+{
+    std::vector<uint32_t> polygonMaterials;
+    if (polygonCount == 0u) {
+        return polygonMaterials;
+    }
+
+    const FbxNode* layerMaterial = FindChildNode(geometryNode, "LayerElementMaterial");
+    const FbxNode* materialsNode = layerMaterial != nullptr ? FindChildNode(*layerMaterial, "Materials") : nullptr;
+    if (layerMaterial == nullptr || materialsNode == nullptr || materialsNode->properties.empty()) {
+        return polygonMaterials;
+    }
+
+    const std::vector<int32_t>& materialRefs = materialsNode->properties.front().int32Array;
+    if (materialRefs.empty()) {
+        return polygonMaterials;
+    }
+
+    const std::string_view mapping = FbxChildStringValue(*layerMaterial, "MappingInformationType");
+    polygonMaterials.resize(polygonCount, fallbackMaterialIndex);
+    if (mapping == "AllSame") {
+        const uint32_t materialIndex = ResolveFbxMaterialSlot(materialSlots, fallbackMaterialIndex, materialRefs.front());
+        std::fill(polygonMaterials.begin(), polygonMaterials.end(), materialIndex);
+        return polygonMaterials;
+    }
+    if (mapping != "ByPolygon") {
+        return {};
+    }
+
+    for (size_t polygonIndex = 0; polygonIndex < polygonMaterials.size(); ++polygonIndex) {
+        const int32_t slot = polygonIndex < materialRefs.size() ? materialRefs[polygonIndex] : -1;
+        polygonMaterials[polygonIndex] = ResolveFbxMaterialSlot(materialSlots, fallbackMaterialIndex, slot);
+    }
+    return polygonMaterials;
 }
 
 glm::mat4 FbxTransformFromProperties(const FbxNode& modelNode)
@@ -609,6 +890,7 @@ struct FbxModelInfo {
     std::string name;
     glm::mat4 transform{ 1.0f };
     uint32_t materialIndex{ 0 };
+    std::vector<uint32_t> materialSlots;
 };
 
 struct FbxTextureSet {
@@ -616,6 +898,8 @@ struct FbxTextureSet {
     std::filesystem::path baseColor;
     std::filesystem::path normal;
     std::filesystem::path roughness;
+    std::filesystem::path specular;
+    std::filesystem::path emissive;
 };
 
 struct FbxTextureInfo {
@@ -628,6 +912,8 @@ struct FbxMaterialInfo {
     std::filesystem::path baseColorPath;
     std::filesystem::path normalPath;
     std::filesystem::path roughnessPath;
+    std::filesystem::path specularPath;
+    std::filesystem::path emissivePath;
 };
 
 std::string ToLowerAscii(std::string value)
@@ -654,7 +940,7 @@ bool HasTextureExtension(const std::filesystem::path& path)
 {
     const std::string extension = ToLowerAscii(path.extension().string());
     return extension == ".png" || extension == ".jpg" || extension == ".jpeg" || extension == ".tga" || extension == ".bmp"
-        || extension == ".webp";
+        || extension == ".webp" || extension == ".dds";
 }
 
 bool ContainsAny(std::string_view value, std::initializer_list<std::string_view> needles)
@@ -665,6 +951,80 @@ bool ContainsAny(std::string_view value, std::initializer_list<std::string_view>
         }
     }
     return false;
+}
+
+std::optional<std::pair<std::string, SceneTextureSemantic>> FbxTextureSetKeyFromFilename(const std::filesystem::path& path);
+
+bool IsFbxEmissiveVariantKey(std::string_view key)
+{
+    return key.find("emissive") != std::string_view::npos || key.find("emission") != std::string_view::npos;
+}
+
+bool FbxNameAllowsEmissiveVariant(std::string_view name)
+{
+    return IsFbxEmissiveVariantKey(NormalizeTextureMatchKey(name));
+}
+
+bool FbxTexturePathIsEmissiveVariant(const std::filesystem::path& path)
+{
+    const auto match = FbxTextureSetKeyFromFilename(path);
+    return match.has_value() && IsFbxEmissiveVariantKey(match->first);
+}
+
+bool PruneUnexpectedFbxEmissiveVariant(FbxTextureSet& set, std::string_view ownerName)
+{
+    if (FbxNameAllowsEmissiveVariant(ownerName)) {
+        return false;
+    }
+
+    bool pruned = false;
+    auto prune = [&](std::filesystem::path& path) {
+        if (!path.empty() && FbxTexturePathIsEmissiveVariant(path)) {
+            path.clear();
+            pruned = true;
+        }
+    };
+
+    prune(set.baseColor);
+    prune(set.normal);
+    prune(set.roughness);
+    prune(set.specular);
+    prune(set.emissive);
+    return pruned;
+}
+
+bool ShouldKeepFbxMaterialTextureSet(std::string_view materialKey, std::string_view modelKey)
+{
+    if (materialKey.empty() || modelKey.empty() || materialKey == modelKey) {
+        return false;
+    }
+
+    if (materialKey == "stringlights" && modelKey.find("stringlights") != std::string_view::npos) {
+        return true;
+    }
+
+    return !IsFbxEmissiveVariantKey(materialKey) && IsFbxEmissiveVariantKey(modelKey)
+        && modelKey.find(materialKey) != std::string_view::npos;
+}
+
+float FbxEmissiveIntensity(std::string_view ownerName, std::string_view textureKey)
+{
+    std::string key = NormalizeTextureMatchKey(ownerName);
+    key += NormalizeTextureMatchKey(textureKey);
+    if (key.find("stringlights") != std::string::npos) {
+        return 6.0f;
+    }
+    if (key.find("streetlight") != std::string::npos || key.find("spotlight") != std::string::npos
+        || key.find("lantern") != std::string::npos) {
+        return 12.0f;
+    }
+    if (key.find("shopsign") != std::string::npos || key.find("sign") != std::string::npos) {
+        return 5.0f;
+    }
+    if (IsFbxEmissiveVariantKey(key)) {
+        return 8.0f;
+    }
+    return 1.0f;
 }
 
 std::filesystem::path FbxFilenameFromRawPath(std::string_view rawPath)
@@ -723,16 +1083,33 @@ std::vector<FbxTextureSet> DiscoverFbxTextureSets(const std::filesystem::path& f
                 continue;
             }
 
+            const auto match = FbxTextureSetKeyFromFilename(entry.path());
+            if (!match.has_value() || match->first.empty()) {
+                continue;
+            }
+
+            FbxTextureSet& set = sets[match->first];
+            set.key = match->first;
             const std::string filename = ToLowerAscii(entry.path().stem().string());
-            const std::string key = NormalizeTextureMatchKey(entry.path().parent_path().filename().string());
-            FbxTextureSet& set = sets[key.empty() ? "default" : key];
-            set.key = key.empty() ? "default" : key;
-            if (ContainsAny(filename, { "basecolor", "base_color", "diffuse", "albedo", "color" })) {
+            switch (match->second) {
+            case SceneTextureSemantic::BaseColor:
                 set.baseColor = entry.path();
-            } else if (ContainsAny(filename, { "normal", "normalmap", "bump" })) {
+                break;
+            case SceneTextureSemantic::Normal:
                 set.normal = entry.path();
-            } else if (ContainsAny(filename, { "roughness", "rough" })) {
-                set.roughness = entry.path();
+                break;
+            case SceneTextureSemantic::MetallicRoughness:
+                if (ContainsAny(filename, { "specular", "spec" })) {
+                    set.specular = entry.path();
+                } else {
+                    set.roughness = entry.path();
+                }
+                break;
+            case SceneTextureSemantic::Emissive:
+                set.emissive = entry.path();
+                break;
+            default:
+                break;
             }
         }
     }
@@ -740,7 +1117,8 @@ std::vector<FbxTextureSet> DiscoverFbxTextureSets(const std::filesystem::path& f
     std::vector<FbxTextureSet> result;
     result.reserve(sets.size());
     for (auto& [_, set] : sets) {
-        if (!set.baseColor.empty() || !set.normal.empty() || !set.roughness.empty()) {
+        if (!set.baseColor.empty() || !set.normal.empty() || !set.roughness.empty() || !set.specular.empty()
+            || !set.emissive.empty()) {
             result.push_back(std::move(set));
         }
     }
@@ -758,12 +1136,47 @@ const FbxTextureSet* SelectFbxTextureSet(std::span<const FbxTextureSet> textureS
     }
 
     const std::string matchKey = NormalizeTextureMatchKey(name);
+    if (matchKey.empty()) {
+        return nullptr;
+    }
+
+    const bool allowsEmissiveVariant = IsFbxEmissiveVariantKey(matchKey);
+    const auto setAllowed = [&](const FbxTextureSet& set) {
+        return allowsEmissiveVariant || !IsFbxEmissiveVariantKey(set.key);
+    };
+
+    const FbxTextureSet* bestContainedMatch = nullptr;
+    size_t bestContainedLength = 0u;
     for (const FbxTextureSet& set : textureSets) {
-        if (!matchKey.empty() && (matchKey.find(set.key) != std::string::npos || set.key.find(matchKey) != std::string::npos)) {
+        if (!setAllowed(set)) {
+            continue;
+        }
+        if (matchKey == set.key) {
             return &set;
         }
+        if (matchKey.find(set.key) != std::string::npos && set.key.size() > bestContainedLength) {
+            bestContainedMatch = &set;
+            bestContainedLength = set.key.size();
+        }
     }
-    return &textureSets.front();
+    if (bestContainedMatch != nullptr) {
+        return bestContainedMatch;
+    }
+
+    const FbxTextureSet* onlyExpandedMatch = nullptr;
+    for (const FbxTextureSet& set : textureSets) {
+        if (!setAllowed(set)) {
+            continue;
+        }
+        if (set.key.find(matchKey) == std::string::npos) {
+            continue;
+        }
+        if (onlyExpandedMatch != nullptr) {
+            return nullptr;
+        }
+        onlyExpandedMatch = &set;
+    }
+    return onlyExpandedMatch;
 }
 
 uint32_t AddFbxTextureAsset(ParsedScene& parsedScene,
@@ -789,6 +1202,86 @@ uint32_t AddFbxTextureAsset(ParsedScene& parsedScene,
     parsedScene.textures.push_back(*texture);
     textureCache.emplace(cacheKey, index);
     return index;
+}
+
+std::optional<std::pair<std::string, SceneTextureSemantic>> FbxTextureSetKeyFromFilename(const std::filesystem::path& path)
+{
+    std::string stem = path.stem().string();
+    const std::string lowerStem = ToLowerAscii(stem);
+    const auto stripSuffix = [&](std::initializer_list<std::string_view> suffixes, SceneTextureSemantic semantic)
+        -> std::optional<std::pair<std::string, SceneTextureSemantic>> {
+        for (std::string_view suffix : suffixes) {
+            if (lowerStem.size() > suffix.size()
+                && lowerStem.compare(lowerStem.size() - suffix.size(), suffix.size(), suffix) == 0) {
+                stem.resize(stem.size() - suffix.size());
+                return std::pair{ NormalizeTextureMatchKey(stem), semantic };
+            }
+        }
+        return std::nullopt;
+    };
+
+    if (auto match = stripSuffix({ "_basecolor", "_base_color", "_albedo", "_diffuse", "_color" }, SceneTextureSemantic::BaseColor)) {
+        return match;
+    }
+    if (auto match = stripSuffix({ "_normal", "_normalmap", "_bump", "_n" }, SceneTextureSemantic::Normal)) {
+        return match;
+    }
+    if (auto match = stripSuffix({ "_roughness", "_rough" }, SceneTextureSemantic::MetallicRoughness)) {
+        return match;
+    }
+    if (auto match = stripSuffix({ "_specular", "_spec" }, SceneTextureSemantic::MetallicRoughness)) {
+        return match;
+    }
+    if (auto match = stripSuffix({ "_emissive", "_emission" }, SceneTextureSemantic::Emissive)) {
+        return match;
+    }
+    return std::nullopt;
+}
+
+void AssignFbxTexturePath(FbxMaterialInfo& material, const std::filesystem::path& texturePath, std::string_view propertyName)
+{
+    if (texturePath.empty()) {
+        return;
+    }
+
+    const std::string filename = ToLowerAscii(texturePath.stem().string());
+    const auto filenameSemantic = FbxTextureSetKeyFromFilename(texturePath);
+    if (filenameSemantic.has_value()) {
+        switch (filenameSemantic->second) {
+        case SceneTextureSemantic::BaseColor:
+            material.baseColorPath = texturePath;
+            return;
+        case SceneTextureSemantic::Normal:
+            material.normalPath = texturePath;
+            return;
+        case SceneTextureSemantic::MetallicRoughness:
+            if (ContainsAny(filename, { "specular", "spec" })) {
+                material.specularPath = texturePath;
+            } else {
+                material.roughnessPath = texturePath;
+            }
+            return;
+        case SceneTextureSemantic::Emissive:
+            material.emissivePath = texturePath;
+            return;
+        default:
+            break;
+        }
+    }
+
+    const std::string property = ToLowerAscii(std::string(propertyName));
+    const std::string propertyKey = NormalizeTextureMatchKey(property);
+    if (ContainsAny(property, { "normal", "bump" })) {
+        material.normalPath = texturePath;
+    } else if (ContainsAny(property, { "roughness", "rough" })) {
+        material.roughnessPath = texturePath;
+    } else if (ContainsAny(property, { "specular", "spec" })) {
+        material.specularPath = texturePath;
+    } else if (ContainsAny(property, { "emissive", "emission" })) {
+        material.emissivePath = texturePath;
+    } else if (ContainsAny(property, { "diffuse", "basecolor", "base_color", "albedo" }) || propertyKey == "color") {
+        material.baseColorPath = texturePath;
+    }
 }
 
 size_t FbxNumericArraySize(const FbxProperty& property)
@@ -1029,11 +1522,15 @@ std::vector<ObjMaterialRecord> ParseObjMaterialLibraries(
 
     auto flushCurrent = [&]() {
         if (hasCurrent) {
-            if (IsLikelyObjLightMaterial(current.name) && Luminance(glm::vec3(current.material.emissiveFactor)) <= 1.0e-4f) {
+            const float emissiveLuminance = Luminance(glm::vec3(current.material.emissiveFactor));
+            if (IsLikelyObjLightMaterial(current.name) && emissiveLuminance <= 1.0e-4f) {
                 current.material.emissiveFactor = glm::vec4(glm::vec3(16.0f), 0.0f);
                 current.material.baseColorFactor = glm::vec4(glm::vec3(1.0f), current.material.baseColorFactor.a);
                 current.material.materialParams.x = 0.0f;
                 current.material.materialParams.y = 0.18f;
+            } else if (emissiveLuminance > 1.0e-4f && emissiveLuminance < 2.0f) {
+                current.material.emissiveFactor =
+                    glm::vec4(glm::vec3(current.material.emissiveFactor) * 8.0f, current.material.emissiveFactor.w);
             }
             records.push_back(std::move(current));
             current = {};
@@ -1840,8 +2337,17 @@ std::optional<FbxNode> ParseBinaryFbxTree(const std::filesystem::path& path, con
     return root.children.empty() ? std::nullopt : std::optional<FbxNode>(std::move(root));
 }
 
-bool AppendFbxGeometry(
-    const FbxNode& geometryNode, ParsedScene& parsedScene, uint32_t materialIndex, const glm::mat4& worldTransform, std::string_view objectName)
+struct FbxPrimitiveBuildState {
+    ParsedPrimitive primitive;
+    std::vector<uint32_t> polygonVertexToPrimitiveVertex;
+};
+
+bool AppendFbxGeometry(const FbxNode& geometryNode,
+    ParsedScene& parsedScene,
+    uint32_t fallbackMaterialIndex,
+    std::span<const uint32_t> materialSlots,
+    const glm::mat4& worldTransform,
+    std::string_view objectName)
 {
     const FbxNode* verticesNode = FindChildNode(geometryNode, "Vertices");
     const FbxNode* indicesNode = FindChildNode(geometryNode, "PolygonVertexIndex");
@@ -1883,13 +2389,32 @@ bool AppendFbxGeometry(
     const FbxProperty* uvRaw = uvNode != nullptr && !uvNode->properties.empty() ? &uvNode->properties.front() : nullptr;
     const std::vector<int32_t>* uvIndices = uvIndexNode != nullptr && !uvIndexNode->properties.empty() ? &uvIndexNode->properties.front().int32Array : nullptr;
 
-    ParsedPrimitive primitive;
-    primitive.materialIndex = materialIndex;
-    primitive.hasNormals = normalsRaw != nullptr && FbxNumericArraySize(*normalsRaw) > 0u;
+    size_t polygonCount = 0u;
+    for (const int32_t index : polygonIndicesRaw) {
+        if (index < 0) {
+            ++polygonCount;
+        }
+    }
+    const std::vector<uint32_t> polygonMaterials =
+        ReadFbxPolygonMaterials(geometryNode, materialSlots, fallbackMaterialIndex, polygonCount);
 
-    std::vector<uint32_t> polygonVertexToPrimitiveVertex(polygonIndicesRaw.size(), std::numeric_limits<uint32_t>::max());
-    auto appendPolygonVertex = [&](size_t polygonVertexIndex) -> uint32_t {
-        uint32_t& cachedIndex = polygonVertexToPrimitiveVertex[polygonVertexIndex];
+    std::vector<FbxPrimitiveBuildState> buildStates;
+    auto getBuildState = [&](uint32_t materialIndex) -> FbxPrimitiveBuildState& {
+        for (FbxPrimitiveBuildState& state : buildStates) {
+            if (state.primitive.materialIndex == materialIndex) {
+                return state;
+            }
+        }
+        FbxPrimitiveBuildState& state = buildStates.emplace_back();
+        state.primitive.materialIndex = materialIndex;
+        state.primitive.hasNormals = normalsRaw != nullptr && FbxNumericArraySize(*normalsRaw) > 0u;
+        state.polygonVertexToPrimitiveVertex.resize(polygonIndicesRaw.size(), std::numeric_limits<uint32_t>::max());
+        return state;
+    };
+
+    auto appendPolygonVertex = [&](FbxPrimitiveBuildState& state, size_t polygonVertexIndex) -> uint32_t {
+        ParsedPrimitive& primitive = state.primitive;
+        uint32_t& cachedIndex = state.polygonVertexToPrimitiveVertex[polygonVertexIndex];
         if (cachedIndex != std::numeric_limits<uint32_t>::max()) {
             return cachedIndex;
         }
@@ -1935,38 +2460,51 @@ bool AppendFbxGeometry(
 
     std::vector<size_t> polygon;
     polygon.reserve(8);
+    size_t polygonIndex = 0u;
     for (size_t polygonVertexIndex = 0; polygonVertexIndex < polygonIndicesRaw.size(); ++polygonVertexIndex) {
         polygon.push_back(polygonVertexIndex);
         if (polygonIndicesRaw[polygonVertexIndex] < 0) {
             if (polygon.size() >= 3) {
+                const uint32_t polygonMaterialIndex =
+                    polygonIndex < polygonMaterials.size() ? polygonMaterials[polygonIndex] : fallbackMaterialIndex;
+                FbxPrimitiveBuildState& state = getBuildState(polygonMaterialIndex);
                 for (size_t corner = 1; corner + 1 < polygon.size(); ++corner) {
-                    primitive.indices.push_back(appendPolygonVertex(polygon[0]));
-                    primitive.indices.push_back(appendPolygonVertex(polygon[corner]));
-                    primitive.indices.push_back(appendPolygonVertex(polygon[corner + 1]));
+                    state.primitive.indices.push_back(appendPolygonVertex(state, polygon[0]));
+                    state.primitive.indices.push_back(appendPolygonVertex(state, polygon[corner]));
+                    state.primitive.indices.push_back(appendPolygonVertex(state, polygon[corner + 1]));
                 }
             }
+            ++polygonIndex;
             polygon.clear();
         }
     }
 
-    if (primitive.positions.empty() || primitive.indices.empty()) {
+    std::erase_if(buildStates, [](const FbxPrimitiveBuildState& state) {
+        return state.primitive.positions.empty() || state.primitive.indices.empty();
+    });
+    if (buildStates.empty()) {
         return false;
     }
-    primitive.tangents = GenerateTangents(primitive.positions, primitive.normals, primitive.texCoords, primitive.indices);
-    primitive.hasTangents = true;
+    for (FbxPrimitiveBuildState& state : buildStates) {
+        ParsedPrimitive& primitive = state.primitive;
+        primitive.tangents = GenerateTangents(primitive.positions, primitive.normals, primitive.texCoords, primitive.indices);
+        primitive.hasTangents = true;
+        primitive.worldTransform = worldTransform;
+    }
 
     const uint32_t objectIndex = static_cast<uint32_t>(parsedScene.objects.size());
-    primitive.objectIndex = objectIndex;
-    primitive.worldTransform = worldTransform;
     const uint32_t firstPrimitive = static_cast<uint32_t>(parsedScene.primitives.size());
     parsedScene.objects.push_back(ParsedSceneObject{
         .name = objectName.empty() ? FbxObjectDisplayName(geometryNode, fmt::format("FBX Object {}", objectIndex)) : std::string(objectName),
         .initialWorldTransform = worldTransform,
         .worldTransform = worldTransform,
         .firstPrimitive = firstPrimitive,
-        .primitiveCount = 1,
+        .primitiveCount = static_cast<uint32_t>(buildStates.size()),
     });
-    parsedScene.primitives.push_back(std::move(primitive));
+    for (FbxPrimitiveBuildState& state : buildStates) {
+        state.primitive.objectIndex = objectIndex;
+        parsedScene.primitives.push_back(std::move(state.primitive));
+    }
     return true;
 }
 
@@ -1992,10 +2530,14 @@ bool ParseFbxMesh(const std::filesystem::path& path, ParsedScene& parsedScene, c
     std::unordered_map<int64_t, std::string> textureToMaterialProperty;
     std::unordered_map<int64_t, int64_t> textureToMaterial;
     std::unordered_map<std::string, uint32_t> textureCache;
+    std::unordered_set<int64_t> geometryIds;
 
     for (const FbxNode& child : objectsNode->children) {
         if (SceneParseCancelled(callbacks)) {
             return false;
+        }
+        if (child.name == "Geometry" && !child.properties.empty()) {
+            geometryIds.insert(FbxPropertyAsInt64(child.properties[0]));
         }
         if (child.name == "Material" && !child.properties.empty()) {
             SceneMaterial material = MakeDefaultMaterial();
@@ -2027,8 +2569,15 @@ bool ParseFbxMesh(const std::filesystem::path& path, ParsedScene& parsedScene, c
             const int64_t videoId = FbxPropertyAsInt64(child.properties[0]);
             textures.emplace(videoId, FbxTextureInfo{ .path = ResolveFbxTexturePath(path, texturePath) });
         } else if (child.name == "Texture" && !child.properties.empty()) {
+            std::filesystem::path texturePath;
+            if (const FbxNode* relativeFilename = FindChildNode(child, "RelativeFilename"); relativeFilename != nullptr && !relativeFilename->properties.empty()) {
+                texturePath = FbxFilenameFromRawPath(relativeFilename->properties.front().stringValue);
+            } else if (const FbxNode* filename = FindChildNode(child, "FileName"); filename != nullptr && !filename->properties.empty()) {
+                texturePath = FbxFilenameFromRawPath(filename->properties.front().stringValue);
+            }
+
             const int64_t textureId = FbxPropertyAsInt64(child.properties[0]);
-            textures.emplace(textureId, FbxTextureInfo{});
+            textures.emplace(textureId, FbxTextureInfo{ .path = ResolveFbxTexturePath(path, texturePath) });
         }
     }
 
@@ -2044,6 +2593,7 @@ bool ParseFbxMesh(const std::filesystem::path& path, ParsedScene& parsedScene, c
 
     std::unordered_map<int64_t, FbxModelInfo> models;
     std::unordered_map<int64_t, int64_t> geometryToModel;
+    std::unordered_map<int64_t, uint32_t> geometryToMaterial;
     ReportSceneParseProgress(callbacks, 0.35f, "Resolving FBX models");
     for (const FbxNode& child : objectsNode->children) {
         if (SceneParseCancelled(callbacks)) {
@@ -2069,11 +2619,25 @@ bool ParseFbxMesh(const std::filesystem::path& path, ParsedScene& parsedScene, c
             const int64_t childId = FbxPropertyAsInt64(connection.properties[1]);
             const int64_t parentId = FbxPropertyAsInt64(connection.properties[2]);
             if (relation == "OO") {
-                if (models.contains(parentId)) {
+                if (geometryIds.contains(childId) && models.contains(parentId)) {
                     geometryToModel[childId] = parentId;
+                }
+                if (geometryIds.contains(parentId) && models.contains(childId)) {
+                    geometryToModel[parentId] = childId;
                 }
                 if (materials.contains(childId) && models.contains(parentId)) {
                     models[parentId].materialIndex = materials[childId].materialIndex;
+                    models[parentId].materialSlots.push_back(materials[childId].materialIndex);
+                }
+                if (materials.contains(parentId) && models.contains(childId)) {
+                    models[childId].materialIndex = materials[parentId].materialIndex;
+                    models[childId].materialSlots.push_back(materials[parentId].materialIndex);
+                }
+                if (materials.contains(childId) && geometryIds.contains(parentId)) {
+                    geometryToMaterial[parentId] = materials[childId].materialIndex;
+                }
+                if (materials.contains(parentId) && geometryIds.contains(childId)) {
+                    geometryToMaterial[childId] = materials[parentId].materialIndex;
                 }
                 if (textures.contains(childId) && textures.contains(parentId)) {
                     if (!textures[childId].path.empty()) {
@@ -2091,6 +2655,11 @@ bool ParseFbxMesh(const std::filesystem::path& path, ParsedScene& parsedScene, c
         }
     }
 
+    ReportSceneParseLog(callbacks,
+        fmt::format("Resolved FBX links: {} geometry-model, {} geometry-material",
+            geometryToModel.size(),
+            geometryToMaterial.size()));
+
     ReportSceneParseProgress(callbacks, 0.50f, "Resolving FBX textures");
     for (const auto& [textureId, videoId] : textureToVideo) {
         if (textures[textureId].path.empty()) {
@@ -2101,19 +2670,18 @@ bool ParseFbxMesh(const std::filesystem::path& path, ParsedScene& parsedScene, c
     for (const auto& [textureId, materialId] : textureToMaterial) {
         FbxMaterialInfo& material = materials[materialId];
         const std::filesystem::path texturePath = textures[textureId].path;
-        const std::string property = ToLowerAscii(textureToMaterialProperty[textureId]);
-        if (ContainsAny(property, { "diffuse", "basecolor", "base_color", "color" })) {
-            material.baseColorPath = texturePath;
-        } else if (ContainsAny(property, { "normal", "bump" })) {
-            material.normalPath = texturePath;
-        } else if (ContainsAny(property, { "roughness", "rough" })) {
-            material.roughnessPath = texturePath;
-        }
+        AssignFbxTexturePath(material, texturePath, textureToMaterialProperty[textureId]);
     }
 
     const std::vector<FbxTextureSet> discoveredTextureSets = DiscoverFbxTextureSets(path);
     ReportSceneParseLog(callbacks, fmt::format("Discovered {} FBX texture set(s)", discoveredTextureSets.size()));
     ReportSceneParseProgress(callbacks, 0.60f, "Decoding FBX material textures");
+    const size_t fbxTextureCountBefore = parsedScene.textures.size();
+    size_t fbxMaterialTextureMatches = 0;
+    size_t fbxModelTextureMatches = 0;
+    size_t fbxPrunedEmissiveVariantTextures = 0;
+    size_t fbxPreservedMaterialTextureMatches = 0;
+    std::vector<std::string> fbxMaterialTextureKeys(parsedScene.materials.size());
     for (auto& [_, material] : materials) {
         if (SceneParseCancelled(callbacks)) {
             return false;
@@ -2123,19 +2691,31 @@ bool ParseFbxMesh(const std::filesystem::path& path, ParsedScene& parsedScene, c
             .baseColor = material.baseColorPath,
             .normal = material.normalPath,
             .roughness = material.roughnessPath,
+            .specular = material.specularPath,
+            .emissive = material.emissivePath,
         };
+        if (PruneUnexpectedFbxEmissiveVariant(explicitSet, material.name)) {
+            ++fbxPrunedEmissiveVariantTextures;
+        }
         const FbxTextureSet* selectedSet = &explicitSet;
-        if (selectedSet->baseColor.empty() && selectedSet->normal.empty() && selectedSet->roughness.empty()) {
+        if (selectedSet->baseColor.empty() && selectedSet->normal.empty() && selectedSet->roughness.empty()
+            && selectedSet->specular.empty() && selectedSet->emissive.empty()) {
             selectedSet = SelectFbxTextureSet(discoveredTextureSets, material.name);
         }
         if (selectedSet == nullptr) {
             continue;
         }
+        ++fbxMaterialTextureMatches;
+        if (material.materialIndex < fbxMaterialTextureKeys.size()) {
+            fbxMaterialTextureKeys[material.materialIndex] = selectedSet->key;
+        }
 
         SceneMaterial& sceneMaterial = parsedScene.materials[material.materialIndex];
         const uint32_t baseColorIndex = AddFbxTextureAsset(parsedScene, textureCache, selectedSet->baseColor, true);
-        const uint32_t roughnessIndex = AddFbxTextureAsset(parsedScene, textureCache, selectedSet->roughness, false);
+        const uint32_t roughnessIndex =
+            AddFbxTextureAsset(parsedScene, textureCache, selectedSet->roughness.empty() ? selectedSet->specular : selectedSet->roughness, false);
         const uint32_t normalIndex = AddFbxTextureAsset(parsedScene, textureCache, selectedSet->normal, false);
+        const uint32_t emissiveIndex = AddFbxTextureAsset(parsedScene, textureCache, selectedSet->emissive, true);
         if (baseColorIndex != render::kInvalidResourceIndex) {
             sceneMaterial.textureIndices0.x = baseColorIndex;
             sceneMaterial.baseColorFactor = glm::vec4(1.0f);
@@ -2148,6 +2728,10 @@ bool ParseFbxMesh(const std::filesystem::path& path, ParsedScene& parsedScene, c
             sceneMaterial.textureIndices0.z = normalIndex;
             sceneMaterial.materialParams.w = 1.0f;
         }
+        if (emissiveIndex != render::kInvalidResourceIndex) {
+            sceneMaterial.textureIndices1.x = emissiveIndex;
+            sceneMaterial.emissiveFactor = glm::vec4(glm::vec3(FbxEmissiveIntensity(material.name, selectedSet->key)), 0.0f);
+        }
     }
 
     if (!materials.empty() && !discoveredTextureSets.empty()) {
@@ -2159,12 +2743,21 @@ bool ParseFbxMesh(const std::filesystem::path& path, ParsedScene& parsedScene, c
             if (selectedSet == nullptr) {
                 continue;
             }
+            const uint32_t sourceMaterialIndex = model.materialIndex;
+            const std::string_view materialTextureKey =
+                sourceMaterialIndex < fbxMaterialTextureKeys.size() ? std::string_view(fbxMaterialTextureKeys[sourceMaterialIndex]) : std::string_view{};
+            if (ShouldKeepFbxMaterialTextureSet(materialTextureKey, selectedSet->key)) {
+                ++fbxPreservedMaterialTextureMatches;
+                continue;
+            }
             SceneMaterial modelMaterial = parsedScene.materials[model.materialIndex];
             const uint32_t baseColorIndex = AddFbxTextureAsset(parsedScene, textureCache, selectedSet->baseColor, true);
-            const uint32_t roughnessIndex = AddFbxTextureAsset(parsedScene, textureCache, selectedSet->roughness, false);
+            const uint32_t roughnessIndex =
+                AddFbxTextureAsset(parsedScene, textureCache, selectedSet->roughness.empty() ? selectedSet->specular : selectedSet->roughness, false);
             const uint32_t normalIndex = AddFbxTextureAsset(parsedScene, textureCache, selectedSet->normal, false);
+            const uint32_t emissiveIndex = AddFbxTextureAsset(parsedScene, textureCache, selectedSet->emissive, true);
             if (baseColorIndex == render::kInvalidResourceIndex && roughnessIndex == render::kInvalidResourceIndex
-                && normalIndex == render::kInvalidResourceIndex) {
+                && normalIndex == render::kInvalidResourceIndex && emissiveIndex == render::kInvalidResourceIndex) {
                 continue;
             }
             if (baseColorIndex != render::kInvalidResourceIndex) {
@@ -2179,11 +2772,35 @@ bool ParseFbxMesh(const std::filesystem::path& path, ParsedScene& parsedScene, c
                 modelMaterial.textureIndices0.z = normalIndex;
                 modelMaterial.materialParams.w = 1.0f;
             }
-            if (modelMaterial.textureIndices0 != parsedScene.materials[model.materialIndex].textureIndices0) {
+            if (emissiveIndex != render::kInvalidResourceIndex) {
+                modelMaterial.textureIndices1.x = emissiveIndex;
+                modelMaterial.emissiveFactor = glm::vec4(glm::vec3(FbxEmissiveIntensity(model.name, selectedSet->key)), 0.0f);
+            }
+            if (modelMaterial.textureIndices0 != parsedScene.materials[model.materialIndex].textureIndices0
+                || modelMaterial.textureIndices1 != parsedScene.materials[model.materialIndex].textureIndices1) {
                 model.materialIndex = static_cast<uint32_t>(parsedScene.materials.size());
                 parsedScene.materials.push_back(modelMaterial);
+                ++fbxModelTextureMatches;
             }
         }
+    }
+    if (fbxPrunedEmissiveVariantTextures > 0u) {
+        ReportSceneParseLog(callbacks,
+            fmt::format("Filtered {} unexpected FBX emissive texture variant(s) from non-emissive material links",
+                fbxPrunedEmissiveVariantTextures));
+    }
+    if (fbxPreservedMaterialTextureMatches > 0u) {
+        ReportSceneParseLog(callbacks,
+            fmt::format("Preserved {} FBX material texture set(s) over conflicting model-name override(s)",
+                fbxPreservedMaterialTextureMatches));
+    }
+    ReportSceneParseLog(callbacks,
+        fmt::format("Matched FBX texture sets: {} material(s), {} model override(s)",
+            fbxMaterialTextureMatches,
+            fbxModelTextureMatches));
+    const size_t fbxDecodedTextureCount = parsedScene.textures.size() - fbxTextureCountBefore;
+    if (fbxDecodedTextureCount > 0u) {
+        ReportSceneParseLog(callbacks, fmt::format("Decoded {} FBX material texture(s)", fbxDecodedTextureCount));
     }
 
     ReportSceneParseProgress(callbacks, 0.78f, "Flattening FBX geometry");
@@ -2203,8 +2820,22 @@ bool ParseFbxMesh(const std::filesystem::path& path, ParsedScene& parsedScene, c
                     materialIndex = model->second.materialIndex;
                 }
             }
+            if (const auto material = geometryToMaterial.find(geometryId); material != geometryToMaterial.end()) {
+                materialIndex = material->second;
+            }
             worldTransform = unitTransform * worldTransform;
-            AppendFbxGeometry(child, parsedScene, materialIndex, worldTransform, objectName);
+            const std::vector<uint32_t>* materialSlots = nullptr;
+            if (const auto mapping = geometryToModel.find(geometryId); mapping != geometryToModel.end()) {
+                if (const auto model = models.find(mapping->second); model != models.end() && !model->second.materialSlots.empty()) {
+                    materialSlots = &model->second.materialSlots;
+                }
+            }
+            AppendFbxGeometry(child,
+                parsedScene,
+                materialIndex,
+                materialSlots != nullptr ? std::span<const uint32_t>(materialSlots->data(), materialSlots->size()) : std::span<const uint32_t>{},
+                worldTransform,
+                objectName);
         }
     }
 
@@ -3476,6 +4107,8 @@ bool Scene::PrepareParsedScene(const SceneParseCallbacks& callbacks)
     sceneData.sourcePath = parsed->sourcePath;
     sceneData.textures = parsed->textures;
     sceneData.emissiveTriangles = BuildEmissiveTriangles(sceneData.triangles);
+    ReportSceneParseLog(callbackPtr,
+        fmt::format("Prepared {} emissive triangle light(s)", sceneData.emissiveTriangles.size()));
     _prepared = std::move(prepared);
     ++_contentVersion;
     return IsLoaded();

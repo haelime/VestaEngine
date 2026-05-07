@@ -95,16 +95,33 @@ std::string NormalizedAssetPathKey(const std::filesystem::path& path)
     return key;
 }
 
-void ApplyBenchmarkSceneLightingPreset(vesta::render::RendererSettings& settings, const std::filesystem::path& path)
+void ApplyBenchmarkSceneLightingPreset(vesta::render::RendererSettings& settings,
+    const std::filesystem::path& path,
+    const vesta::scene::SceneBounds* bounds = nullptr)
 {
     const std::string key = NormalizedAssetPathKey(path);
     const auto contains = [&](std::string_view token) {
         return key.find(token) != std::string::npos;
     };
+    const auto boundsRadius = [&]() {
+        return bounds != nullptr ? std::max(bounds->radius, 1.0f) : 1.0f;
+    };
+    const auto boundsCenter = [&]() {
+        return bounds != nullptr ? bounds->center : glm::vec3(0.0f);
+    };
+    const auto scaledIntensity = [&](float base, float scale) {
+        const float radius = boundsRadius();
+        return bounds != nullptr ? std::max(base, radius * radius * scale) : base;
+    };
+    const auto directionToCenter = [&](glm::vec3 position, glm::vec3 fallback) {
+        const glm::vec3 delta = boundsCenter() - position;
+        return glm::length(delta) > 1.0e-4f ? glm::normalize(delta) : glm::normalize(fallback);
+    };
     const bool isBenchmarkPreset = contains("cornell_box") || contains("cornell-box") || contains("bistro_v5_2")
         || contains("bistrointerior") || contains("bistroexterior") || contains("bistro_interior")
         || contains("interior.obj") || contains("bistro_exterior") || contains("exterior.obj") || contains("sponza")
-        || contains("san_miguel") || contains("stanford_bunny") || contains("stanford_dragon") || contains("stanford_buddha");
+        || contains("san_miguel") || contains("stanford_bunny") || contains("stanford_dragon") || contains("stanford_buddha")
+        || contains("damagedhelmet") || contains("damaged_helmet");
     if (!isBenchmarkPreset) {
         return;
     }
@@ -147,6 +164,15 @@ void ApplyBenchmarkSceneLightingPreset(vesta::render::RendererSettings& settings
         settings.spotLightPositionAndIntensity = glm::vec4(0.0f, 3.2f, 2.0f, 18.0f);
         settings.spotLightDirectionAndAngle = glm::vec4(0.0f, -0.85f, -0.45f, 34.0f);
         settings.spotLightColor = glm::vec4(1.0f, 0.86f, 0.68f, 0.0f);
+        if (bounds != nullptr) {
+            const glm::vec3 center = boundsCenter();
+            const float radius = boundsRadius();
+            settings.pointLightPositionAndIntensity = glm::vec4(center + glm::vec3(0.0f, radius * 0.12f, 0.0f),
+                scaledIntensity(8.0f, 0.012f));
+            const glm::vec3 spotPosition = center + glm::vec3(0.0f, radius * 0.34f, radius * 0.22f);
+            settings.spotLightPositionAndIntensity = glm::vec4(spotPosition, scaledIntensity(18.0f, 0.020f));
+            settings.spotLightDirectionAndAngle = glm::vec4(directionToCenter(spotPosition, glm::vec3(0.0f, -0.85f, -0.45f)), 38.0f);
+        }
         return;
     }
 
@@ -154,6 +180,17 @@ void ApplyBenchmarkSceneLightingPreset(vesta::render::RendererSettings& settings
         settings.environmentPreset = 3u;
         settings.lightDirectionAndIntensity = glm::vec4(-0.55f, -1.0f, -0.25f, 1.0f);
         settings.directionalLightColor = glm::vec4(1.0f, 0.88f, 0.70f, 0.0f);
+        settings.enableSpotLight = true;
+        settings.spotLightPositionAndIntensity = glm::vec4(0.0f, 3.0f, 0.0f, 8.0f);
+        settings.spotLightDirectionAndAngle = glm::vec4(0.0f, -1.0f, 0.0f, 42.0f);
+        settings.spotLightColor = glm::vec4(1.0f, 0.80f, 0.58f, 0.0f);
+        if (bounds != nullptr) {
+            const glm::vec3 center = boundsCenter();
+            const float radius = boundsRadius();
+            const glm::vec3 spotPosition = center + glm::vec3(-radius * 0.18f, radius * 0.32f, radius * 0.18f);
+            settings.spotLightPositionAndIntensity = glm::vec4(spotPosition, scaledIntensity(8.0f, 0.010f));
+            settings.spotLightDirectionAndAngle = glm::vec4(directionToCenter(spotPosition, glm::vec3(0.0f, -1.0f, 0.0f)), 46.0f);
+        }
         return;
     }
 
@@ -171,6 +208,12 @@ void ApplyBenchmarkSceneLightingPreset(vesta::render::RendererSettings& settings
         settings.enablePointLight = true;
         settings.pointLightPositionAndIntensity = glm::vec4(0.0f, 3.0f, 0.0f, 5.0f);
         settings.pointLightColor = glm::vec4(1.0f, 0.72f, 0.46f, 0.0f);
+        if (bounds != nullptr) {
+            const glm::vec3 center = boundsCenter();
+            const float radius = boundsRadius();
+            settings.pointLightPositionAndIntensity =
+                glm::vec4(center + glm::vec3(0.0f, radius * 0.18f, 0.0f), scaledIntensity(5.0f, 0.008f));
+        }
         return;
     }
 
@@ -235,16 +278,22 @@ const char* DisplayModeLabel(vesta::render::RendererDisplayMode mode)
     }
 }
 
-std::optional<std::filesystem::path> BistroV52SiblingHdri(const std::filesystem::path& scenePath)
+std::optional<std::filesystem::path> BenchmarkSceneHdri(const std::filesystem::path& scenePath)
 {
     const std::string key = NormalizedAssetPathKey(scenePath);
-    if (key.find("bistro_v5_2") == std::string::npos) {
-        return std::nullopt;
+    if (key.find("bistro_v5_2") != std::string::npos) {
+        const std::filesystem::path hdri = scenePath.parent_path() / "san_giuseppe_bridge_4k.hdr";
+        if (std::filesystem::exists(hdri)) {
+            return hdri;
+        }
     }
 
-    const std::filesystem::path hdri = scenePath.parent_path() / "san_giuseppe_bridge_4k.hdr";
-    if (std::filesystem::exists(hdri)) {
-        return hdri;
+    if (key.find("damagedhelmet") != std::string::npos || key.find("damaged_helmet") != std::string::npos) {
+        const std::filesystem::path hdri = std::filesystem::path("assets") / "benchmark_scenes" / "Bistro_v5_2"
+            / "san_giuseppe_bridge_4k.hdr";
+        if (std::filesystem::exists(hdri)) {
+            return hdri;
+        }
     }
     return std::nullopt;
 }
@@ -467,6 +516,30 @@ const char* GaussianDebugViewLabel(vesta::render::GaussianDebugView view)
     default:
         return "Final";
     }
+}
+
+bool PathTracePassVisible(vesta::render::RendererDisplayMode mode)
+{
+    return mode == vesta::render::RendererDisplayMode::PathTrace || mode == vesta::render::RendererDisplayMode::Composite;
+}
+
+float PathTraceProgressFraction(uint32_t frameIndex, uint32_t targetFrames)
+{
+    const uint32_t target = std::max(targetFrames, 1u);
+    return std::clamp(static_cast<float>(frameIndex) / static_cast<float>(target), 0.0f, 1.0f);
+}
+
+std::string PathTraceProgressLabel(uint32_t frameIndex, uint32_t targetFrames)
+{
+    const uint32_t target = std::max(targetFrames, 1u);
+    const float percent = PathTraceProgressFraction(frameIndex, target) * 100.0f;
+    return fmt::format("{} / {} ({:.0f}%)", std::min(frameIndex, target), target, percent);
+}
+
+void DrawPathTraceProgressBar(const vesta::render::RendererSettings& settings, uint32_t frameIndex, const ImVec2& size)
+{
+    const std::string label = PathTraceProgressLabel(frameIndex, settings.pathTraceTargetFrames);
+    ImGui::ProgressBar(PathTraceProgressFraction(frameIndex, settings.pathTraceTargetFrames), size, label.c_str());
 }
 
 const char* CompareModeLabel(vesta::render::CompareMode mode)
@@ -1586,6 +1659,10 @@ void VestaEngine::init_renderer()
         settings.environmentDiffuseStrength = std::clamp(*_launchOptions.startupEnvironmentDiffuseStrength, 0.0f, 2.0f);
         resetAccumulation = true;
     }
+    if (_launchOptions.startupEmissiveIntensity.has_value()) {
+        settings.emissiveIntensity = std::clamp(*_launchOptions.startupEmissiveIntensity, 0.0f, 64.0f);
+        resetAccumulation = true;
+    }
     if (_launchOptions.startupEnvironmentSpecularStrength.has_value()) {
         settings.environmentSpecularStrength = std::clamp(*_launchOptions.startupEnvironmentSpecularStrength, 0.0f, 2.0f);
         resetAccumulation = true;
@@ -1647,7 +1724,7 @@ void VestaEngine::init_renderer()
         }
         ApplyBenchmarkSceneLightingPreset(settings, path);
         if (!_launchOptions.startupExternalHdriPath.has_value()) {
-            if (const std::optional<std::filesystem::path> hdri = BistroV52SiblingHdri(path)) {
+            if (const std::optional<std::filesystem::path> hdri = BenchmarkSceneHdri(path)) {
                 apply_external_hdri_path(*hdri);
             }
         }
@@ -1912,6 +1989,8 @@ void VestaEngine::update_runtime_warnings()
 void VestaEngine::update_startup_state()
 {
     const auto& sceneLoadStatus = _renderer.GetSceneLoadStatus();
+    const bool sceneBecameReady = _startupState.lastSceneLoadState != vesta::render::SceneLoadState::Ready
+        && sceneLoadStatus.state == vesta::render::SceneLoadState::Ready;
     if (_startupState.lastSceneLoadState != sceneLoadStatus.state
         || _startupState.lastSceneLoadMessage != sceneLoadStatus.message) {
         std::string statusLine = "Scene state -> ";
@@ -1936,6 +2015,12 @@ void VestaEngine::update_startup_state()
     }
     _startupState.lastSceneLoadLogCount = sceneLoadStatus.logMessages.size();
 
+    if (sceneBecameReady && !_renderer.GetScene().GetSourcePath().empty()) {
+        ApplyBenchmarkSceneLightingPreset(_renderer.GetSettings(), _renderer.GetScene().GetSourcePath(), &_renderer.GetScene().GetBounds());
+        _renderer.ResetAccumulation();
+        log_startup_event("Scene bounds lighting preset applied");
+    }
+
     if (!_startupState.firstFramePresented) {
         _startupState.firstFramePresented = true;
         log_startup_event("First frame presented");
@@ -1947,7 +2032,7 @@ void VestaEngine::update_startup_state()
             ApplySceneModeInference(_renderer.GetSettings(), _renderer.GetScene().GetSourcePath());
         }
         if (!_renderer.GetScene().GetSourcePath().empty()) {
-            ApplyBenchmarkSceneLightingPreset(_renderer.GetSettings(), _renderer.GetScene().GetSourcePath());
+            ApplyBenchmarkSceneLightingPreset(_renderer.GetSettings(), _renderer.GetScene().GetSourcePath(), &_renderer.GetScene().GetBounds());
         }
         _renderer.SetStartupSafeModeActive(false);
         if (_renderer.GetSettings().buildRayTracingStructuresOnLoad
@@ -2724,6 +2809,7 @@ bool VestaEngine::request_screenshot_with_metadata(const std::filesystem::path& 
            << "  },\n"
            << "  \"frame_index\": " << _frameNumber << ",\n"
            << "  \"path_trace_frame_index\": " << _renderer.GetPathTraceFrameIndex() << ",\n"
+           << "  \"emissive_intensity\": " << settings.emissiveIntensity << ",\n"
            << "  \"environment_intensity\": " << settings.environmentIntensity << ",\n"
            << "  \"environment_rotation_degrees\": " << settings.environmentRotationDegrees << ",\n"
            << "  \"environment_preset\": \"" << EnvironmentPresetLabel(settings.environmentPreset) << "\",\n"
@@ -3317,6 +3403,63 @@ void VestaEngine::build_main_menu_bar()
                 _renderer.ResetAccumulation();
             }
             ImGui::Separator();
+            if (ImGui::BeginMenu("Debug Views")) {
+                const auto debugViewItem = [&](const char* label, vesta::render::RendererDebugView view) {
+                    const bool selected = settings.debugView == view;
+                    if (ImGui::MenuItem(label, nullptr, selected)) {
+                        settings.debugView = view;
+                        _showDebugUi = true;
+                        _showDebugVisualizationPanel = true;
+                        _renderer.ResetAccumulation();
+                    }
+                };
+                debugViewItem("Final Color", vesta::render::RendererDebugView::FinalColor);
+                ImGui::SeparatorText("Material");
+                debugViewItem("Albedo / Base Color", vesta::render::RendererDebugView::Albedo);
+                debugViewItem("Normal", vesta::render::RendererDebugView::Normal);
+                debugViewItem("Roughness", vesta::render::RendererDebugView::Roughness);
+                debugViewItem("Metallic", vesta::render::RendererDebugView::Metallic);
+                debugViewItem("Emissive", vesta::render::RendererDebugView::Emissive);
+                ImGui::SeparatorText("Raster");
+                debugViewItem("Wireframe", vesta::render::RendererDebugView::Wireframe);
+                debugViewItem("Overdraw", vesta::render::RendererDebugView::Overdraw);
+                debugViewItem("Linear Depth", vesta::render::RendererDebugView::Depth);
+                debugViewItem("Shadow Cascade", vesta::render::RendererDebugView::ShadowCascade);
+                debugViewItem("Motion Vector", vesta::render::RendererDebugView::MotionVector);
+                ImGui::SeparatorText("Lighting");
+                debugViewItem("Direct Lighting", vesta::render::RendererDebugView::DirectLighting);
+                debugViewItem("Indirect Lighting", vesta::render::RendererDebugView::IndirectLighting);
+                debugViewItem("Reflection", vesta::render::RendererDebugView::Reflection);
+                debugViewItem("Denoised Result", vesta::render::RendererDebugView::DenoisedResult);
+                ImGui::EndMenu();
+            }
+            if (ImGui::BeginMenu("Path Tracing AOV")) {
+                const auto pathTraceViewItem = [&](const char* label, vesta::render::PathTraceDebugView view) {
+                    const bool selected = settings.pathTraceDebugView == view;
+                    if (ImGui::MenuItem(label, nullptr, selected)) {
+                        settings.pathTraceDebugView = view;
+                        vesta::render::ApplyDisplayModePassSelection(settings, vesta::render::RendererDisplayMode::PathTrace);
+                        _showDebugUi = true;
+                        _showDebugVisualizationPanel = true;
+                        _renderer.ResetAccumulation();
+                    }
+                };
+                pathTraceViewItem("Final", vesta::render::PathTraceDebugView::Final);
+                pathTraceViewItem("Albedo", vesta::render::PathTraceDebugView::Albedo);
+                pathTraceViewItem("Normal", vesta::render::PathTraceDebugView::Normal);
+                pathTraceViewItem("Depth", vesta::render::PathTraceDebugView::Depth);
+                ImGui::SeparatorText("Lighting");
+                pathTraceViewItem("Direct", vesta::render::PathTraceDebugView::Direct);
+                pathTraceViewItem("Indirect", vesta::render::PathTraceDebugView::Indirect);
+                pathTraceViewItem("Diffuse Bounce", vesta::render::PathTraceDebugView::DiffuseBounce);
+                pathTraceViewItem("Specular Bounce", vesta::render::PathTraceDebugView::SpecularBounce);
+                ImGui::SeparatorText("Integrator");
+                pathTraceViewItem("Ray Count Heatmap", vesta::render::PathTraceDebugView::RayCountHeatmap);
+                pathTraceViewItem("Throughput", vesta::render::PathTraceDebugView::Throughput);
+                pathTraceViewItem("PDF", vesta::render::PathTraceDebugView::Pdf);
+                ImGui::EndMenu();
+            }
+            ImGui::Separator();
             if (ImGui::MenuItem("Global Illumination", nullptr, settings.enableGlobalIllumination)) {
                 settings.enableGlobalIllumination = !settings.enableGlobalIllumination;
                 _renderer.ResetAccumulation();
@@ -3409,19 +3552,6 @@ void VestaEngine::build_main_menu_bar()
                 ImGui::EndMenu();
             }
 
-            if (ImGui::MenuItem("Enable Raster", nullptr, settings.enableRaster)) {
-                settings.enableRaster = !settings.enableRaster;
-                _renderer.ResetAccumulation();
-            }
-            if (ImGui::MenuItem("Enable Gaussian", nullptr, settings.enableGaussian)) {
-                settings.enableGaussian = !settings.enableGaussian;
-                _renderer.ResetAccumulation();
-            }
-            if (ImGui::MenuItem("Enable Path Tracing", nullptr, settings.enablePathTracing)) {
-                settings.enablePathTracing = !settings.enablePathTracing;
-                _renderer.ResetAccumulation();
-            }
-
             if (ImGui::BeginMenu("PT Backend")) {
                 bool autoSelected = settings.pathTraceBackend == vesta::render::PathTraceBackend::Auto;
                 if (ImGui::MenuItem("Auto", nullptr, autoSelected)) {
@@ -3444,6 +3574,101 @@ void VestaEngine::build_main_menu_bar()
                 ImGui::EndMenu();
             }
 
+            if (ImGui::BeginMenu("Path Tracing")) {
+                const uint32_t frameIndex = _renderer.GetPathTraceFrameIndex();
+                ImGui::Text("Progress");
+                DrawPathTraceProgressBar(settings, frameIndex, ImVec2(220.0f, 0.0f));
+                int targetFrames = static_cast<int>(settings.pathTraceTargetFrames);
+                if (ImGui::InputInt("Target Frames", &targetFrames, 16, 64)) {
+                    settings.pathTraceTargetFrames = static_cast<uint32_t>(std::clamp(targetFrames, 1, 8192));
+                }
+                if (ImGui::SliderFloat("Resolution Scale", &settings.pathTraceResolutionScale, 0.25f, 1.0f, "%.2fx")) {
+                    _renderer.ResetAccumulation();
+                }
+                int spp = static_cast<int>(settings.pathTraceSamplesPerPixel);
+                if (ImGui::InputInt("Samples / Frame", &spp, 1, 4)) {
+                    settings.pathTraceSamplesPerPixel = static_cast<uint32_t>(std::clamp(spp, 1, 64));
+                    _renderer.ResetAccumulation();
+                }
+                int maxBounces = static_cast<int>(settings.pathTraceMaxBounces);
+                if (ImGui::InputInt("Max Bounces", &maxBounces, 1, 2)) {
+                    settings.pathTraceMaxBounces = static_cast<uint32_t>(std::clamp(maxBounces, 1, 16));
+                    _renderer.ResetAccumulation();
+                }
+                if (ImGui::MenuItem("Denoiser", nullptr, settings.enablePathTraceDenoiser)) {
+                    settings.enablePathTraceDenoiser = !settings.enablePathTraceDenoiser;
+                    _renderer.ResetAccumulation();
+                }
+                if (settings.enablePathTraceDenoiser) {
+                    if (ImGui::SliderFloat("Denoiser Strength", &settings.pathTraceDenoiserStrength, 0.0f, 1.0f, "%.2f")) {
+                        _renderer.ResetAccumulation();
+                    }
+                    if (ImGui::SliderFloat("Temporal Blend", &settings.pathTraceDenoiserTemporalBlend, 0.0f, 0.98f, "%.2f")) {
+                        _renderer.ResetAccumulation();
+                    }
+                }
+                if (ImGui::MenuItem("Next Event Estimation", nullptr, settings.pathTraceNextEventEstimation)) {
+                    settings.pathTraceNextEventEstimation = !settings.pathTraceNextEventEstimation;
+                    _renderer.ResetAccumulation();
+                }
+                if (ImGui::MenuItem("Russian Roulette", nullptr, settings.pathTraceRussianRoulette)) {
+                    settings.pathTraceRussianRoulette = !settings.pathTraceRussianRoulette;
+                    _renderer.ResetAccumulation();
+                }
+                if (ImGui::SliderFloat("Firefly Clamp", &settings.pathTraceFireflyClamp, 0.0f, 64.0f, "%.1f")) {
+                    _renderer.ResetAccumulation();
+                }
+                if (ImGui::MenuItem("Reset Accumulation")) {
+                    _renderer.ResetAccumulation();
+                }
+                ImGui::EndMenu();
+            }
+
+            if (ImGui::BeginMenu("Debug Aids")) {
+                if (ImGui::MenuItem("G-Buffer Preview Strip", nullptr, settings.showGBufferPreview)) {
+                    settings.showGBufferPreview = !settings.showGBufferPreview;
+                }
+                if (ImGui::MenuItem("Shadow Cascade Overlay", nullptr, settings.showShadowCascadeOverlay)) {
+                    settings.showShadowCascadeOverlay = !settings.showShadowCascadeOverlay;
+                    _renderer.ResetAccumulation();
+                }
+                if (ImGui::MenuItem("Wireframe View", nullptr, settings.debugView == vesta::render::RendererDebugView::Wireframe)) {
+                    settings.debugView = settings.debugView == vesta::render::RendererDebugView::Wireframe
+                        ? vesta::render::RendererDebugView::FinalColor
+                        : vesta::render::RendererDebugView::Wireframe;
+                    _showDebugUi = true;
+                    _showDebugVisualizationPanel = true;
+                    _renderer.ResetAccumulation();
+                }
+                if (ImGui::MenuItem("Overdraw Heatmap", nullptr, settings.debugView == vesta::render::RendererDebugView::Overdraw)) {
+                    settings.debugView = settings.debugView == vesta::render::RendererDebugView::Overdraw
+                        ? vesta::render::RendererDebugView::FinalColor
+                        : vesta::render::RendererDebugView::Overdraw;
+                    _showDebugUi = true;
+                    _showDebugVisualizationPanel = true;
+                    _renderer.ResetAccumulation();
+                }
+                if (ImGui::MenuItem("Temporal History", nullptr, settings.debugView == vesta::render::RendererDebugView::TemporalHistoryColor)) {
+                    settings.debugView = settings.debugView == vesta::render::RendererDebugView::TemporalHistoryColor
+                        ? vesta::render::RendererDebugView::FinalColor
+                        : vesta::render::RendererDebugView::TemporalHistoryColor;
+                    _showDebugUi = true;
+                    _showDebugVisualizationPanel = true;
+                    _renderer.ResetAccumulation();
+                }
+                ImGui::MenuItem("Show Upscaler Debug", nullptr, &settings.showTemporalUpscalerDebug);
+                ImGui::MenuItem("Gaussian Tile Grid", nullptr, &settings.gaussianShowTileGrid);
+                ImGui::MenuItem("Gaussian Spatial Bounds", nullptr, &settings.gaussianShowSpatialBounds);
+                if (ImGui::MenuItem("Reset Debug Views")) {
+                    settings.debugView = vesta::render::RendererDebugView::FinalColor;
+                    settings.pathTraceDebugView = vesta::render::PathTraceDebugView::Final;
+                    settings.gaussianDebugView = vesta::render::GaussianDebugView::Final;
+                    settings.compareMode = vesta::render::CompareMode::Off;
+                    _renderer.ResetAccumulation();
+                }
+                ImGui::EndMenu();
+            }
+
             if (ImGui::BeginMenu("Directional Light")) {
                 float direction[3] = {
                     settings.lightDirectionAndIntensity.x,
@@ -3460,6 +3685,9 @@ void VestaEngine::build_main_menu_bar()
                     }
                 }
                 if (ImGui::SliderFloat("Intensity", &settings.lightDirectionAndIntensity.w, 0.0f, 8.0f, "%.2f")) {
+                    _renderer.ResetAccumulation();
+                }
+                if (ImGui::SliderFloat("Emission", &settings.emissiveIntensity, 0.0f, 64.0f, "%.2f")) {
                     _renderer.ResetAccumulation();
                 }
                 ImGui::SeparatorText("Environment");
@@ -3542,6 +3770,12 @@ void VestaEngine::build_main_menu_bar()
         } else if (!sceneStatus.empty()) {
             ImGui::Separator();
             ImGui::TextDisabled("%s", sceneStatus.c_str());
+        }
+        if (!sceneLoadInProgress && PathTracePassVisible(settings.displayMode)) {
+            ImGui::Separator();
+            ImGui::TextDisabled("PT");
+            ImGui::SameLine();
+            DrawPathTraceProgressBar(settings, _renderer.GetPathTraceFrameIndex(), ImVec2(150.0f, 0.0f));
         }
 
         ImGui::EndMainMenuBar();
@@ -3638,7 +3872,10 @@ void VestaEngine::build_debug_ui()
                 ImGui::TableSetColumnIndex(0);
                 ImGui::TextUnformatted("Environment");
                 ImGui::TableSetColumnIndex(1);
-                ImGui::Text("%.2fx / %.1f deg", settings.environmentIntensity, settings.environmentRotationDegrees);
+                ImGui::Text("%.2fx / %.1f deg / Em %.2f",
+                    settings.environmentIntensity,
+                    settings.environmentRotationDegrees,
+                    settings.emissiveIntensity);
                 ImGui::TableSetColumnIndex(2);
                 ImGui::TextUnformatted("SSAO");
                 ImGui::TableSetColumnIndex(3);
@@ -3667,6 +3904,16 @@ void VestaEngine::build_debug_ui()
                     settings.cameraApertureRadius,
                     settings.cameraFocalDistance);
                 ImGui::EndTable();
+            }
+
+            if (PathTracePassVisible(settings.displayMode)) {
+                ImGui::SeparatorText("Path Tracing Progress");
+                DrawPathTraceProgressBar(settings, _renderer.GetPathTraceFrameIndex(), ImVec2(-FLT_MIN, 0.0f));
+                ImGui::Text("Backend %s  AOV %s  SPP %u  Bounces %u",
+                    activeBackend,
+                    PathTraceDebugViewLabel(settings.pathTraceDebugView),
+                    settings.pathTraceSamplesPerPixel,
+                    settings.pathTraceMaxBounces);
             }
 
             bool vsyncEnabled = settings.enableVSync;
@@ -4086,8 +4333,20 @@ void VestaEngine::build_debug_ui()
                 settings.gaussianDebugView = static_cast<vesta::render::GaussianDebugView>(gaussianView);
                 _renderer.ResetAccumulation();
             }
-            ImGui::Checkbox("Wireframe", &_wireframeUiPlaceholder);
-            ImGui::TextDisabled("Use Debug View > Overdraw for the additive raster overdraw heatmap.");
+            bool wireframeView = settings.debugView == vesta::render::RendererDebugView::Wireframe;
+            if (ImGui::Checkbox("Wireframe", &wireframeView)) {
+                settings.debugView = wireframeView ? vesta::render::RendererDebugView::Wireframe
+                                                   : vesta::render::RendererDebugView::FinalColor;
+                _renderer.ResetAccumulation();
+            }
+            ImGui::SameLine();
+            bool overdrawView = settings.debugView == vesta::render::RendererDebugView::Overdraw;
+            if (ImGui::Checkbox("Overdraw", &overdrawView)) {
+                settings.debugView = overdrawView ? vesta::render::RendererDebugView::Overdraw
+                                                  : vesta::render::RendererDebugView::FinalColor;
+                _renderer.ResetAccumulation();
+            }
+            ImGui::TextDisabled("Debug view shortcuts are mirrored in View and Options.");
             ImGui::SeparatorText("Reference Compare");
             const char* compareModes[] = { "Off", "Raster / Path Split", "Difference Heatmap" };
             int compareMode = static_cast<int>(settings.compareMode);
@@ -4565,6 +4824,9 @@ void VestaEngine::build_debug_ui()
         if (ImGui::SliderFloat("Light Intensity", &settings.lightDirectionAndIntensity.w, 0.0f, 8.0f, "%.2f")) {
             _renderer.ResetAccumulation();
         }
+        if (ImGui::SliderFloat("Emission", &settings.emissiveIntensity, 0.0f, 64.0f, "%.2f")) {
+            _renderer.ResetAccumulation();
+        }
     }
         ImGui::End();
     }
@@ -4882,6 +5144,9 @@ void VestaEngine::build_debug_ui()
                         _renderer.ResetAccumulation();
                     }
                     if (ImGui::ColorEdit3("Directional Color", &settings.directionalLightColor.x, ImGuiColorEditFlags_Float)) {
+                        _renderer.ResetAccumulation();
+                    }
+                    if (ImGui::SliderFloat("Emission", &settings.emissiveIntensity, 0.0f, 64.0f, "%.2f")) {
                         _renderer.ResetAccumulation();
                     }
                     ImGui::SeparatorText("Point Light");
@@ -6283,9 +6548,6 @@ void VestaEngine::draw_rasterizer_debug_panel()
 {
     auto& settings = _renderer.GetSettings();
 
-    if (ImGui::Checkbox("Enable Rasterizer", &settings.enableRaster)) {
-        _renderer.ResetAccumulation();
-    }
     const char* pipelineModes[] = { "Forward", "Deferred" };
     int pipelineMode = static_cast<int>(settings.rasterPipelineMode);
     if (ImGui::Combo("Pipeline", &pipelineMode, pipelineModes, IM_ARRAYSIZE(pipelineModes))) {
@@ -6414,9 +6676,6 @@ void VestaEngine::draw_path_tracing_debug_panel()
 {
     auto& settings = _renderer.GetSettings();
 
-    if (ImGui::Checkbox("Enable Path Tracing", &settings.enablePathTracing)) {
-        _renderer.ResetAccumulation();
-    }
     const char* backendModes[] = { "Auto", "Compute", "Hardware RT" };
     int backendMode = static_cast<int>(settings.pathTraceBackend);
     if (ImGui::Combo("Backend", &backendMode, backendModes, IM_ARRAYSIZE(backendModes))) {
@@ -6430,6 +6689,10 @@ void VestaEngine::draw_path_tracing_debug_panel()
     if (ImGui::SliderInt("Samples Per Pixel", &spp, 1, 64)) {
         settings.pathTraceSamplesPerPixel = static_cast<uint32_t>(std::clamp(spp, 1, 64));
         _renderer.ResetAccumulation();
+    }
+    int targetFrames = static_cast<int>(settings.pathTraceTargetFrames);
+    if (ImGui::SliderInt("Target Frames", &targetFrames, 1, 1024)) {
+        settings.pathTraceTargetFrames = static_cast<uint32_t>(std::clamp(targetFrames, 1, 8192));
     }
     int maxBounces = static_cast<int>(settings.pathTraceMaxBounces);
     if (ImGui::SliderInt("Max Bounces", &maxBounces, 1, 16)) {
@@ -6467,7 +6730,9 @@ void VestaEngine::draw_path_tracing_debug_panel()
         _renderer.ResetAccumulation();
         log_startup_event("Path tracing accumulation reset from mode panel");
     }
-    ImGui::Text("Accumulated Frames %u", _renderer.GetPathTraceFrameIndex());
+    ImGui::SeparatorText("Progress");
+    DrawPathTraceProgressBar(settings, _renderer.GetPathTraceFrameIndex(), ImVec2(-FLT_MIN, 0.0f));
+    ImGui::Text("Accumulated Frames %u / Target %u", _renderer.GetPathTraceFrameIndex(), settings.pathTraceTargetFrames);
     for (const auto& pass : _renderer.GetRenderPassDebugInfo()) {
         if (pass.id != "path-tracer") {
             continue;
@@ -6487,9 +6752,6 @@ void VestaEngine::draw_gaussian_splatting_debug_panel()
     auto& settings = _renderer.GetSettings();
     const auto& scene = _renderer.GetScene();
 
-    if (ImGui::Checkbox("Enable Gaussian Splatting", &settings.enableGaussian)) {
-        _renderer.ResetAccumulation();
-    }
     if (ImGui::SliderFloat("Opacity", &settings.gaussianOpacity, 0.05f, 1.0f, "%.2f")) {
         _renderer.ResetAccumulation();
     }
@@ -7222,7 +7484,7 @@ void VestaEngine::load_scene_path(const std::filesystem::path& path)
 
     ApplySceneModeInference(_renderer.GetSettings(), normalizedPath);
     ApplyBenchmarkSceneLightingPreset(_renderer.GetSettings(), normalizedPath);
-    if (const std::optional<std::filesystem::path> hdri = BistroV52SiblingHdri(normalizedPath)) {
+    if (const std::optional<std::filesystem::path> hdri = BenchmarkSceneHdri(normalizedPath)) {
         apply_external_hdri_path(*hdri);
     }
     _renderer.ResetAccumulation();
@@ -7231,6 +7493,10 @@ void VestaEngine::load_scene_path(const std::filesystem::path& path)
         ? _renderer.LoadSceneAsync(normalizedPath)
         : _renderer.LoadScene(normalizedPath);
     if (started) {
+        if (!UseAsyncSceneLoading(_renderer.GetSettings()) && _renderer.GetScene().IsLoaded()) {
+            ApplyBenchmarkSceneLightingPreset(_renderer.GetSettings(), normalizedPath, &_renderer.GetScene().GetBounds());
+            _renderer.ResetAccumulation();
+        }
         remember_recent_scene(normalizedPath);
     }
 }

@@ -23,7 +23,7 @@ struct RayEffectsPushConstants {
     uint32_t triangleBufferIndex{ kInvalidResourceIndex };
     uint32_t triangleCount{ 0 };
     uint32_t giHistoryInitialized{ 0 };
-    uint32_t reserved0{ 0 };
+    float emissionIntensity{ 1.0f };
     uint32_t reserved1{ 0 };
     glm::mat4 inverseViewProjection{ 1.0f };
     glm::vec4 cameraPosition{ 0.0f };
@@ -110,6 +110,11 @@ void RayEffectsPass::SetFrameIndex(uint32_t frameIndex)
 void RayEffectsPass::SetLight(glm::vec4 lightDirectionAndIntensity)
 {
     _lightDirectionAndIntensity = lightDirectionAndIntensity;
+}
+
+void RayEffectsPass::SetEmissionIntensity(float intensity)
+{
+    _emissionIntensity = std::clamp(intensity, 0.0f, 64.0f);
 }
 
 void RayEffectsPass::SetControls(bool shadowsEnabled,
@@ -302,6 +307,7 @@ void RayEffectsPass::Execute(const RenderGraphContext& context)
         .triangleBufferIndex = triangleBufferIndex,
         .triangleCount = static_cast<uint32_t>(_scene->GetTriangles().size()),
         .giHistoryInitialized = giHistoryWasInitialized ? 1u : 0u,
+        .emissionIntensity = _emissionIntensity,
         .inverseViewProjection = _camera->GetInverseViewProjection(),
         .cameraPosition = glm::vec4(_camera->GetPosition(), 0.0f),
         .lightDirectionAndIntensity = _lightDirectionAndIntensity,

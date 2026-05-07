@@ -848,6 +848,7 @@ void ConfigureGeometryRasterPass(Renderer& renderer, IRenderPass& pass, const Re
         && renderer.HasValidVisibilitySet();
     rasterPass.SetVisibleSurfaceIndices(useVisibilitySet ? &renderer.GetVisibleSurfaceIndices() : nullptr);
     rasterPass.SetUseIndirectDraw(renderer.GetSettings().useIndirectDraw);
+    rasterPass.SetEmissionIntensity(renderer.GetSettings().emissiveIntensity);
 }
 
 void ConfigureShadowMapPass(Renderer& renderer, IRenderPass& pass, const RendererGraphResources& resources)
@@ -967,6 +968,7 @@ void ConfigureRayEffectsPass(Renderer& renderer, IRenderPass& pass, const Render
     rayEffectsPass.SetFrameSlot(renderer.GetFrameSlot());
     rayEffectsPass.SetFrameIndex(renderer.GetPathTraceFrameIndex());
     rayEffectsPass.SetLight(settings.lightDirectionAndIntensity);
+    rayEffectsPass.SetEmissionIntensity(settings.emissiveIntensity);
     rayEffectsPass.SetControls(EffectiveRtShadows(settings),
         EffectiveRtAmbientOcclusion(settings),
         EffectiveRtReflections(settings),
@@ -1112,7 +1114,7 @@ void ConfigurePathTracerPass(Renderer& renderer, IRenderPass& pass, const Render
     pathTracerPass.SetEnvironment(glm::vec4(settings.environmentIntensity,
         glm::radians(settings.environmentRotationDegrees),
         static_cast<float>(settings.environmentPreset),
-        settings.environmentDiffuseStrength));
+        settings.emissiveIntensity));
     pathTracerPass.SetEnvironmentImage(renderer.GetEnvironmentSampledImageIndex());
     const glm::vec3 cameraRight = glm::normalize(glm::cross(renderer.GetCamera().GetForward(), renderer.GetCamera().GetUp()));
     pathTracerPass.SetLens(glm::vec4(cameraRight, settings.cameraApertureRadius),
@@ -4275,6 +4277,19 @@ void Renderer::PumpPendingSceneUpload()
         switch (_pendingSceneUpload.stage) {
         case Stage::AllocateBuffers:
             VESTA_ASSERT_STATE(prepared->IsLoaded(), "AllocateBuffers requires a prepared scene.");
+            if (!_pendingSceneUpload.releasedPreviousSceneGpu
+                && (_scene.GetVertexBuffer() || _scene.GetGaussianBuffer() || _scene.GetTriangleBuffer() || _scene.GetMaterialBuffer())) {
+                _sceneLoadStatus.lastBlockingWait = "WaitIdle before replacing large scene GPU resources";
+                AppendSceneLoadLog(_sceneLoadStatus,
+                    "Releasing previous scene GPU resources before uploading " + _pendingSceneUpload.path.filename().string());
+                _device.WaitIdle();
+                _scene.DestroyGpu(_device);
+                _visibleSurfaceIndices.clear();
+                _visibleSceneToken.reset();
+                _frameSnapshot = {};
+                ResetAccumulation();
+                _pendingSceneUpload.releasedPreviousSceneGpu = true;
+            }
             _pendingSceneUpload.scene.AllocateGpuResources(_device, uploadOptions);
             _pendingSceneUpload.stage = Stage::UploadVertices;
             _sceneLoadStatus.message = "Uploading vertices for " + _pendingSceneUpload.path.filename().string() + "...";
@@ -4755,12 +4770,14 @@ void Renderer::ApplyLoadedScene(vesta::scene::Scene&& scene)
     }
 
     if (!previousScene.GetSourcePath().empty()) {
-        if (_settings.deferOldSceneDestruction) {
+        const bool previousSceneHasGpuResources = previousScene.GetVertexBuffer() || previousScene.GetGaussianBuffer()
+            || previousScene.GetTriangleBuffer() || previousScene.GetMaterialBuffer();
+        if (_settings.deferOldSceneDestruction && previousSceneHasGpuResources) {
             _retiredScenes.push_back(RetiredSceneEntry{
                 .scene = std::move(previousScene),
                 .safeFrameNumber = _frameNumber + kFrameOverlap,
             });
-        } else {
+        } else if (previousSceneHasGpuResources) {
             _device.WaitIdle();
             previousScene.DestroyGpu(_device);
         }

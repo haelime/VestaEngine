@@ -1,6 +1,7 @@
 #include <vesta/render/passes/geometry_raster_pass.h>
 
 #include <array>
+#include <algorithm>
 #include <cstring>
 
 #include <glm/glm.hpp>
@@ -18,6 +19,7 @@ struct GeometryPushConstants {
     glm::mat4 viewProjection{ 1.0f };
     glm::mat4 previousViewProjection{ 1.0f };
     uint32_t materialBufferIndex{ kInvalidResourceIndex };
+    float emissionIntensity{ 1.0f };
 };
 
 constexpr VmaAllocationCreateFlags kMappedHostFlags =
@@ -62,6 +64,11 @@ void GeometryRasterPass::SetVisibleSurfaceIndices(const std::vector<uint32_t>* v
 void GeometryRasterPass::SetUseIndirectDraw(bool useIndirectDraw)
 {
     _useIndirectDraw = useIndirectDraw;
+}
+
+void GeometryRasterPass::SetEmissionIntensity(float intensity)
+{
+    _emissionIntensity = std::clamp(intensity, 0.0f, 64.0f);
 }
 
 void GeometryRasterPass::Initialize(RenderDevice& device)
@@ -275,6 +282,7 @@ void GeometryRasterPass::Execute(const RenderGraphContext& context)
             .viewProjection = _camera->GetViewProjection(),
             .previousViewProjection = _hasPreviousViewProjection ? _previousViewProjection : _camera->GetViewProjection(),
             .materialBufferIndex = context.GetDevice().GetBufferResource(_scene->GetMaterialBuffer()).bindless.storageBuffer,
+            .emissionIntensity = _emissionIntensity,
         };
         vkCmdPushConstants(commandBuffer,
             _pipelineLayout,

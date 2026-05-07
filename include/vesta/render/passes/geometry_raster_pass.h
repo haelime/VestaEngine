@@ -28,6 +28,7 @@ public:
     void SetCamera(const Camera* camera);
     void SetVisibleSurfaceIndices(const std::vector<uint32_t>* visibleSurfaceIndices);
     void SetUseIndirectDraw(bool useIndirectDraw);
+    void SetEmissionIntensity(float intensity);
 
     [[nodiscard]] std::string_view Name() const override { return "GeometryRasterPass"; }
     void Initialize(RenderDevice& device) override;
@@ -48,6 +49,7 @@ private:
     const Camera* _camera{ nullptr };
     const std::vector<uint32_t>* _visibleSurfaceIndices{ nullptr };
     bool _useIndirectDraw{ false };
+    float _emissionIntensity{ 1.0f };
     glm::mat4 _previousViewProjection{ 1.0f };
     bool _hasPreviousViewProjection{ false };
     BufferHandle _indirectBuffer{};

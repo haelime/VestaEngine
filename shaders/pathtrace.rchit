@@ -89,6 +89,7 @@ void main() {
         ? texture(sampledImages[nonuniformEXT(int(tri.textureIndices0.y))], uv)
         : vec4(1.0);
     vec4 emissiveSample = sampleOptional(tri.textureIndices1.x, uv, tri.emissiveFactor);
+    emissiveSample.rgb *= max(pc.environmentParams.w, 0.0);
 
     float metallic = clamp(tri.materialParams.x * metallicRoughnessSample.b, 0.0, 1.0);
     float roughness = clamp(tri.materialParams.y * metallicRoughnessSample.g, 0.045, 1.0);

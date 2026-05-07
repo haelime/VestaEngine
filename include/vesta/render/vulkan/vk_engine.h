@@ -72,6 +72,7 @@ struct EngineLaunchOptions {
     std::optional<float> startupMotionBlurStrength;
     std::optional<uint32_t> startupEnvironmentPreset;
     std::optional<std::filesystem::path> startupExternalHdriPath;
+    std::optional<float> startupEmissiveIntensity;
     std::optional<float> startupEnvironmentDiffuseStrength;
     std::optional<float> startupEnvironmentSpecularStrength;
     std::optional<bool> startupPcssShadowsEnabled;
@@ -138,7 +139,6 @@ public:
     bool _logShowResources{ true };
     bool _logShowErrors{ true };
     std::array<char, 128> _logFilterText{};
-    bool _wireframeUiPlaceholder{ false };
     bool _overdrawUiPlaceholder{ false };
     int _lastCpuFrameWarningFrame{ -100000 };
     int _lastGpuFrameWarningFrame{ -100000 };

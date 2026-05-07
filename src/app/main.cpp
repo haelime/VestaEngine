@@ -65,6 +65,7 @@ void PrintUsage()
         << "  --motion-blur <on|off>        Toggle screen-space motion blur.\n"
         << "  --motion-blur-strength <0-2>  Motion blur sample spread.\n"
         << "  --env-preset <studio|sunset|night|forest>\n"
+        << "  --emission <0-64>             Global multiplier for emissive materials.\n"
         << "  --ibl-diffuse <0-2>           Diffuse environment lighting strength.\n"
         << "  --ibl-specular <0-2>          Specular environment reflection strength.\n"
         << "  --hdri <path>                 Load an external HDRI/image for environment sampling.\n"
@@ -1002,6 +1003,19 @@ int main(int argc, char* argv[])
                 return 1;
             }
             options.startupEnvironmentDiffuseStrength = strength;
+            continue;
+        }
+        if (argument == "--emission") {
+            const char* value = requireValue(argument);
+            if (value == nullptr) {
+                return 1;
+            }
+            float strength = 0.0f;
+            if (!TryParseFloat(value, strength) || strength < 0.0f || strength > 64.0f) {
+                std::cerr << "Invalid emission intensity: " << value << "\n";
+                return 1;
+            }
+            options.startupEmissiveIntensity = strength;
             continue;
         }
         if (argument == "--ibl-specular") {

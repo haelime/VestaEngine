@@ -35,6 +35,10 @@ struct ComputePathTracePushConstants {
     uint32_t reserved0{ 0 };
     uint32_t reserved1{ 0 };
     uint32_t reserved2{ 0 };
+    uint32_t normalGuideImageIndex{ kInvalidResourceIndex };
+    uint32_t depthGuideImageIndex{ kInvalidResourceIndex };
+    uint32_t reserved3{ 0 };
+    uint32_t reserved4{ 0 };
 };
 
 struct HardwarePathTracePushConstants {
@@ -570,13 +574,6 @@ void PathTracerPass::Execute(const RenderGraphContext& context)
     const uint32_t outputImageIndex = context.GetDevice().GetImageResource(outputHandle).bindless.storageImage;
     const uint32_t triangleBufferIndex = context.GetDevice().GetBufferResource(_scene->GetTriangleBuffer()).bindless.storageBuffer;
 
-    if (_normalGuide) {
-        ClearOutput(context, _normalGuide);
-    }
-    if (_depthGuide) {
-        ClearOutput(context, _depthGuide);
-    }
-
     ComputePathTracePushConstants pushConstants{
         .inverseViewProjection = _camera->GetInverseViewProjection(),
         .cameraPositionAndFrame = glm::vec4(_camera->GetPosition(), static_cast<float>(_frameIndex)),
@@ -592,6 +589,10 @@ void PathTracerPass::Execute(const RenderGraphContext& context)
         .reserved0 = _environmentImageIndex,
         .reserved1 = (_nextEventEstimation ? 1u : 0u) | (_russianRoulette ? 2u : 0u)
             | (_globalIllumination ? 4u : 0u) | (_ambientOcclusion ? 8u : 0u),
+        .normalGuideImageIndex =
+            _normalGuide ? context.GetDevice().GetImageResource(context.GetTextureHandle(_normalGuide)).bindless.storageImage : kInvalidResourceIndex,
+        .depthGuideImageIndex =
+            _depthGuide ? context.GetDevice().GetImageResource(context.GetTextureHandle(_depthGuide)).bindless.storageImage : kInvalidResourceIndex,
     };
 
     VkCommandBuffer commandBuffer = context.GetCommandBuffer();

@@ -93,6 +93,29 @@ const uint PT_FLAG_RUSSIAN_ROULETTE = 2u;
 const uint PT_FLAG_GI = 4u;
 const uint PT_FLAG_AO = 8u;
 
+float sanitizeScalar(float value)
+{
+    if (isnan(value) || isinf(value) || value < 0.0) {
+        return 0.0;
+    }
+    return value;
+}
+
+vec3 sanitizeColor(vec3 value)
+{
+    return vec3(sanitizeScalar(value.r), sanitizeScalar(value.g), sanitizeScalar(value.b));
+}
+
+float pathRadianceClamp()
+{
+    return pc.fireflyClamp > 0.0 ? max(pc.fireflyClamp, 1.0) : 1.0e8;
+}
+
+vec3 clampPathContribution(vec3 value)
+{
+    return min(sanitizeColor(value), vec3(pathRadianceClamp()));
+}
+
 vec3 sampleEnvironmentMap(uint imageIndex, vec3 direction)
 {
     float u = atan(direction.z, direction.x) / (2.0 * PI) + 0.5;
@@ -358,7 +381,7 @@ vec3 sampleEmissiveDirect(vec3 origin, vec3 normal, vec3 viewDir, vec3 albedo, f
         vec3 lightPosition = tri.p0.xyz * b0 + tri.p1.xyz * b1 + tri.p2.xyz * b2;
         vec3 lightNormal = normalize(tri.n0.xyz * b0 + tri.n1.xyz * b1 + tri.n2.xyz * b2);
         vec2 lightUv = tri.uv0.xy * b0 + tri.uv1.xy * b1 + tri.uv2.xy * b2;
-        vec3 emissive = sampleOptional(tri.textureIndices1.x, lightUv, tri.emissiveFactor).rgb;
+        vec3 emissive = sampleOptional(tri.textureIndices1.x, lightUv, tri.emissiveFactor).rgb * max(pc.environmentParams.w, 0.0);
         if (luminance(emissive) <= 1.0e-4) {
             continue;
         }
@@ -372,10 +395,10 @@ vec3 sampleEmissiveDirect(vec3 origin, vec3 normal, vec3 viewDir, vec3 albedo, f
         }
 
         vec3 brdf = evaluatePbrBrdf(albedo, metallic, roughness, normal, viewDir, lightDirection);
-        contribution += brdf * emissive * lightCos * light.areaOverProbability / distanceSquared;
+        contribution += clampPathContribution(brdf * emissive * lightCos * light.areaOverProbability / distanceSquared);
     }
 
-    return contribution / float(attemptCount);
+    return clampPathContribution(contribution / float(attemptCount));
 }
 
 vec3 traceSample(
@@ -427,7 +450,7 @@ vec3 traceSample(
 
         if (payload.emissiveHit.w < 0.5) {
             vec3 sky = payload.radianceDistance.rgb;
-            radiance += throughput * sky;
+            radiance += clampPathContribution(throughput * sky);
             break;
         }
 
@@ -454,8 +477,10 @@ vec3 traceSample(
             rayCostOut += pc.emissiveTriangleCount > 0u ? 4.0 : 0.0;
             direct += sampleEmissiveDirect(hitPosition, normal, viewDir, albedo, metallic, roughness, rng);
         }
-        radiance += throughput * (emissive + direct);
-        directOut += throughput * direct;
+        direct = clampPathContribution(direct);
+        emissive = clampPathContribution(emissive);
+        radiance += clampPathContribution(throughput * (emissive + direct));
+        directOut += clampPathContribution(throughput * direct);
         if (!globalIlluminationEnabled) {
             break;
         }
@@ -491,7 +516,7 @@ vec3 traceSample(
 
     pdfOut /= max(rayCostOut, 1.0);
 
-    return radiance;
+    return clampPathContribution(radiance);
 }
 
 void main() {
@@ -537,33 +562,36 @@ void main() {
         float pdf;
         float rayCost;
         vec3 color = traceSample(rayOrigin, rayDirection, rng, albedo, normal, depth, direct, diffuseBounce, specularBounce, throughput, pdf, rayCost);
-        accumulatedSample += color;
+        accumulatedSample += clampPathContribution(color);
         accumulatedAlbedo += albedo;
         accumulatedNormal += normal;
         accumulatedDepth += depth;
-        accumulatedDirect += direct;
-        accumulatedDiffuseBounce += diffuseBounce;
-        accumulatedSpecularBounce += specularBounce;
+        accumulatedDirect += clampPathContribution(direct);
+        accumulatedDiffuseBounce += clampPathContribution(diffuseBounce);
+        accumulatedSpecularBounce += clampPathContribution(specularBounce);
         accumulatedThroughput += throughput;
         accumulatedPdf += pdf;
         accumulatedRayCost += rayCost;
     }
 
-    vec3 sampleColor = accumulatedSample / float(spp);
+    vec3 sampleColor = clampPathContribution(accumulatedSample / float(spp));
     vec3 albedoAov = accumulatedAlbedo / float(spp);
     vec3 normalAov = normalize(accumulatedNormal / float(spp)) * 0.5 + 0.5;
     float depthAov = accumulatedDepth / float(spp);
-    vec3 directAov = accumulatedDirect / float(spp);
+    vec3 directAov = clampPathContribution(accumulatedDirect / float(spp));
     vec3 indirectAov = max(sampleColor - directAov, vec3(0.0));
     vec3 rayCountAov = vec3(clamp((accumulatedRayCost / float(spp)) / 24.0, 0.0, 1.0));
-    vec3 diffuseBounceAov = accumulatedDiffuseBounce / float(spp);
-    vec3 specularBounceAov = accumulatedSpecularBounce / float(spp);
+    vec3 diffuseBounceAov = clampPathContribution(accumulatedDiffuseBounce / float(spp));
+    vec3 specularBounceAov = clampPathContribution(accumulatedSpecularBounce / float(spp));
     vec3 throughputAov = clamp(accumulatedThroughput / float(spp), vec3(0.0), vec3(1.0));
     vec3 pdfAov = vec3(clamp(accumulatedPdf / float(spp), 0.0, 1.0));
 
     vec3 finalColor = pc.frameIndex == 0u
         ? sampleColor
-        : mix(imageLoad(storageImages[nonuniformEXT(int(accumulationImageIndex(DEBUG_FINAL)))], pixel).rgb, sampleColor, 1.0 / float(pc.frameIndex + 1u));
+        : mix(clampPathContribution(imageLoad(storageImages[nonuniformEXT(int(accumulationImageIndex(DEBUG_FINAL)))], pixel).rgb),
+            sampleColor,
+            1.0 / float(pc.frameIndex + 1u));
+    finalColor = clampPathContribution(finalColor);
     vec3 accumulatedAlbedoAov = pc.frameIndex == 0u
         ? albedoAov
         : mix(imageLoad(storageImages[nonuniformEXT(int(accumulationImageIndex(DEBUG_ALBEDO)))], pixel).rgb, albedoAov, 1.0 / float(pc.frameIndex + 1u));
@@ -652,5 +680,5 @@ void main() {
         outputColor = accumulatedPdfAov;
     }
 
-    imageStore(outputImage, pixel, vec4(outputColor, 1.0));
+    imageStore(outputImage, pixel, vec4(clampPathContribution(outputColor), 1.0));
 }

@@ -29,6 +29,7 @@ layout(push_constant) uniform GeometryPushConstants {
     mat4 viewProjection;
     mat4 previousViewProjection;
     uint materialBufferIndex;
+    float emissionIntensity;
 } pc;
 
 layout(location = 0) out vec4 outAlbedoAo;
@@ -94,6 +95,7 @@ void main() {
     if (material.textureIndices1.x != kInvalidResourceIndex) {
         emissive *= texture(sampledImages[nonuniformEXT(material.textureIndices1.x)], inTexCoord).rgb;
     }
+    emissive *= max(pc.emissionIntensity, 0.0);
 
     vec3 normal = sampleNormalMap(material, inNormal, inTangent);
     outAlbedoAo = vec4(baseColor.rgb, ao);
