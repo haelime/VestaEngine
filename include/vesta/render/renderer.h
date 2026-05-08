@@ -217,6 +217,8 @@ struct SceneLoadStatus {
 
 struct RendererSettings;
 void ApplyDisplayModePassSelection(RendererSettings& settings, RendererDisplayMode mode);
+void SelectRendererDebugView(RendererSettings& settings, RendererDebugView view);
+void SelectPathTraceDebugView(RendererSettings& settings, PathTraceDebugView view);
 
 struct SceneUploadOptions {
     bool useDeviceLocalSceneBuffers{ true };

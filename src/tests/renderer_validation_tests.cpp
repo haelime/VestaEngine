@@ -66,6 +66,24 @@ void TestStartupSafeOverrides()
     assert(unchanged.enableGaussian == settings.enableGaussian);
     assert(unchanged.sceneUploadMode == settings.sceneUploadMode);
 }
+
+void TestDebugViewFamilySelection()
+{
+    using namespace vesta::render;
+
+    RendererSettings settings;
+    SelectPathTraceDebugView(settings, PathTraceDebugView::RayCountHeatmap);
+    assert(settings.pathTraceDebugView == PathTraceDebugView::RayCountHeatmap);
+    assert(settings.debugView == RendererDebugView::FinalColor);
+
+    SelectRendererDebugView(settings, RendererDebugView::Wireframe);
+    assert(settings.debugView == RendererDebugView::Wireframe);
+    assert(settings.pathTraceDebugView == PathTraceDebugView::Final);
+
+    SelectPathTraceDebugView(settings, PathTraceDebugView::Albedo);
+    assert(settings.pathTraceDebugView == PathTraceDebugView::Albedo);
+    assert(settings.debugView == RendererDebugView::FinalColor);
+}
 } // namespace
 
 int main()
@@ -73,5 +91,6 @@ int main()
     TestSceneLoadTransitions();
     TestSceneUploadContinuation();
     TestStartupSafeOverrides();
+    TestDebugViewFamilySelection();
     return 0;
 }

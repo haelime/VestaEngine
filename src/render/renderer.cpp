@@ -1271,6 +1271,18 @@ void ApplyDisplayModePassSelection(RendererSettings& settings, RendererDisplayMo
     }
 }
 
+void SelectRendererDebugView(RendererSettings& settings, RendererDebugView view)
+{
+    settings.debugView = view;
+    settings.pathTraceDebugView = PathTraceDebugView::Final;
+}
+
+void SelectPathTraceDebugView(RendererSettings& settings, PathTraceDebugView view)
+{
+    settings.pathTraceDebugView = view;
+    settings.debugView = RendererDebugView::FinalColor;
+}
+
 TransientImageKey TransientImagePool::MakeKey(const ImageDesc& desc)
 {
     return TransientImageKey{

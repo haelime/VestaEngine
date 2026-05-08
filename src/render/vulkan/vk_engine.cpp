@@ -1473,11 +1473,11 @@ void VestaEngine::init_renderer()
         resetAccumulation = true;
     }
     if (_launchOptions.startupDebugView.has_value()) {
-        settings.debugView = *_launchOptions.startupDebugView;
+        vesta::render::SelectRendererDebugView(settings, *_launchOptions.startupDebugView);
         resetAccumulation = true;
     }
     if (_launchOptions.startupPathTraceDebugView.has_value()) {
-        settings.pathTraceDebugView = *_launchOptions.startupPathTraceDebugView;
+        vesta::render::SelectPathTraceDebugView(settings, *_launchOptions.startupPathTraceDebugView);
         resetAccumulation = true;
     }
     if (_launchOptions.startupGaussianDebugView.has_value()) {
@@ -3408,7 +3408,7 @@ void VestaEngine::build_main_menu_bar()
                 const auto debugViewItem = [&](const char* label, vesta::render::RendererDebugView view) {
                     const bool selected = settings.debugView == view;
                     if (ImGui::MenuItem(label, nullptr, selected)) {
-                        settings.debugView = view;
+                        vesta::render::SelectRendererDebugView(settings, view);
                         _showDebugUi = true;
                         _showDebugVisualizationPanel = true;
                         _renderer.ResetAccumulation();
@@ -3438,7 +3438,7 @@ void VestaEngine::build_main_menu_bar()
                 const auto pathTraceViewItem = [&](const char* label, vesta::render::PathTraceDebugView view) {
                     const bool selected = settings.pathTraceDebugView == view;
                     if (ImGui::MenuItem(label, nullptr, selected)) {
-                        settings.pathTraceDebugView = view;
+                        vesta::render::SelectPathTraceDebugView(settings, view);
                         vesta::render::ApplyDisplayModePassSelection(settings, vesta::render::RendererDisplayMode::PathTrace);
                         _showDebugUi = true;
                         _showDebugVisualizationPanel = true;
@@ -3634,25 +3634,28 @@ void VestaEngine::build_main_menu_bar()
                     _renderer.ResetAccumulation();
                 }
                 if (ImGui::MenuItem("Wireframe View", nullptr, settings.debugView == vesta::render::RendererDebugView::Wireframe)) {
-                    settings.debugView = settings.debugView == vesta::render::RendererDebugView::Wireframe
-                        ? vesta::render::RendererDebugView::FinalColor
-                        : vesta::render::RendererDebugView::Wireframe;
+                    vesta::render::SelectRendererDebugView(settings,
+                        settings.debugView == vesta::render::RendererDebugView::Wireframe
+                            ? vesta::render::RendererDebugView::FinalColor
+                            : vesta::render::RendererDebugView::Wireframe);
                     _showDebugUi = true;
                     _showDebugVisualizationPanel = true;
                     _renderer.ResetAccumulation();
                 }
                 if (ImGui::MenuItem("Overdraw Heatmap", nullptr, settings.debugView == vesta::render::RendererDebugView::Overdraw)) {
-                    settings.debugView = settings.debugView == vesta::render::RendererDebugView::Overdraw
-                        ? vesta::render::RendererDebugView::FinalColor
-                        : vesta::render::RendererDebugView::Overdraw;
+                    vesta::render::SelectRendererDebugView(settings,
+                        settings.debugView == vesta::render::RendererDebugView::Overdraw
+                            ? vesta::render::RendererDebugView::FinalColor
+                            : vesta::render::RendererDebugView::Overdraw);
                     _showDebugUi = true;
                     _showDebugVisualizationPanel = true;
                     _renderer.ResetAccumulation();
                 }
                 if (ImGui::MenuItem("Temporal History", nullptr, settings.debugView == vesta::render::RendererDebugView::TemporalHistoryColor)) {
-                    settings.debugView = settings.debugView == vesta::render::RendererDebugView::TemporalHistoryColor
-                        ? vesta::render::RendererDebugView::FinalColor
-                        : vesta::render::RendererDebugView::TemporalHistoryColor;
+                    vesta::render::SelectRendererDebugView(settings,
+                        settings.debugView == vesta::render::RendererDebugView::TemporalHistoryColor
+                            ? vesta::render::RendererDebugView::FinalColor
+                            : vesta::render::RendererDebugView::TemporalHistoryColor);
                     _showDebugUi = true;
                     _showDebugVisualizationPanel = true;
                     _renderer.ResetAccumulation();
@@ -3661,8 +3664,7 @@ void VestaEngine::build_main_menu_bar()
                 ImGui::MenuItem("Gaussian Tile Grid", nullptr, &settings.gaussianShowTileGrid);
                 ImGui::MenuItem("Gaussian Spatial Bounds", nullptr, &settings.gaussianShowSpatialBounds);
                 if (ImGui::MenuItem("Reset Debug Views")) {
-                    settings.debugView = vesta::render::RendererDebugView::FinalColor;
-                    settings.pathTraceDebugView = vesta::render::PathTraceDebugView::Final;
+                    vesta::render::SelectRendererDebugView(settings, vesta::render::RendererDebugView::FinalColor);
                     settings.gaussianDebugView = vesta::render::GaussianDebugView::Final;
                     settings.compareMode = vesta::render::CompareMode::Off;
                     _renderer.ResetAccumulation();
@@ -4303,7 +4305,7 @@ void VestaEngine::build_debug_ui()
             };
             int commonView = static_cast<int>(settings.debugView);
             if (ImGui::Combo("Debug View", &commonView, commonViews, IM_ARRAYSIZE(commonViews))) {
-                settings.debugView = static_cast<vesta::render::RendererDebugView>(commonView);
+                vesta::render::SelectRendererDebugView(settings, static_cast<vesta::render::RendererDebugView>(commonView));
                 _renderer.ResetAccumulation();
             }
             ImGui::TextDisabled("Raster GBuffer views are live when the raster pass is active.");
@@ -4311,7 +4313,8 @@ void VestaEngine::build_debug_ui()
             const char* pathTraceDebugViews[] = { "Final", "Albedo", "Normal", "Depth", "Direct", "Indirect", "Ray Count Heatmap", "Diffuse Bounce", "Specular Bounce", "Throughput", "PDF" };
             int pathTraceDebugView = static_cast<int>(settings.pathTraceDebugView);
             if (ImGui::Combo("Path Tracing AOV", &pathTraceDebugView, pathTraceDebugViews, IM_ARRAYSIZE(pathTraceDebugViews))) {
-                settings.pathTraceDebugView = static_cast<vesta::render::PathTraceDebugView>(pathTraceDebugView);
+                vesta::render::SelectPathTraceDebugView(settings, static_cast<vesta::render::PathTraceDebugView>(pathTraceDebugView));
+                _renderer.ResetAccumulation();
             }
             const char* gaussianViews[] = {
                 "Final Splat Image",
@@ -4336,15 +4339,15 @@ void VestaEngine::build_debug_ui()
             }
             bool wireframeView = settings.debugView == vesta::render::RendererDebugView::Wireframe;
             if (ImGui::Checkbox("Wireframe", &wireframeView)) {
-                settings.debugView = wireframeView ? vesta::render::RendererDebugView::Wireframe
-                                                   : vesta::render::RendererDebugView::FinalColor;
+                vesta::render::SelectRendererDebugView(settings,
+                    wireframeView ? vesta::render::RendererDebugView::Wireframe : vesta::render::RendererDebugView::FinalColor);
                 _renderer.ResetAccumulation();
             }
             ImGui::SameLine();
             bool overdrawView = settings.debugView == vesta::render::RendererDebugView::Overdraw;
             if (ImGui::Checkbox("Overdraw", &overdrawView)) {
-                settings.debugView = overdrawView ? vesta::render::RendererDebugView::Overdraw
-                                                  : vesta::render::RendererDebugView::FinalColor;
+                vesta::render::SelectRendererDebugView(settings,
+                    overdrawView ? vesta::render::RendererDebugView::Overdraw : vesta::render::RendererDebugView::FinalColor);
                 _renderer.ResetAccumulation();
             }
             ImGui::TextDisabled("Debug view shortcuts are mirrored in View and Options.");
@@ -4744,7 +4747,8 @@ void VestaEngine::build_debug_ui()
         const char* pathTraceDebugViews[] = { "Final", "Albedo", "Normal", "Depth", "Direct", "Indirect", "Ray Count Heatmap", "Diffuse Bounce", "Specular Bounce", "Throughput", "PDF" };
         int pathTraceDebugView = static_cast<int>(settings.pathTraceDebugView);
         if (ImGui::Combo("PT Debug View", &pathTraceDebugView, pathTraceDebugViews, IM_ARRAYSIZE(pathTraceDebugViews))) {
-            settings.pathTraceDebugView = static_cast<vesta::render::PathTraceDebugView>(pathTraceDebugView);
+            vesta::render::SelectPathTraceDebugView(settings, static_cast<vesta::render::PathTraceDebugView>(pathTraceDebugView));
+            _renderer.ResetAccumulation();
         }
         if (ImGui::Checkbox("PT Denoiser", &settings.enablePathTraceDenoiser)) {
             _renderer.ResetAccumulation();
@@ -6425,8 +6429,7 @@ void VestaEngine::draw_killer_demo_panel()
         settings.enableRaster = true;
         settings.enablePathTracing = true;
         settings.enableGaussian = false;
-        settings.debugView = vesta::render::RendererDebugView::FinalColor;
-        settings.pathTraceDebugView = vesta::render::PathTraceDebugView::Final;
+        vesta::render::SelectRendererDebugView(settings, vesta::render::RendererDebugView::FinalColor);
         settings.hybridDepthCompositeDebug = false;
         _showFrameOverview = true;
         _showRenderGraphPanel = true;
@@ -6481,7 +6484,7 @@ void VestaEngine::draw_killer_demo_panel()
             settings.enableGaussian = false;
             settings.enableSsao = true;
             settings.enableBloom = true;
-            settings.debugView = vesta::render::RendererDebugView::FinalColor;
+            vesta::render::SelectRendererDebugView(settings, vesta::render::RendererDebugView::FinalColor);
             _showFrameOverview = true;
             _showRenderGraphPanel = true;
             _showGpuProfilerPanel = true;
@@ -6505,7 +6508,7 @@ void VestaEngine::draw_killer_demo_panel()
         settings.enablePathTracing = false;
         settings.enableSsgi = true;
         settings.ssgiIntensity = std::max(settings.ssgiIntensity, 0.55f);
-        settings.debugView = vesta::render::RendererDebugView::IndirectLighting;
+        vesta::render::SelectRendererDebugView(settings, vesta::render::RendererDebugView::IndirectLighting);
         settings.animateDirectionalLight = true;
         settings.showGiProbeOverlay = true;
         _showFrameOverview = true;
@@ -6539,7 +6542,7 @@ void VestaEngine::draw_killer_demo_panel()
         settings.enableRaster = true;
         settings.enableGaussian = true;
         settings.enablePathTracing = false;
-        settings.debugView = vesta::render::RendererDebugView::FinalColor;
+        vesta::render::SelectRendererDebugView(settings, vesta::render::RendererDebugView::FinalColor);
         settings.gaussianDebugView = vesta::render::GaussianDebugView::CompositionMask;
         settings.hybridDepthCompositeDebug = true;
         _showRenderGraphPanel = true;
@@ -6575,7 +6578,8 @@ void VestaEngine::draw_rasterizer_debug_panel()
         _renderer.ResetAccumulation();
     }
     if (ImGui::Button("Shadow Cascade Debug")) {
-        settings.debugView = vesta::render::RendererDebugView::ShadowCascade;
+        vesta::render::SelectRendererDebugView(settings, vesta::render::RendererDebugView::ShadowCascade);
+        _renderer.ResetAccumulation();
     }
     int shadowMapSize = static_cast<int>(settings.shadowMapSize);
     if (ImGui::SliderInt("Shadow Map Size", &shadowMapSize, 512, 4096)) {
@@ -6614,28 +6618,28 @@ void VestaEngine::draw_rasterizer_debug_panel()
     ImGui::SliderFloat("Distance Scale", &settings.distanceCullScale, 1.0f, 100.0f, "%.1f");
 
     ImGui::SeparatorText("G-Buffer / Raster AOV");
-    if (ImGui::Button("Albedo")) { settings.debugView = vesta::render::RendererDebugView::Albedo; }
+    if (ImGui::Button("Albedo")) { vesta::render::SelectRendererDebugView(settings, vesta::render::RendererDebugView::Albedo); }
     ImGui::SameLine();
-    if (ImGui::Button("Normal")) { settings.debugView = vesta::render::RendererDebugView::Normal; }
+    if (ImGui::Button("Normal")) { vesta::render::SelectRendererDebugView(settings, vesta::render::RendererDebugView::Normal); }
     ImGui::SameLine();
-    if (ImGui::Button("Depth")) { settings.debugView = vesta::render::RendererDebugView::Depth; }
-    if (ImGui::Button("Roughness")) { settings.debugView = vesta::render::RendererDebugView::Roughness; }
+    if (ImGui::Button("Depth")) { vesta::render::SelectRendererDebugView(settings, vesta::render::RendererDebugView::Depth); }
+    if (ImGui::Button("Roughness")) { vesta::render::SelectRendererDebugView(settings, vesta::render::RendererDebugView::Roughness); }
     ImGui::SameLine();
-    if (ImGui::Button("Overdraw")) { settings.debugView = vesta::render::RendererDebugView::Overdraw; }
+    if (ImGui::Button("Overdraw")) { vesta::render::SelectRendererDebugView(settings, vesta::render::RendererDebugView::Overdraw); }
     ImGui::SameLine();
-    if (ImGui::Button("Wireframe")) { settings.debugView = vesta::render::RendererDebugView::Wireframe; }
+    if (ImGui::Button("Wireframe")) { vesta::render::SelectRendererDebugView(settings, vesta::render::RendererDebugView::Wireframe); }
     ImGui::SameLine();
-    if (ImGui::Button("Contact Shadow")) { settings.debugView = vesta::render::RendererDebugView::ContactShadow; }
+    if (ImGui::Button("Contact Shadow")) { vesta::render::SelectRendererDebugView(settings, vesta::render::RendererDebugView::ContactShadow); }
 
     ImGui::SeparatorText("Temporal Debug");
-    if (ImGui::Button("History Color")) { settings.debugView = vesta::render::RendererDebugView::TemporalHistoryColor; }
+    if (ImGui::Button("History Color")) { vesta::render::SelectRendererDebugView(settings, vesta::render::RendererDebugView::TemporalHistoryColor); }
     ImGui::SameLine();
-    if (ImGui::Button("History Depth")) { settings.debugView = vesta::render::RendererDebugView::TemporalHistoryDepth; }
-    if (ImGui::Button("Reprojection")) { settings.debugView = vesta::render::RendererDebugView::TemporalReprojection; }
+    if (ImGui::Button("History Depth")) { vesta::render::SelectRendererDebugView(settings, vesta::render::RendererDebugView::TemporalHistoryDepth); }
+    if (ImGui::Button("Reprojection")) { vesta::render::SelectRendererDebugView(settings, vesta::render::RendererDebugView::TemporalReprojection); }
     ImGui::SameLine();
-    if (ImGui::Button("Disocclusion")) { settings.debugView = vesta::render::RendererDebugView::TemporalDisocclusion; }
+    if (ImGui::Button("Disocclusion")) { vesta::render::SelectRendererDebugView(settings, vesta::render::RendererDebugView::TemporalDisocclusion); }
     ImGui::SameLine();
-    if (ImGui::Button("Jitter")) { settings.debugView = vesta::render::RendererDebugView::TemporalJitter; }
+    if (ImGui::Button("Jitter")) { vesta::render::SelectRendererDebugView(settings, vesta::render::RendererDebugView::TemporalJitter); }
 
     ImGui::SeparatorText("Temporal Upscaler");
     if (ImGui::Checkbox("Enable Temporal Upscaler", &settings.enableTemporalUpscaler)) {
@@ -6727,10 +6731,12 @@ void VestaEngine::draw_path_tracing_debug_panel()
     const char* debugViews[] = { "Final", "Albedo", "Normal", "Depth", "Direct", "Indirect", "Ray Cost Heatmap", "Diffuse Bounce", "Specular Bounce", "Throughput", "PDF" };
     int debugView = static_cast<int>(settings.pathTraceDebugView);
     if (ImGui::Combo("Path Trace AOV", &debugView, debugViews, IM_ARRAYSIZE(debugViews))) {
-        settings.pathTraceDebugView = static_cast<vesta::render::PathTraceDebugView>(debugView);
+        vesta::render::SelectPathTraceDebugView(settings, static_cast<vesta::render::PathTraceDebugView>(debugView));
+        _renderer.ResetAccumulation();
     }
     if (ImGui::Button("Ray Cost Heatmap")) {
-        settings.pathTraceDebugView = vesta::render::PathTraceDebugView::RayCountHeatmap;
+        vesta::render::SelectPathTraceDebugView(settings, vesta::render::PathTraceDebugView::RayCountHeatmap);
+        _renderer.ResetAccumulation();
     }
     ImGui::SameLine();
     if (ImGui::Button("Reset Accumulation")) {
@@ -7023,8 +7029,9 @@ void VestaEngine::draw_global_illumination_panel()
         }
     }
     if (ImGui::Checkbox("Indirect Only Debug", &settings.showGiIndirectOnly)) {
-        settings.debugView = settings.showGiIndirectOnly ? vesta::render::RendererDebugView::IndirectLighting
-                                                         : vesta::render::RendererDebugView::FinalColor;
+        vesta::render::SelectRendererDebugView(settings,
+            settings.showGiIndirectOnly ? vesta::render::RendererDebugView::IndirectLighting
+                                        : vesta::render::RendererDebugView::FinalColor);
         resetHistory = true;
     }
     ImGui::Checkbox("GI Probe Overlay", &settings.showGiProbeOverlay);
