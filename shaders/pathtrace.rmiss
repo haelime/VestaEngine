@@ -9,6 +9,7 @@ struct PathPayload {
     vec4 albedoMetallic;
     vec4 normalRoughness;
     vec4 emissiveHit;
+    vec4 opticalParams;
 };
 
 layout(location = 0) rayPayloadInEXT PathPayload payload;
@@ -87,4 +88,5 @@ void main() {
     payload.albedoMetallic = vec4(0.0);
     payload.normalRoughness = vec4(0.0, 1.0, 0.0, 1.0);
     payload.emissiveHit = vec4(0.0);
+    payload.opticalParams = vec4(0.0, 1.5, 0.0, 1.0);
 }

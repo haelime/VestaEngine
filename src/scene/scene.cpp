@@ -15,6 +15,7 @@
 #include <span>
 #include <stdexcept>
 #include <sstream>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <string_view>
@@ -422,38 +423,59 @@ std::optional<SceneTextureAsset> DecodeDdsTextureFile(const std::filesystem::pat
     textureAsset.height = height;
     textureAsset.rgba8Pixels.resize(static_cast<size_t>(width) * height * 4u);
 
-    for (uint32_t by = 0; by < blocksY; ++by) {
-        for (uint32_t bx = 0; bx < blocksX; ++bx) {
-            const size_t blockOffset = dataOffset + (static_cast<size_t>(by) * blocksX + bx) * bytesPerBlock;
-            if (isDxt1) {
-                DecodeDdsColorBlock(bytes, blockOffset, true, nullptr, textureAsset, bx, by);
-            } else if (isDxt3) {
-                std::array<uint8_t, 16> alphaValues{};
-                for (uint32_t i = 0; i < 16; ++i) {
-                    const uint8_t packed = static_cast<uint8_t>(bytes[blockOffset + i / 2u]);
-                    const uint8_t alpha4 = (i & 1u) == 0u ? packed & 0x0fu : packed >> 4u;
-                    alphaValues[i] = static_cast<uint8_t>((alpha4 << 4u) | alpha4);
-                }
-                DecodeDdsColorBlock(bytes, blockOffset + 8u, false, &alphaValues, textureAsset, bx, by);
-            } else if (isDxt5) {
-                const std::array<uint8_t, 16> alphaValues = DecodeDdsAlphaBlock(bytes.data() + blockOffset);
-                DecodeDdsColorBlock(bytes, blockOffset + 8u, false, &alphaValues, textureAsset, bx, by);
-            } else if (isAti2) {
-                const std::array<uint8_t, 16> redValues = DecodeDdsAlphaBlock(bytes.data() + blockOffset);
-                const std::array<uint8_t, 16> greenValues = DecodeDdsAlphaBlock(bytes.data() + blockOffset + 8u);
-                for (uint32_t y = 0; y < 4; ++y) {
-                    for (uint32_t x = 0; x < 4; ++x) {
-                        const uint32_t texel = y * 4u + x;
-                        const float nx = static_cast<float>(redValues[texel]) / 255.0f * 2.0f - 1.0f;
-                        const float ny = static_cast<float>(greenValues[texel]) / 255.0f * 2.0f - 1.0f;
-                        const float nz = std::sqrt(std::max(0.0f, 1.0f - nx * nx - ny * ny));
-                        WriteDdsPixel(textureAsset,
-                            bx * 4u + x,
-                            by * 4u + y,
-                            glm::u8vec4(redValues[texel], greenValues[texel], static_cast<uint8_t>(std::round(nz * 255.0f)), 255u));
+    const auto decodeRows = [&](uint32_t beginY, uint32_t endY) {
+        for (uint32_t by = beginY; by < endY; ++by) {
+            for (uint32_t bx = 0; bx < blocksX; ++bx) {
+                const size_t blockOffset = dataOffset + (static_cast<size_t>(by) * blocksX + bx) * bytesPerBlock;
+                if (isDxt1) {
+                    DecodeDdsColorBlock(bytes, blockOffset, true, nullptr, textureAsset, bx, by);
+                } else if (isDxt3) {
+                    std::array<uint8_t, 16> alphaValues{};
+                    for (uint32_t i = 0; i < 16; ++i) {
+                        const uint8_t packed = static_cast<uint8_t>(bytes[blockOffset + i / 2u]);
+                        const uint8_t alpha4 = (i & 1u) == 0u ? packed & 0x0fu : packed >> 4u;
+                        alphaValues[i] = static_cast<uint8_t>((alpha4 << 4u) | alpha4);
+                    }
+                    DecodeDdsColorBlock(bytes, blockOffset + 8u, false, &alphaValues, textureAsset, bx, by);
+                } else if (isDxt5) {
+                    const std::array<uint8_t, 16> alphaValues = DecodeDdsAlphaBlock(bytes.data() + blockOffset);
+                    DecodeDdsColorBlock(bytes, blockOffset + 8u, false, &alphaValues, textureAsset, bx, by);
+                } else if (isAti2) {
+                    const std::array<uint8_t, 16> redValues = DecodeDdsAlphaBlock(bytes.data() + blockOffset);
+                    const std::array<uint8_t, 16> greenValues = DecodeDdsAlphaBlock(bytes.data() + blockOffset + 8u);
+                    for (uint32_t y = 0; y < 4; ++y) {
+                        for (uint32_t x = 0; x < 4; ++x) {
+                            const uint32_t texel = y * 4u + x;
+                            const float nx = static_cast<float>(redValues[texel]) / 255.0f * 2.0f - 1.0f;
+                            const float ny = static_cast<float>(greenValues[texel]) / 255.0f * 2.0f - 1.0f;
+                            const float nz = std::sqrt(std::max(0.0f, 1.0f - nx * nx - ny * ny));
+                            WriteDdsPixel(textureAsset,
+                                bx * 4u + x,
+                                by * 4u + y,
+                                glm::u8vec4(redValues[texel], greenValues[texel], static_cast<uint8_t>(std::round(nz * 255.0f)), 255u));
+                        }
                     }
                 }
             }
+        }
+    };
+
+    const uint32_t blockCount = blocksX * blocksY;
+    const uint32_t hardwareThreads = std::max(1u, std::thread::hardware_concurrency());
+    const uint32_t workerCount = blockCount >= 4096u ? std::min<uint32_t>(hardwareThreads, blocksY) : 1u;
+    if (workerCount <= 1u) {
+        decodeRows(0u, blocksY);
+    } else {
+        std::vector<std::thread> workers;
+        workers.reserve(workerCount - 1u);
+        for (uint32_t worker = 1u; worker < workerCount; ++worker) {
+            const uint32_t beginY = (blocksY * worker) / workerCount;
+            const uint32_t endY = (blocksY * (worker + 1u)) / workerCount;
+            workers.emplace_back(decodeRows, beginY, endY);
+        }
+        decodeRows(0u, blocksY / workerCount);
+        for (std::thread& worker : workers) {
+            worker.join();
         }
     }
     return textureAsset;
@@ -1025,6 +1047,59 @@ float FbxEmissiveIntensity(std::string_view ownerName, std::string_view textureK
         return 8.0f;
     }
     return 1.0f;
+}
+
+void ApplyFbxOpticalPreset(SceneMaterial& material, std::string_view ownerName, std::string_view textureKey)
+{
+    std::string key = NormalizeTextureMatchKey(ownerName);
+    key += NormalizeTextureMatchKey(textureKey);
+    if (key.empty()) {
+        return;
+    }
+
+    float transmission = 0.0f;
+    float ior = 1.5f;
+    float absorption = 0.0f;
+    float roughness = material.materialParams.y;
+    if (key.find("water") != std::string::npos) {
+        transmission = 1.0f;
+        ior = 1.33f;
+        roughness = 0.0f;
+        material.baseColorFactor = glm::vec4(0.72f, 0.90f, 1.0f, 0.35f);
+    } else if (key.find("ice") != std::string::npos) {
+        transmission = 0.9f;
+        ior = 1.31f;
+        roughness = 0.10f;
+        absorption = 0.04f;
+        material.baseColorFactor = glm::vec4(0.86f, 0.95f, 1.0f, 0.45f);
+    } else if (key.find("redwine") != std::string::npos || key.find("whitewine") != std::string::npos
+        || key.find("glasswine") != std::string::npos || key.find("wine") != std::string::npos
+        || key.find("beer") != std::string::npos) {
+        transmission = 0.95f;
+        ior = 1.33f;
+        roughness = 0.01f;
+        absorption = key.find("redwine") != std::string::npos ? 0.85f : 0.28f;
+        if (key.find("redwine") != std::string::npos) {
+            material.baseColorFactor = glm::vec4(0.55f, 0.05f, 0.035f, 0.45f);
+        } else if (key.find("beer") != std::string::npos) {
+            material.baseColorFactor = glm::vec4(1.0f, 0.62f, 0.18f, 0.42f);
+        } else {
+            material.baseColorFactor = glm::vec4(0.98f, 0.90f, 0.58f, 0.38f);
+        }
+    } else if (key.find("transparentglass") != std::string::npos || key.find("glass") != std::string::npos) {
+        transmission = 0.9f;
+        ior = 1.55f;
+        roughness = ContainsAny(key, { "frosted", "frozen", "dirty" }) ? 0.18f : 0.0f;
+        material.baseColorFactor.a = std::min(material.baseColorFactor.a, 0.35f);
+    }
+
+    if (transmission <= 0.0f) {
+        return;
+    }
+
+    material.opticalParams = glm::vec4(transmission, ior, absorption, 0.0f);
+    material.materialParams.x = 0.0f;
+    material.materialParams.y = glm::clamp(roughness, 0.0f, 1.0f);
 }
 
 std::filesystem::path FbxFilenameFromRawPath(std::string_view rawPath)
@@ -2732,6 +2807,7 @@ bool ParseFbxMesh(const std::filesystem::path& path, ParsedScene& parsedScene, c
             sceneMaterial.textureIndices1.x = emissiveIndex;
             sceneMaterial.emissiveFactor = glm::vec4(glm::vec3(FbxEmissiveIntensity(material.name, selectedSet->key)), 0.0f);
         }
+        ApplyFbxOpticalPreset(sceneMaterial, material.name, selectedSet->key);
     }
 
     if (!materials.empty() && !discoveredTextureSets.empty()) {
@@ -2776,8 +2852,12 @@ bool ParseFbxMesh(const std::filesystem::path& path, ParsedScene& parsedScene, c
                 modelMaterial.textureIndices1.x = emissiveIndex;
                 modelMaterial.emissiveFactor = glm::vec4(glm::vec3(FbxEmissiveIntensity(model.name, selectedSet->key)), 0.0f);
             }
+            ApplyFbxOpticalPreset(modelMaterial, model.name, selectedSet->key);
             if (modelMaterial.textureIndices0 != parsedScene.materials[model.materialIndex].textureIndices0
-                || modelMaterial.textureIndices1 != parsedScene.materials[model.materialIndex].textureIndices1) {
+                || modelMaterial.textureIndices1 != parsedScene.materials[model.materialIndex].textureIndices1
+                || modelMaterial.baseColorFactor != parsedScene.materials[model.materialIndex].baseColorFactor
+                || modelMaterial.materialParams != parsedScene.materials[model.materialIndex].materialParams
+                || modelMaterial.opticalParams != parsedScene.materials[model.materialIndex].opticalParams) {
                 model.materialIndex = static_cast<uint32_t>(parsedScene.materials.size());
                 parsedScene.materials.push_back(modelMaterial);
                 ++fbxModelTextureMatches;
@@ -4034,6 +4114,7 @@ bool Scene::PrepareParsedScene(const SceneParseCallbacks& callbacks)
                     .baseColorFactor = material.baseColorFactor,
                     .emissiveFactor = material.emissiveFactor,
                     .materialParams = material.materialParams,
+                    .opticalParams = material.opticalParams,
                     .textureIndices0 = material.textureIndices0,
                     .textureIndices1 = material.textureIndices1,
                 });

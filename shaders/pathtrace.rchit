@@ -18,6 +18,7 @@ struct Triangle {
     vec4 baseColorFactor;
     vec4 emissiveFactor;
     vec4 materialParams;
+    vec4 opticalParams;
     uvec4 textureIndices0;
     uvec4 textureIndices1;
 };
@@ -27,6 +28,7 @@ struct PathPayload {
     vec4 albedoMetallic;
     vec4 normalRoughness;
     vec4 emissiveHit;
+    vec4 opticalParams;
 };
 
 layout(set = 0, binding = 0) uniform sampler2D sampledImages[];
@@ -98,4 +100,5 @@ void main() {
     payload.albedoMetallic = vec4(baseColorSample.rgb, metallic);
     payload.normalRoughness = vec4(normal, roughness);
     payload.emissiveHit = vec4(emissiveSample.rgb, 1.0);
+    payload.opticalParams = vec4(tri.opticalParams.xyz, gl_HitKindEXT == gl_HitKindFrontFacingTriangleEXT ? 1.0 : -1.0);
 }

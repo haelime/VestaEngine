@@ -54,6 +54,7 @@ struct SceneMaterial {
     glm::vec4 baseColorFactor{ 0.8f, 0.8f, 0.85f, 1.0f };
     glm::vec4 emissiveFactor{ 0.0f, 0.0f, 0.0f, 0.0f };
     glm::vec4 materialParams{ 1.0f, 1.0f, 1.0f, 1.0f }; // metallic, roughness, occlusion strength, normal scale
+    glm::vec4 opticalParams{ 0.0f, 1.5f, 0.0f, 0.0f }; // transmission, ior, absorption strength, reserved
     glm::uvec4 textureIndices0{ render::kInvalidResourceIndex,
         render::kInvalidResourceIndex,
         render::kInvalidResourceIndex,
@@ -77,6 +78,7 @@ struct SceneTriangle {
     glm::vec4 baseColorFactor{ 0.8f, 0.8f, 0.85f, 1.0f };
     glm::vec4 emissiveFactor{ 0.0f, 0.0f, 0.0f, 0.0f };
     glm::vec4 materialParams{ 1.0f, 1.0f, 1.0f, 1.0f };
+    glm::vec4 opticalParams{ 0.0f, 1.5f, 0.0f, 0.0f };
     glm::uvec4 textureIndices0{ render::kInvalidResourceIndex,
         render::kInvalidResourceIndex,
         render::kInvalidResourceIndex,

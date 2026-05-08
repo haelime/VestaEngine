@@ -7,6 +7,7 @@ struct Material {
     vec4 baseColorFactor;
     vec4 emissiveFactor;
     vec4 materialParams;
+    vec4 opticalParams;
     uvec4 textureIndices0;
     uvec4 textureIndices1;
 };
@@ -79,6 +80,9 @@ void main() {
 
     float metallic = clamp(material.materialParams.x, 0.0, 1.0);
     float roughness = clamp(material.materialParams.y, 0.045, 1.0);
+    float transmission = clamp(material.opticalParams.x, 0.0, 1.0);
+    metallic *= 1.0 - transmission;
+    roughness = mix(roughness, max(roughness, 0.02), transmission);
     if (material.textureIndices0.y != kInvalidResourceIndex) {
         vec4 metallicRoughness = texture(sampledImages[nonuniformEXT(material.textureIndices0.y)], inTexCoord);
         metallic *= metallicRoughness.b;

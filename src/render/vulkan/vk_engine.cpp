@@ -74,10 +74,11 @@ struct BenchmarkScenePreset {
     const char* purpose;
 };
 
-constexpr std::array<BenchmarkScenePreset, 9> kBenchmarkScenePresets{
+constexpr std::array<BenchmarkScenePreset, 10> kBenchmarkScenePresets{
     BenchmarkScenePreset{ "Sponza Atrium", "assets/benchmark_scenes/sponza/sponza.obj", "Large raster/PBR scene" },
     BenchmarkScenePreset{ "Amazon Bistro 5.2 Exterior", "assets/benchmark_scenes/Bistro_v5_2/BistroExterior.fbx", "Large outdoor stress scene" },
     BenchmarkScenePreset{ "Amazon Bistro 5.2 Interior", "assets/benchmark_scenes/Bistro_v5_2/BistroInterior.fbx", "Interior lighting stress scene" },
+    BenchmarkScenePreset{ "Amazon Bistro 5.2 Interior Wine", "assets/benchmark_scenes/Bistro_v5_2/BistroInterior_Wine.fbx", "Interior glass and absorption stress scene" },
     BenchmarkScenePreset{ "San Miguel", "assets/benchmark_scenes/san_miguel/san-miguel.obj", "Large textured GI scene" },
     BenchmarkScenePreset{ "San Miguel Low Poly", "assets/benchmark_scenes/san_miguel/san-miguel-low-poly.obj", "Large textured GI scene" },
     BenchmarkScenePreset{ "Cornell Box", "assets/benchmark_scenes/cornell_box/cornell-box.obj", "Reference path-tracing scene" },
@@ -5293,11 +5294,13 @@ void VestaEngine::build_debug_ui()
                     ImGui::EndTabItem();
                 }
                 if (ImGui::BeginTabItem("Materials")) {
-                    if (ImGui::BeginTable("MaterialTable", 7, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+                    if (ImGui::BeginTable("MaterialTable", 9, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
                         ImGui::TableSetupColumn("Id", ImGuiTableColumnFlags_WidthFixed, 42.0f);
                         ImGui::TableSetupColumn("Base Color", ImGuiTableColumnFlags_WidthFixed, 112.0f);
                         ImGui::TableSetupColumn("Metallic", ImGuiTableColumnFlags_WidthFixed, 70.0f);
                         ImGui::TableSetupColumn("Roughness", ImGuiTableColumnFlags_WidthFixed, 76.0f);
+                        ImGui::TableSetupColumn("Trans", ImGuiTableColumnFlags_WidthFixed, 64.0f);
+                        ImGui::TableSetupColumn("IOR", ImGuiTableColumnFlags_WidthFixed, 56.0f);
                         ImGui::TableSetupColumn("Emissive", ImGuiTableColumnFlags_WidthFixed, 112.0f);
                         ImGui::TableSetupColumn("Normal", ImGuiTableColumnFlags_WidthFixed, 58.0f);
                         ImGui::TableSetupColumn("Textures");
@@ -5319,10 +5322,14 @@ void VestaEngine::build_debug_ui()
                             ImGui::TableSetColumnIndex(3);
                             materialChanged |= ImGui::SliderFloat("##roughness", &material.materialParams.y, 0.02f, 1.0f, "%.2f");
                             ImGui::TableSetColumnIndex(4);
-                            materialChanged |= ImGui::ColorEdit3("##emissive", &material.emissiveFactor.x, ImGuiColorEditFlags_NoInputs);
+                            materialChanged |= ImGui::SliderFloat("##trans", &material.opticalParams.x, 0.0f, 1.0f, "%.2f");
                             ImGui::TableSetColumnIndex(5);
-                            materialChanged |= ImGui::SliderFloat("##normal", &material.materialParams.w, 0.0f, 2.0f, "%.2f");
+                            materialChanged |= ImGui::SliderFloat("##ior", &material.opticalParams.y, 1.0f, 2.5f, "%.2f");
                             ImGui::TableSetColumnIndex(6);
+                            materialChanged |= ImGui::ColorEdit3("##emissive", &material.emissiveFactor.x, ImGuiColorEditFlags_NoInputs);
+                            ImGui::TableSetColumnIndex(7);
+                            materialChanged |= ImGui::SliderFloat("##normal", &material.materialParams.w, 0.0f, 2.0f, "%.2f");
+                            ImGui::TableSetColumnIndex(8);
                             ImGui::Text("BC %u MR %u N %u E %u",
                                 material.textureIndices0.x,
                                 material.textureIndices0.y,

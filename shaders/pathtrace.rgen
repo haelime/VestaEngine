@@ -22,6 +22,7 @@ struct Triangle {
     vec4 baseColorFactor;
     vec4 emissiveFactor;
     vec4 materialParams;
+    vec4 opticalParams;
     uvec4 textureIndices0;
     uvec4 textureIndices1;
 };
@@ -31,6 +32,7 @@ struct PathPayload {
     vec4 albedoMetallic;
     vec4 normalRoughness;
     vec4 emissiveHit;
+    vec4 opticalParams;
 };
 
 struct EmissiveTriangle {
@@ -262,6 +264,12 @@ vec3 FresnelSchlick(float cosTheta, vec3 F0)
     return F0 + (1.0 - F0) * pow(1.0 - cosTheta, 5.0);
 }
 
+float FresnelDielectricSchlick(float cosTheta, float ior)
+{
+    float f0 = pow((ior - 1.0) / max(ior + 1.0, 1.0e-4), 2.0);
+    return f0 + (1.0 - f0) * pow(1.0 - clamp(cosTheta, 0.0, 1.0), 5.0);
+}
+
 vec3 evaluatePbrBrdf(vec3 albedo, float metallic, float roughness, vec3 normal, vec3 viewDir, vec3 lightDir)
 {
     vec3 H = normalize(viewDir + lightDir);
@@ -293,6 +301,7 @@ bool visibleToDirectionalLight(vec3 origin, vec3 normal)
     payload.albedoMetallic = vec4(0.0);
     payload.normalRoughness = vec4(0.0, 1.0, 0.0, 1.0);
     payload.emissiveHit = vec4(0.0);
+    payload.opticalParams = vec4(0.0, 1.5, 0.0, 1.0);
 
     traceRayEXT(topLevelAS,
         gl_RayFlagsOpaqueEXT,
@@ -306,7 +315,7 @@ bool visibleToDirectionalLight(vec3 origin, vec3 normal)
         10000.0,
         0);
 
-    return payload.emissiveHit.w < 0.5;
+    return payload.emissiveHit.w < 0.5 || payload.opticalParams.x > 0.5;
 }
 
 bool visibleToPoint(vec3 origin, vec3 normal, vec3 target)
@@ -325,6 +334,7 @@ bool visibleToPoint(vec3 origin, vec3 normal, vec3 target)
     payload.albedoMetallic = vec4(0.0);
     payload.normalRoughness = vec4(0.0, 1.0, 0.0, 1.0);
     payload.emissiveHit = vec4(0.0);
+    payload.opticalParams = vec4(0.0, 1.5, 0.0, 1.0);
 
     traceRayEXT(topLevelAS,
         gl_RayFlagsOpaqueEXT,
@@ -338,7 +348,7 @@ bool visibleToPoint(vec3 origin, vec3 normal, vec3 target)
         max(distanceToTarget - 0.01, 0.001),
         0);
 
-    return payload.emissiveHit.w < 0.5;
+    return payload.emissiveHit.w < 0.5 || payload.opticalParams.x > 0.5;
 }
 
 vec3 sampleEmissiveDirect(vec3 origin, vec3 normal, vec3 viewDir, vec3 albedo, float metallic, float roughness, inout uint rng)
@@ -434,6 +444,7 @@ vec3 traceSample(
         payload.albedoMetallic = vec4(0.0);
         payload.normalRoughness = vec4(0.0, 1.0, 0.0, 1.0);
         payload.emissiveHit = vec4(0.0);
+        payload.opticalParams = vec4(0.0, 1.5, 0.0, 1.0);
 
         rayCostOut += 1.0;
         traceRayEXT(topLevelAS,
@@ -459,6 +470,7 @@ vec3 traceSample(
         vec3 normal = normalize(payload.normalRoughness.xyz);
         float roughness = clamp(payload.normalRoughness.a, 0.045, 1.0);
         vec3 emissive = payload.emissiveHit.rgb;
+        vec4 optical = payload.opticalParams;
         float hitT = payload.radianceDistance.a;
         vec3 hitPosition = origin + direction * hitT;
         vec3 viewDir = normalize(-direction);
@@ -467,6 +479,39 @@ vec3 traceSample(
             primaryAlbedo = albedo;
             primaryNormal = normal;
             primaryDepth = hitT;
+        }
+
+        float transmission = clamp(optical.x, 0.0, 1.0);
+        if (transmission > 0.01) {
+            float ior = clamp(optical.y, 1.01, 2.5);
+            float absorptionStrength = max(optical.z, 0.0);
+            bool frontFace = optical.w >= 0.0;
+            float eta = frontFace ? 1.0 / ior : ior;
+            vec3 refracted = refract(direction, normal, eta);
+            float fresnel = FresnelDielectricSchlick(max(dot(normal, viewDir), 0.0), ior);
+            bool totalInternalReflection = dot(refracted, refracted) <= 1.0e-6;
+            bool reflectPath = totalInternalReflection || rand(rng) < fresnel;
+            vec3 glassTint = mix(vec3(1.0), clamp(albedo, vec3(0.02), vec3(1.0)), 0.35);
+            if (!frontFace && absorptionStrength > 0.0) {
+                vec3 absorption = max(vec3(0.02), vec3(1.0) - glassTint) * absorptionStrength;
+                throughput *= exp(-absorption * max(hitT, 0.0));
+            }
+            if (reflectPath) {
+                direction = normalize(reflect(direction, normal));
+                specularBounceOut += clampPathContribution(throughput * fresnel);
+                throughput *= mix(vec3(1.0), glassTint, 0.08);
+                origin = hitPosition + normal * 0.003;
+            } else {
+                direction = normalize(refracted);
+                diffuseBounceOut += clampPathContribution(throughput * glassTint * (1.0 - fresnel));
+                throughput *= glassTint;
+                origin = hitPosition + direction * 0.004;
+            }
+            throughput = min(throughput, vec3(pathRadianceClamp()));
+            throughputOut = max(throughputOut, throughput);
+            pdfOut += reflectPath ? fresnel : 1.0 - fresnel;
+            rayCostOut += 0.35;
+            continue;
         }
 
         bool nextEventEstimation = (pc.pathTraceFlags & PT_FLAG_NEE) != 0u;

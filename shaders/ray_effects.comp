@@ -19,6 +19,7 @@ struct Triangle {
     vec4 baseColorFactor;
     vec4 emissiveFactor;
     vec4 materialParams;
+    vec4 opticalParams;
     uvec4 textureIndices0;
     uvec4 textureIndices1;
 };
@@ -163,6 +164,8 @@ vec3 shadeHitTriangle(uint primitiveIndex, vec2 barycentrics, vec3 rayDirection)
     float metallic = clamp(tri.materialParams.x * metallicRoughnessSample.b, 0.0, 1.0);
     float roughness = clamp(tri.materialParams.y * metallicRoughnessSample.g, 0.045, 1.0);
     vec3 emissive = max(emissiveSample.rgb, vec3(0.0)) * max(pc.emissionIntensity, 0.0);
+    float transmission = clamp(tri.opticalParams.x, 0.0, 1.0);
+    metallic *= 1.0 - transmission;
 
     vec3 viewDirection = normalize(-rayDirection);
     vec3 lightDirection = normalize(-pc.lightDirectionAndIntensity.xyz);
@@ -176,6 +179,10 @@ vec3 shadeHitTriangle(uint primitiveIndex, vec2 barycentrics, vec3 rayDirection)
     vec3 specular = fresnel * pow(max(dot(normal, halfVector), 0.0), specPower) * mix(0.35, 1.0, metallic);
     vec3 direct = (diffuse + specular) * nDotL * pc.lightDirectionAndIntensity.w;
     vec3 ambient = baseColor * mix(0.04, 0.16, clamp(normal.y * 0.5 + 0.5, 0.0, 1.0)) * (1.0 - metallic * 0.35);
+    if (transmission > 0.01) {
+        vec3 glassTint = mix(vec3(1.0), clamp(baseColor, vec3(0.02), vec3(1.0)), 0.35);
+        return emissive + mix(direct + ambient, specular + glassTint * 0.04, transmission);
+    }
     return emissive + direct + ambient;
 }
 
