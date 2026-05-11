@@ -75,6 +75,23 @@ uint32_t GaussianInteractivePreviewFrameBudget(const vesta::scene::Scene& scene)
     return 8u;
 }
 
+constexpr uint32_t kSceneDestroyTextureBudgetPerFrame = 4u;
+constexpr uint32_t kSceneDestroyBufferBudgetPerFrame = 2u;
+
+bool SceneHasGpuResources(const vesta::scene::Scene& scene)
+{
+    return scene.GetVertexBuffer()
+        || scene.GetGaussianBuffer()
+        || scene.GetIndexBuffer()
+        || scene.GetTriangleBuffer()
+        || scene.GetEmissiveTriangleBuffer()
+        || scene.GetMaterialBuffer()
+        || scene.GetBottomLevelBuffer()
+        || scene.GetTopLevelBuffer()
+        || scene.HasRayTracingScene()
+        || scene.GetResidentTextureCount() > 0;
+}
+
 float RadicalInverseVdc(uint32_t bits)
 {
     bits = (bits << 16u) | (bits >> 16u);
@@ -2320,16 +2337,8 @@ bool Renderer::CancelSceneLoad()
     AppendSceneLoadLog(_sceneLoadStatus, _sceneLoadStatus.message);
 
     if (_pendingSceneUpload.active) {
-        _device.FlushUploadBatch();
-        _pendingSceneUpload.scene.DestroyGpu(_device);
-        _pendingSceneUpload = {};
-        _sceneLoadInProgress = _sceneLoadFuture.valid();
-        ApplySceneLoadState(_sceneLoadStatus, SceneLoadState::Cancelled, "Scene load cancelled.", "CancelSceneLoad");
-        _sceneLoadStatus.cancelRequested = _sceneLoadInProgress;
-        _sceneLoadStatus.uploadStage.clear();
-        _sceneLoadStatus.lastBlockingWait.clear();
-        _sceneLoadStatus.pendingUploadBytes = 0;
-        _sceneLoadStatus.pendingUploadCopies = 0;
+        ApplySceneLoadState(_sceneLoadStatus, SceneLoadState::Cancelled, _sceneLoadStatus.message, "CancelSceneLoad");
+        _sceneLoadStatus.cancelRequested = true;
         return true;
     }
 
@@ -4186,7 +4195,16 @@ void Renderer::PumpPendingSceneUpload()
 
     if (_sceneLoadCancelRequested) {
         _device.FlushUploadBatch();
-        _pendingSceneUpload.scene.DestroyGpu(_device);
+        const bool pendingReleaseComplete = _pendingSceneUpload.scene.DestroyGpuIncremental(
+            _device, kSceneDestroyTextureBudgetPerFrame, kSceneDestroyBufferBudgetPerFrame);
+        if (!pendingReleaseComplete) {
+            _sceneLoadStatus.message = "Cancelling "
+                + (_pendingSceneUpload.path.empty() ? std::string("scene") : _pendingSceneUpload.path.filename().string())
+                + ": releasing staged GPU resources...";
+            _sceneLoadStatus.uploadStage = "CancelRelease";
+            return;
+        }
+        QueueSceneCpuRelease(std::move(_pendingSceneUpload.scene));
         _pendingSceneUpload = {};
         _sceneLoadInProgress = false;
         _sceneLoadCancelRequested = false;
@@ -4202,6 +4220,8 @@ void Renderer::PumpPendingSceneUpload()
     using Stage = PendingSceneUploadStage;
     const auto stageLabel = [](Stage stage) {
         switch (stage) {
+        case Stage::ReleasePreviousSceneGpu:
+            return "ReleasePreviousSceneGpu";
         case Stage::AllocateBuffers:
             return "AllocateBuffers";
         case Stage::UploadVertices:
@@ -4287,21 +4307,40 @@ void Renderer::PumpPendingSceneUpload()
     while (_pendingSceneUpload.active) {
         _sceneLoadStatus.uploadStage = stageLabel(_pendingSceneUpload.stage);
         switch (_pendingSceneUpload.stage) {
-        case Stage::AllocateBuffers:
-            VESTA_ASSERT_STATE(prepared->IsLoaded(), "AllocateBuffers requires a prepared scene.");
-            if (!_pendingSceneUpload.releasedPreviousSceneGpu
-                && (_scene.GetVertexBuffer() || _scene.GetGaussianBuffer() || _scene.GetTriangleBuffer() || _scene.GetMaterialBuffer())) {
-                _sceneLoadStatus.lastBlockingWait = "WaitIdle before replacing large scene GPU resources";
-                AppendSceneLoadLog(_sceneLoadStatus,
-                    "Releasing previous scene GPU resources before uploading " + _pendingSceneUpload.path.filename().string());
-                _device.WaitIdle();
-                _scene.DestroyGpu(_device);
-                _visibleSurfaceIndices.clear();
-                _visibleSceneToken.reset();
-                _frameSnapshot = {};
-                ResetAccumulation();
+        case Stage::ReleasePreviousSceneGpu:
+            if (!_pendingSceneUpload.releasedPreviousSceneGpu && SceneHasGpuResources(_scene)) {
+                if (!_pendingSceneUpload.previousSceneGpuReleaseStarted) {
+                    _sceneLoadStatus.lastBlockingWait = "WaitIdle before staged previous scene GPU release";
+                    AppendSceneLoadLog(_sceneLoadStatus,
+                        "Staging previous scene GPU release before uploading " + _pendingSceneUpload.path.filename().string());
+                    _device.WaitIdle();
+                    _visibleSurfaceIndices.clear();
+                    _visibleSceneToken.reset();
+                    _frameSnapshot = {};
+                    ResetAccumulation();
+                    _pendingSceneUpload.previousSceneGpuReleaseStarted = true;
+                }
+                _sceneLoadStatus.message = "Releasing previous scene GPU resources before loading "
+                    + _pendingSceneUpload.path.filename().string() + "...";
+                const bool releaseComplete = _scene.DestroyGpuIncremental(
+                    _device, kSceneDestroyTextureBudgetPerFrame, kSceneDestroyBufferBudgetPerFrame);
+                if (!releaseComplete) {
+                    _pendingSceneUpload.uploadMs +=
+                        std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - uploadStart).count();
+                    return;
+                }
+                QueueSceneCpuRelease(std::move(_scene));
+                _pendingSceneUpload.releasedPreviousSceneGpu = true;
+                AppendSceneLoadLog(_sceneLoadStatus, "Previous scene GPU resources released.");
+            } else {
                 _pendingSceneUpload.releasedPreviousSceneGpu = true;
             }
+            _pendingSceneUpload.stage = Stage::AllocateBuffers;
+            _sceneLoadStatus.lastBlockingWait.clear();
+            _sceneLoadStatus.message = "Allocating GPU buffers for " + _pendingSceneUpload.path.filename().string() + "...";
+            continue;
+        case Stage::AllocateBuffers:
+            VESTA_ASSERT_STATE(prepared->IsLoaded(), "AllocateBuffers requires a prepared scene.");
             _pendingSceneUpload.scene.AllocateGpuResources(_device, uploadOptions);
             _pendingSceneUpload.stage = Stage::UploadVertices;
             _sceneLoadStatus.message = "Uploading vertices for " + _pendingSceneUpload.path.filename().string() + "...";
@@ -4724,7 +4763,7 @@ void Renderer::StartPendingSceneUpload(vesta::scene::Scene&& scene, float parseM
         .prepareMs = prepareMs,
         .uploadMs = 0.0f,
         .textureUploadMs = 0.0f,
-        .stage = PendingSceneUploadStage::AllocateBuffers,
+        .stage = PendingSceneUploadStage::ReleasePreviousSceneGpu,
         .active = true,
     };
     _sceneLoadInProgress = true;
@@ -4737,7 +4776,7 @@ void Renderer::StartPendingSceneUpload(vesta::scene::Scene&& scene, float parseM
     _sceneLoadStatus.blasMs = 0.0f;
     _sceneLoadStatus.tlasMs = 0.0f;
     _sceneLoadStatus.lastBlockingWait.clear();
-    _sceneLoadStatus.message = "Allocating GPU buffers for " + _pendingSceneUpload.path.filename().string() + "...";
+    _sceneLoadStatus.message = "Preparing GPU memory for " + _pendingSceneUpload.path.filename().string() + "...";
 }
 
 void Renderer::ApplyLoadedScene(vesta::scene::Scene&& scene)
@@ -4782,8 +4821,7 @@ void Renderer::ApplyLoadedScene(vesta::scene::Scene&& scene)
     }
 
     if (!previousScene.GetSourcePath().empty()) {
-        const bool previousSceneHasGpuResources = previousScene.GetVertexBuffer() || previousScene.GetGaussianBuffer()
-            || previousScene.GetTriangleBuffer() || previousScene.GetMaterialBuffer();
+        const bool previousSceneHasGpuResources = SceneHasGpuResources(previousScene);
         if (_settings.deferOldSceneDestruction && previousSceneHasGpuResources) {
             _retiredScenes.push_back(RetiredSceneEntry{
                 .scene = std::move(previousScene),
@@ -4792,6 +4830,9 @@ void Renderer::ApplyLoadedScene(vesta::scene::Scene&& scene)
         } else if (previousSceneHasGpuResources) {
             _device.WaitIdle();
             previousScene.DestroyGpu(_device);
+            QueueSceneCpuRelease(std::move(previousScene));
+        } else {
+            QueueSceneCpuRelease(std::move(previousScene));
         }
     }
 
@@ -4805,9 +4846,31 @@ void Renderer::ApplyLoadedScene(vesta::scene::Scene&& scene)
 void Renderer::ReleaseRetiredScenes()
 {
     while (!_retiredScenes.empty() && _retiredScenes.front().safeFrameNumber <= _frameNumber) {
-        _retiredScenes.front().scene.DestroyGpu(_device);
+        RetiredSceneEntry& entry = _retiredScenes.front();
+        const bool releaseComplete = entry.scene.DestroyGpuIncremental(
+            _device, kSceneDestroyTextureBudgetPerFrame, kSceneDestroyBufferBudgetPerFrame);
+        if (!releaseComplete) {
+            break;
+        }
+        vesta::scene::Scene releasedScene = std::move(entry.scene);
         _retiredScenes.pop_front();
+        QueueSceneCpuRelease(std::move(releasedScene));
     }
+}
+
+void Renderer::QueueSceneCpuRelease(vesta::scene::Scene&& scene)
+{
+    if (scene.GetSourcePath().empty() && scene.GetParsedScene() == nullptr && scene.GetPreparedScene() == nullptr) {
+        return;
+    }
+
+    const std::string sceneName = scene.GetSourcePath().empty() ? std::string("scene") : scene.GetSourcePath().filename().string();
+    _jobs.Submit(vesta::core::JobPriority::Background, [scene = std::move(scene), sceneName]() mutable {
+        const auto releaseStart = std::chrono::steady_clock::now();
+        scene = {};
+        const float releaseMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - releaseStart).count();
+        fmt::println("[SceneLoad] Released CPU scene storage for {} in {:.2f} ms", sceneName, releaseMs);
+    });
 }
 
 RendererFrameContext& Renderer::GetCurrentFrame()

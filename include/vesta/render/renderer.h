@@ -914,16 +914,17 @@ private:
 
     enum class PendingSceneUploadStage : uint32_t {
         Idle = 0,
-        AllocateBuffers = 1,
-        UploadVertices = 2,
-        UploadGaussians = 3,
-        UploadMaterials = 4,
-        UploadIndices = 5,
-        UploadTriangles = 6,
-        UploadTextures = 7,
-        BuildBLAS = 8,
-        BuildTLAS = 9,
-        SwapScene = 10,
+        ReleasePreviousSceneGpu = 1,
+        AllocateBuffers = 2,
+        UploadVertices = 3,
+        UploadGaussians = 4,
+        UploadMaterials = 5,
+        UploadIndices = 6,
+        UploadTriangles = 7,
+        UploadTextures = 8,
+        BuildBLAS = 9,
+        BuildTLAS = 10,
+        SwapScene = 11,
     };
 
     struct PendingSceneUpload {
@@ -942,6 +943,7 @@ private:
         size_t textureIndex{ 0 };
         bool active{ false };
         bool releasedPreviousSceneGpu{ false };
+        bool previousSceneGpuReleaseStarted{ false };
     };
 
     void InitializeCommands();
@@ -960,6 +962,7 @@ private:
     void PumpVisibilityResults();
     void DispatchVisibilityCullIfNeeded();
     void ReleaseRetiredScenes();
+    void QueueSceneCpuRelease(vesta::scene::Scene&& scene);
     void OnSceneEdited(bool rebuildRayTracing);
     void UpdateSceneEditDrag(const glm::vec2& mousePosition);
     void EndSceneEditDrag();

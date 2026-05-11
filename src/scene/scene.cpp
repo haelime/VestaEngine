@@ -4660,66 +4660,91 @@ void Scene::BuildTopLevelAccelerationStructure(vesta::render::RenderDevice& devi
 
 void Scene::DestroyGpu(vesta::render::RenderDevice& device)
 {
+    while (!DestroyGpuIncremental(device, std::numeric_limits<uint32_t>::max(), std::numeric_limits<uint32_t>::max())) {
+    }
+}
+
+bool Scene::DestroyGpuIncremental(vesta::render::RenderDevice& device, uint32_t maxTextures, uint32_t maxBuffers)
+{
     if (_gpu == nullptr) {
-        return;
+        return true;
     }
 
-    if (_gpu->topLevelAccelerationStructure != VK_NULL_HANDLE) {
-        device.GetRayTracingFunctions().vkDestroyAccelerationStructureKHR(
-            device.GetDevice(), _gpu->topLevelAccelerationStructure, nullptr);
-        _gpu->topLevelAccelerationStructure = VK_NULL_HANDLE;
-    }
-    if (_gpu->bottomLevelAccelerationStructure != VK_NULL_HANDLE) {
-        device.GetRayTracingFunctions().vkDestroyAccelerationStructureKHR(
-            device.GetDevice(), _gpu->bottomLevelAccelerationStructure, nullptr);
-        _gpu->bottomLevelAccelerationStructure = VK_NULL_HANDLE;
-    }
-    if (_gpu->topLevelBuffer) {
-        device.DestroyBuffer(_gpu->topLevelBuffer);
-        _gpu->topLevelBuffer = {};
-    }
-    if (_gpu->bottomLevelBuffer) {
-        device.DestroyBuffer(_gpu->bottomLevelBuffer);
-        _gpu->bottomLevelBuffer = {};
-    }
-    if (_gpu->triangleBuffer) {
-        device.DestroyBuffer(_gpu->triangleBuffer);
-        _gpu->triangleBuffer = {};
-    }
-    if (_gpu->emissiveTriangleBuffer) {
-        device.DestroyBuffer(_gpu->emissiveTriangleBuffer);
-        _gpu->emissiveTriangleBuffer = {};
-    }
-    if (_gpu->materialBuffer) {
-        device.DestroyBuffer(_gpu->materialBuffer);
-        _gpu->materialBuffer = {};
-    }
-    if (_gpu->gaussianBuffer) {
-        device.DestroyBuffer(_gpu->gaussianBuffer);
-        _gpu->gaussianBuffer = {};
-    }
-    for (GpuSceneTexture& texture : _gpu->textures) {
-        if (texture.image) {
-            device.DestroyImage(texture.image);
-            texture.image = {};
+    maxTextures = std::max(1u, maxTextures);
+    maxBuffers = std::max(1u, maxBuffers);
+
+    uint32_t destroyedTextures = 0;
+    uint32_t destroyedBuffers = 0;
+    const auto& rt = device.GetRayTracingFunctions();
+    auto destroyAccelerationStructure = [&](VkAccelerationStructureKHR& accelerationStructure) {
+        if (destroyedBuffers >= maxBuffers || accelerationStructure == VK_NULL_HANDLE) {
+            return;
         }
+        rt.vkDestroyAccelerationStructureKHR(device.GetDevice(), accelerationStructure, nullptr);
+        accelerationStructure = VK_NULL_HANDLE;
+        ++destroyedBuffers;
+    };
+    auto destroyBuffer = [&](vesta::render::BufferHandle& buffer) {
+        if (destroyedBuffers >= maxBuffers || !buffer) {
+            return;
+        }
+        device.DestroyBuffer(buffer);
+        buffer = {};
+        ++destroyedBuffers;
+    };
+    auto destroyTexture = [&](GpuSceneTexture& texture) {
+        if (destroyedTextures >= maxTextures || !texture.image) {
+            return;
+        }
+        device.DestroyImage(texture.image);
+        texture.image = {};
         texture.bindlessSampledImage = render::kInvalidResourceIndex;
         texture.resident = false;
+        ++destroyedTextures;
+    };
+
+    destroyAccelerationStructure(_gpu->topLevelAccelerationStructure);
+    destroyAccelerationStructure(_gpu->bottomLevelAccelerationStructure);
+    destroyBuffer(_gpu->topLevelBuffer);
+    destroyBuffer(_gpu->bottomLevelBuffer);
+    destroyBuffer(_gpu->triangleBuffer);
+    destroyBuffer(_gpu->emissiveTriangleBuffer);
+    destroyBuffer(_gpu->materialBuffer);
+    destroyBuffer(_gpu->gaussianBuffer);
+    destroyBuffer(_gpu->indexBuffer);
+    destroyBuffer(_gpu->vertexBuffer);
+    for (GpuSceneTexture& texture : _gpu->textures) {
+        destroyTexture(texture);
+        if (destroyedTextures >= maxTextures) {
+            break;
+        }
     }
+
+    const bool hasBuffers = _gpu->topLevelAccelerationStructure != VK_NULL_HANDLE
+        || _gpu->bottomLevelAccelerationStructure != VK_NULL_HANDLE
+        || _gpu->topLevelBuffer
+        || _gpu->bottomLevelBuffer
+        || _gpu->triangleBuffer
+        || _gpu->emissiveTriangleBuffer
+        || _gpu->materialBuffer
+        || _gpu->gaussianBuffer
+        || _gpu->indexBuffer
+        || _gpu->vertexBuffer;
+    const bool hasTextures = std::any_of(_gpu->textures.begin(), _gpu->textures.end(), [](const GpuSceneTexture& texture) {
+        return texture.image;
+    });
+    if (hasBuffers || hasTextures) {
+        return false;
+    }
+
     _gpu->textures.clear();
-    if (_gpu->indexBuffer) {
-        device.DestroyBuffer(_gpu->indexBuffer);
-        _gpu->indexBuffer = {};
-    }
-    if (_gpu->vertexBuffer) {
-        device.DestroyBuffer(_gpu->vertexBuffer);
-        _gpu->vertexBuffer = {};
-    }
     _gpu->triangles.clear();
+    _gpu->emissiveTriangles.clear();
     _gpu->materials.clear();
     _gpu->rasterVertices.clear();
     _gpu->gaussians.clear();
     _gpu.reset();
+    return true;
 }
 
 size_t Scene::GetResidentTextureCount() const

@@ -284,6 +284,7 @@ public:
     void BuildTopLevelAccelerationStructure(render::RenderDevice& device);
     void UploadToGpu(render::RenderDevice& device, const render::SceneUploadOptions& options);
     void DestroyGpu(render::RenderDevice& device);
+    bool DestroyGpuIncremental(render::RenderDevice& device, uint32_t maxTextures, uint32_t maxBuffers);
 
     [[nodiscard]] bool IsLoaded() const { return GetPreparedOrEmpty().IsLoaded(); }
     [[nodiscard]] SceneKind GetSceneKind() const { return GetPreparedOrEmpty().sceneKind; }
