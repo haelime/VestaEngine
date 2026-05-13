@@ -35,13 +35,17 @@ jobs:
         uses: microsoft/setup-msbuild@v2
 
       - name: Build
-        run: >
-          msbuild VestaEngine.sln
-          /m
-          /restore
-          /p:Configuration=${{ matrix.configuration }}
-          /p:Platform=x64
-          /p:PreferredToolArchitecture=x64
+        shell: pwsh
+        run: |
+          $log = "msbuild-${{ matrix.configuration }}.log"
+          msbuild VestaEngine.sln /m /restore /p:Configuration=${{ matrix.configuration }} /p:Platform=x64 /p:PreferredToolArchitecture=x64 /fileLogger /flp:logfile=$log`;verbosity=normal
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) {
+            $tail = (Get-Content $log -Tail 80) -join "`n"
+            $message = $tail.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Host "::error title=MSBuild failed::$message"
+            exit $exitCode
+          }
 
       - name: Smoke test command line
         shell: pwsh
@@ -81,13 +85,17 @@ jobs:
         uses: microsoft/setup-msbuild@v2
 
       - name: Build Release
-        run: >
-          msbuild VestaEngine.sln
-          /m
-          /restore
-          /p:Configuration=Release
-          /p:Platform=x64
-          /p:PreferredToolArchitecture=x64
+        shell: pwsh
+        run: |
+          $log = "msbuild-Release.log"
+          msbuild VestaEngine.sln /m /restore /p:Configuration=Release /p:Platform=x64 /p:PreferredToolArchitecture=x64 /fileLogger /flp:logfile=$log`;verbosity=normal
+          $exitCode = $LASTEXITCODE
+          if ($exitCode -ne 0) {
+            $tail = (Get-Content $log -Tail 80) -join "`n"
+            $message = $tail.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Host "::error title=MSBuild failed::$message"
+            exit $exitCode
+          }
 
       - name: Smoke test command line
         shell: pwsh
