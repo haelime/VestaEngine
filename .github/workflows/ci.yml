@@ -31,6 +31,19 @@ jobs:
           vulkan-query-version: latest
           vulkan-use-cache: true
 
+      - name: Export Vulkan SDK path
+        shell: pwsh
+        run: |
+          $validator = Get-ChildItem -Path $env:RUNNER_TOOL_CACHE, "C:\VulkanSDK" -Filter glslangValidator.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (!$validator) {
+            throw "glslangValidator.exe was not found after Vulkan SDK setup"
+          }
+          $bin = Split-Path $validator.FullName -Parent
+          $sdk = Split-Path $bin -Parent
+          "VULKAN_SDK=$sdk" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          Write-Host "VULKAN_SDK=$sdk"
+
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
@@ -80,6 +93,19 @@ jobs:
         with:
           vulkan-query-version: latest
           vulkan-use-cache: true
+
+      - name: Export Vulkan SDK path
+        shell: pwsh
+        run: |
+          $validator = Get-ChildItem -Path $env:RUNNER_TOOL_CACHE, "C:\VulkanSDK" -Filter glslangValidator.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (!$validator) {
+            throw "glslangValidator.exe was not found after Vulkan SDK setup"
+          }
+          $bin = Split-Path $validator.FullName -Parent
+          $sdk = Split-Path $bin -Parent
+          "VULKAN_SDK=$sdk" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          Write-Host "VULKAN_SDK=$sdk"
 
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
