@@ -38,7 +38,7 @@ jobs:
         shell: pwsh
         run: |
           $log = "msbuild-${{ matrix.configuration }}.log"
-          msbuild VestaEngine.sln /m /restore /p:Configuration=${{ matrix.configuration }} /p:Platform=x64 /p:PreferredToolArchitecture=x64 /fileLogger /flp:logfile=$log`;verbosity=normal
+          msbuild VestaEngine.sln /m /restore /p:Configuration=${{ matrix.configuration }} /p:Platform=x64 /p:PlatformToolset=v143 /p:PreferredToolArchitecture=x64 /fileLogger /flp:logfile=$log`;verbosity=normal
           $exitCode = $LASTEXITCODE
           if ($exitCode -ne 0) {
             $tail = (Get-Content $log -Tail 80) -join "`n"
@@ -88,7 +88,7 @@ jobs:
         shell: pwsh
         run: |
           $log = "msbuild-Release.log"
-          msbuild VestaEngine.sln /m /restore /p:Configuration=Release /p:Platform=x64 /p:PreferredToolArchitecture=x64 /fileLogger /flp:logfile=$log`;verbosity=normal
+          msbuild VestaEngine.sln /m /restore /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:PreferredToolArchitecture=x64 /fileLogger /flp:logfile=$log`;verbosity=normal
           $exitCode = $LASTEXITCODE
           if ($exitCode -ne 0) {
             $tail = (Get-Content $log -Tail 80) -join "`n"
