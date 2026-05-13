@@ -50,14 +50,20 @@ jobs:
       - name: Build
         shell: pwsh
         run: |
-          $log = "msbuild-${{ matrix.configuration }}.log"
-          msbuild VestaEngine.sln /p:Configuration=${{ matrix.configuration }} /p:Platform=x64 /p:PlatformToolset=v143 /p:PreferredToolArchitecture=x64 /fileLogger /flp:logfile=$log`;verbosity=normal
-          $exitCode = $LASTEXITCODE
-          if ($exitCode -ne 0) {
-            $tail = (Get-Content $log -Tail 80) -join "`n"
-            $message = $tail.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
-            Write-Host "::error title=MSBuild failed::$message"
-            exit $exitCode
+          $projects = @(
+            @{ Name = "SDL2"; Path = "third_party/SDL/VisualC/SDL/SDL.vcxproj" },
+            @{ Name = "VestaEngine"; Path = "VestaEngine.vcxproj" }
+          )
+          foreach ($project in $projects) {
+            $log = "msbuild-$($project.Name)-${{ matrix.configuration }}.log"
+            msbuild $project.Path /p:Configuration=${{ matrix.configuration }} /p:Platform=x64 /p:PlatformToolset=v143 /p:PreferredToolArchitecture=x64 /fileLogger /flp:logfile=$log`;verbosity=normal
+            $exitCode = $LASTEXITCODE
+            if ($exitCode -ne 0) {
+              $tail = (Get-Content $log -Tail 80) -join "`n"
+              $message = $tail.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+              Write-Host "::error title=$($project.Name) MSBuild failed::$message"
+              exit $exitCode
+            }
           }
 
       - name: Smoke test command line
@@ -108,14 +114,20 @@ jobs:
       - name: Build Release
         shell: pwsh
         run: |
-          $log = "msbuild-Release.log"
-          msbuild VestaEngine.sln /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:PreferredToolArchitecture=x64 /fileLogger /flp:logfile=$log`;verbosity=normal
-          $exitCode = $LASTEXITCODE
-          if ($exitCode -ne 0) {
-            $tail = (Get-Content $log -Tail 80) -join "`n"
-            $message = $tail.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
-            Write-Host "::error title=MSBuild failed::$message"
-            exit $exitCode
+          $projects = @(
+            @{ Name = "SDL2"; Path = "third_party/SDL/VisualC/SDL/SDL.vcxproj" },
+            @{ Name = "VestaEngine"; Path = "VestaEngine.vcxproj" }
+          )
+          foreach ($project in $projects) {
+            $log = "msbuild-$($project.Name)-Release.log"
+            msbuild $project.Path /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:PreferredToolArchitecture=x64 /fileLogger /flp:logfile=$log`;verbosity=normal
+            $exitCode = $LASTEXITCODE
+            if ($exitCode -ne 0) {
+              $tail = (Get-Content $log -Tail 80) -join "`n"
+              $message = $tail.Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+              Write-Host "::error title=$($project.Name) MSBuild failed::$message"
+              exit $exitCode
+            }
           }
 
       - name: Smoke test command line
