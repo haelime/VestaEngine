@@ -5,8 +5,11 @@
 /assets/brickadia
 /assets/benchmark_scenes/
 /assets/demo/
+/assets/out/
+/assets/**/out/
 /docs/goals.md
 *.vcxproj.user
+*.log
 
 # CMake build trees
 /out
@@ -24,12 +27,16 @@
 /*.vcxproj.filters
 /*.VC.db
 /*.VC.opendb
+!/VestaEngine.sln
+!/VestaEngine.vcxproj
+!/VestaEngine.vcxproj.filters
 
 # Local Gaussian investigation scratch outputs
 /docs/gaussian-*.scratch.md
 /altdebug/
 /altdebug3/
 /altdebug4/
+/.cleanup-backup/
 /third_party/SDL/VisualC/SDL/altdebug/
 /third_party/SDL/VisualC/SDL/altdebug3/
 /third_party/SDL/VisualC/SDL/altdebug4/
