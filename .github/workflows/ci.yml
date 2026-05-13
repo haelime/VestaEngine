@@ -32,29 +32,17 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Vulkan SDK
-        uses: humbletim/setup-vulkan-sdk@v1.2.1
-        with:
-          vulkan-query-version: latest
-          vulkan-use-cache: true
-
-      - name: Export Vulkan SDK path
         shell: pwsh
         run: |
-          $validatorPath = (& where.exe glslangValidator.exe 2>$null | Select-Object -First 1)
-          if (!$validatorPath) {
-            $validator = Get-ChildItem -Path "C:\VulkanSDK" -Filter glslangValidator.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($validator) {
-              $validatorPath = $validator.FullName
-            }
+          choco install vulkan-sdk --no-progress -y
+          $sdk = Get-ChildItem -Path "C:\VulkanSDK" -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          if (!$sdk) {
+            throw "Vulkan SDK install did not create C:\VulkanSDK"
           }
-          if (!$validatorPath) {
-            throw "glslangValidator.exe was not found after Vulkan SDK setup"
-          }
-          $bin = Split-Path $validatorPath -Parent
-          $sdk = Split-Path $bin -Parent
-          "VULKAN_SDK=$sdk" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $bin = Join-Path $sdk.FullName "Bin"
+          "VULKAN_SDK=$($sdk.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          Write-Host "VULKAN_SDK=$sdk"
+          Write-Host "VULKAN_SDK=$($sdk.FullName)"
 
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
@@ -102,29 +90,17 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Vulkan SDK
-        uses: humbletim/setup-vulkan-sdk@v1.2.1
-        with:
-          vulkan-query-version: latest
-          vulkan-use-cache: true
-
-      - name: Export Vulkan SDK path
         shell: pwsh
         run: |
-          $validatorPath = (& where.exe glslangValidator.exe 2>$null | Select-Object -First 1)
-          if (!$validatorPath) {
-            $validator = Get-ChildItem -Path "C:\VulkanSDK" -Filter glslangValidator.exe -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($validator) {
-              $validatorPath = $validator.FullName
-            }
+          choco install vulkan-sdk --no-progress -y
+          $sdk = Get-ChildItem -Path "C:\VulkanSDK" -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          if (!$sdk) {
+            throw "Vulkan SDK install did not create C:\VulkanSDK"
           }
-          if (!$validatorPath) {
-            throw "glslangValidator.exe was not found after Vulkan SDK setup"
-          }
-          $bin = Split-Path $validatorPath -Parent
-          $sdk = Split-Path $bin -Parent
-          "VULKAN_SDK=$sdk" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $bin = Join-Path $sdk.FullName "Bin"
+          "VULKAN_SDK=$($sdk.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           $bin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          Write-Host "VULKAN_SDK=$sdk"
+          Write-Host "VULKAN_SDK=$($sdk.FullName)"
 
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
