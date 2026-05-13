@@ -41,8 +41,6 @@ jobs:
           /restore
           /p:Configuration=${{ matrix.configuration }}
           /p:Platform=x64
-          /p:PlatformToolset=v143
-          /p:VisualStudioVersion=17.0
           /p:PreferredToolArchitecture=x64
 
       - name: Smoke test command line
@@ -89,8 +87,6 @@ jobs:
           /restore
           /p:Configuration=Release
           /p:Platform=x64
-          /p:PlatformToolset=v143
-          /p:VisualStudioVersion=17.0
           /p:PreferredToolArchitecture=x64
 
       - name: Smoke test command line
