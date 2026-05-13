@@ -3,9 +3,13 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
     branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -59,3 +63,54 @@ jobs:
             x64/${{ matrix.configuration }}/SDL2.dll
             x64/${{ matrix.configuration }}/shaders/**
           if-no-files-found: error
+
+  release:
+    name: Release Windows x64
+    runs-on: windows-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Vulkan SDK
+        uses: humbletim/setup-vulkan-sdk@v1.2.1
+        with:
+          vulkan-query-version: 1.3.296.0
+          vulkan-components: Vulkan-Headers, Vulkan-Loader, Glslang
+          vulkan-use-cache: true
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build Release
+        run: >
+          msbuild VestaEngine.sln
+          /m
+          /restore
+          /p:Configuration=Release
+          /p:Platform=x64
+          /p:PlatformToolset=v143
+          /p:PreferredToolArchitecture=x64
+
+      - name: Smoke test command line
+        shell: pwsh
+        run: |
+          & .\x64\Release\VestaEngine.exe --help
+
+      - name: Package release
+        shell: pwsh
+        run: |
+          $zip = "x64/VestaEngine-${{ github.ref_name }}-windows-x64.zip"
+          if (Test-Path $zip) {
+            Remove-Item -LiteralPath $zip -Force
+          }
+          Compress-Archive -Path "x64/Release/*" -DestinationPath $zip -Force
+          Get-Item $zip
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: VestaEngine ${{ github.ref_name }}
+          files: x64/VestaEngine-${{ github.ref_name }}-windows-x64.zip
+          generate_release_notes: true
